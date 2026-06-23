@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# Environment variables — NEVER commit this file
+.env
+
+# Generated outputs
+output/
+!output/.gitkeep
+
+# Test samples — questionnaire PDFs may be restricted data
+tests/samples/
+!tests/samples/.gitkeep
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
