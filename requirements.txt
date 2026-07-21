@@ -1,5 +1,7 @@
 # Core pipeline
 markitdown[pdf]>=0.1.0     # PDF and document to Markdown conversion
+docling>=2.0.0             # PDF to Markdown conversion for fallback pipeline
+marker-pdf>=1.9.0          # Marker PDF to Markdown conversion and section structure
 anthropic>=0.25.0           # Claude API client
 instructor>=1.0.0           # Structured LLM output with automatic retry
 pydantic>=2.0.0             # Schema definition and validation

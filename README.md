@@ -1,14 +1,12 @@
 # GMD Survey Parser
 
-Extracts structured variable information from household survey questionnaire PDFs
-and saves it as a **Survey Variable Information Schema (SVIS)** JSON file.
-The SVIS output feeds the GMD AI-assisted harmonization pipeline.
+Extracts structured variable information from household survey questionnaire PDFs and saves it as a **Survey Variable Information Schema (SVIS)** JSON file. The SVIS output feeds the GMD AI-assisted harmonization pipeline.
 
----
+------------------------------------------------------------------------
 
 ## What this pipeline does
 
-```
+```         
 Questionnaire PDF
       │
       ▼
@@ -30,11 +28,11 @@ Section chunking (one chunk per module)
 
 See `docs/pipeline_overview.md` for a detailed description of every stage.
 
----
+------------------------------------------------------------------------
 
 ## Repository structure
 
-```
+```         
 gmd-survey-parser/
 ├── README.md                  ← you are here
 ├── .env.example               ← copy to .env and add your API key
@@ -68,13 +66,13 @@ gmd-survey-parser/
     └── svis_field_guide.md    ← field-by-field reference for the SVIS schema
 ```
 
----
+------------------------------------------------------------------------
 
 ## Setup
 
 ### 1. Clone the repo and create a virtual environment
 
-```bash
+``` bash
 git clone <repo-url>
 cd gmd-survey-parser
 python -m venv .venv
@@ -83,43 +81,38 @@ source .venv/bin/activate        # Windows: .venv\Scripts\activate
 
 ### 2. Install dependencies
 
-```bash
+``` bash
 pip install -r requirements.txt
 ```
 
 ### 3. Configure your API key
 
-```bash
+``` bash
 cp .env.example .env
 # Open .env and add your Anthropic API key
 ```
 
----
+------------------------------------------------------------------------
 
 ## Intern starting sequence
 
-Follow these steps **in order**. Each step verifies the previous one before
-adding more complexity. Do not skip ahead.
+Follow these steps **in order**. Each step verifies the previous one before adding more complexity. Do not skip ahead.
 
 ### Step 1 — Verify the schema works
 
-```bash
+``` bash
 pytest tests/test_schema.py -v
 ```
 
-All tests should pass. If any fail, the Pydantic installation has a problem.
-Fix this before anything else. Read `schemas/svis.py` while you wait — 
-understanding the schema is more important than understanding the pipeline.
+All tests should pass. If any fail, the Pydantic installation has a problem. Fix this before anything else. Read `schemas/svis.py` while you wait — understanding the schema is more important than understanding the pipeline.
 
 ### Step 2 — Get a real questionnaire PDF
 
-Add a questionnaire PDF to `tests/samples/`. Use any real GMD survey questionnaire
-you have access to. The pipeline is designed for digitally-created PDFs (not scans).
-If you are unsure what you have, Step 3 will tell you.
+Add a questionnaire PDF to `tests/samples/`. Use any real GMD survey questionnaire you have access to. The pipeline is designed for digitally-created PDFs (not scans). If you are unsure what you have, Step 3 will tell you.
 
 ### Step 3 — Test MarkItDown on the PDF
 
-```python
+``` python
 from extractors.pdf import pdf_to_markdown, is_scanned_pdf
 from pathlib import Path
 
@@ -131,17 +124,13 @@ md = pdf_to_markdown(pdf)
 print(md[:3000])          # inspect the first 3000 characters
 ```
 
-**What to look for in the output:**
-- Section headings preserved as `##` or `###`
-- Answer option tables preserved as Markdown tables (columns of codes and labels)
-- Question numbering visible
+**What to look for in the output:** - Section headings preserved as `##` or `###` - Answer option tables preserved as Markdown tables (columns of codes and labels) - Question numbering visible
 
-If the output is garbled or tables are broken, note which sections are affected.
-This tells you where the LLM extraction will be less reliable.
+If the output is garbled or tables are broken, note which sections are affected. This tells you where the LLM extraction will be less reliable.
 
 ### Step 4 — Test section chunking
 
-```python
+``` python
 from extractors.pdf import process_pdf
 from pathlib import Path
 
@@ -151,54 +140,46 @@ for c in chunks:
     print(f"[{c.chunk_index}] {c.module_name[:60]}  ({len(c.text)} chars)")
 ```
 
-Check: are the chunks meaningful sections, or are they random splits?
-If no headings were detected, all content will be one large chunk — add a note.
+Check: are the chunks meaningful sections, or are they random splits? If no headings were detected, all content will be one large chunk — add a note.
 
 ### Step 5 — Run the full pipeline
 
-```bash
+``` bash
 python pipeline.py tests/samples/your_file.pdf
 ```
 
-Inspect the output JSON in `output/`. Check:
-- Is the survey metadata (country, year, survey name) correct?
-- Did the variable names extract correctly?
-- Are answer codes and labels present for categorical variables?
-- Which variables have `needs_review: true`? Why?
+Inspect the output JSON in `output/`. Check: - Is the survey metadata (country, year, survey name) correct? - Did the variable names extract correctly? - Are answer codes and labels present for categorical variables? - Which variables have `needs_review: true`? Why?
 
 ### Step 6 — Improve the prompts
 
-Almost certainly, the first run will have errors. Open `agents/prompts.py` and
-edit `VARIABLE_EXTRACTION_PROMPT`. Run again. Compare outputs.
+Almost certainly, the first run will have errors. Open `agents/prompts.py` and edit `VARIABLE_EXTRACTION_PROMPT`. Run again. Compare outputs.
 
-Prompt improvement is the main quality lever for this pipeline.
-Document what you changed and why in a `CHANGELOG.md` file.
+Prompt improvement is the main quality lever for this pipeline. Document what you changed and why in a `CHANGELOG.md` file.
 
----
+------------------------------------------------------------------------
 
 ## Running on multiple PDFs
 
-```bash
+``` bash
 for f in tests/samples/*.pdf; do
     python pipeline.py "$f"
 done
 ```
 
----
+------------------------------------------------------------------------
 
 ## Key design decisions (do not change without discussion)
 
 | Decision | Reason |
-|---|---|
+|------------------------------------|------------------------------------|
 | MarkItDown for conversion, not raw PyMuPDF | MarkItDown preserves tables and headings, which are critical for extracting answer codes from categorical questions |
 | `instructor` library for LLM calls | Handles automatic schema validation and retries; do not replace with raw API calls |
 | Confidence score per variable | Lets the quality gate identify uncertain extractions without manual inspection of every variable |
 | `is_missing` flag on AnswerCategory | Non-substantive codes (don't know, refused) must be recoded to missing in GMD; flagging them at extraction time prevents errors downstream |
 | Scanned PDFs skipped in PoC | OCR is a separate, complex problem; skipping now keeps scope manageable |
 
----
+------------------------------------------------------------------------
 
 ## Contact
 
-**Project lead:** [Andres — add contact info]
-**Supervision sessions:** weekly (see calendar invite)
+**Project lead:** \[Andres — add contact info\] **Supervision sessions:** weekly (see calendar invite)

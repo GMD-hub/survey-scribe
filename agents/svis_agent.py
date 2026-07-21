@@ -31,8 +31,21 @@ load_dotenv()   # reads ANTHROPIC_API_KEY from .env
 
 # ── Client ────────────────────────────────────────────────────────────────────
 
+_ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+if not _ANTHROPIC_API_KEY:
+    has_gemini_key = bool(os.getenv("GEMINI_API_KEY"))
+    detail = (
+        " GEMINI_API_KEY is present, but this reverted pipeline uses Anthropic/instructor and requires ANTHROPIC_API_KEY."
+        if has_gemini_key
+        else ""
+    )
+    raise RuntimeError(
+        "ANTHROPIC_API_KEY is missing or empty. Add it to .env before running the pipeline."
+        + detail
+    )
+
 _client = instructor.from_anthropic(
-    anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    anthropic.Anthropic(api_key=_ANTHROPIC_API_KEY)
 )
 
 MODEL      = "claude-sonnet-4-6"
