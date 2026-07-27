@@ -51,7 +51,7 @@ gmd-survey-parser/
 │   ├── prompts.py             ← ALL LLM prompts live here.
 │   │                            This is the main quality lever —
 │   │                            when extraction is poor, edit here.
-│   └── svis_agent.py          ← LLM calls using instructor + anthropic
+│   └── svis_agent.py          ← LLM calls using instructor + Azure OpenAI
 │
 ├── pipeline.py                ← main orchestrator; run this
 │
@@ -85,12 +85,12 @@ source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### 3. Configure your API key
+### 3. Configure authentication
 
-``` bash
-cp .env.example .env
-# Open .env and add your Anthropic API key
-```
+The pipeline authenticates against the World Bank Azure OpenAI gateway using
+an Azure AD token obtained via `itsai.platform.authentication.DesktopToken`
+(no API key needed). Ensure `itsai` is installed and you can sign in
+interactively when prompted.
 
 ------------------------------------------------------------------------
 

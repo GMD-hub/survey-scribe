@@ -3,7 +3,8 @@ SVIS Extraction Agents
 =======================
 LLM-powered extraction of survey metadata and variable information.
 
-Uses the `instructor` library, which wraps the Anthropic SDK and:
+Uses the `instructor` library, which wraps the World Bank Azure OpenAI
+gateway (via the OpenAI SDK) and:
   1. Enforces the Pydantic schema on LLM output
   2. Automatically sends validation errors back to the LLM and retries
   3. Raises an exception after max_retries failed attempts
@@ -14,42 +15,38 @@ can be caught, logged, and routed to the human review queue.
 """
 from __future__ import annotations
 
-import os
 from datetime import date
 from typing import Optional
 
-import anthropic
 import instructor
-from dotenv import load_dotenv
+from itsai.platform.authentication import DesktopToken
+from openai import AzureOpenAI
 from pydantic import BaseModel
 
 from agents.prompts import SURVEY_METADATA_PROMPT, VARIABLE_EXTRACTION_PROMPT
 from extractors.pdf import DocumentChunk
 from schemas.svis import StudyType, SurveySVIS, SurveyVariable
 
-load_dotenv()   # reads ANTHROPIC_API_KEY from .env
-
 # ── Client ────────────────────────────────────────────────────────────────────
+# Authenticates against the World Bank Azure OpenAI gateway using an
+# Azure AD token (via DesktopToken) instead of a static API key.
 
-_ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-if not _ANTHROPIC_API_KEY:
-    has_gemini_key = bool(os.getenv("GEMINI_API_KEY"))
-    detail = (
-        " GEMINI_API_KEY is present, but this reverted pipeline uses Anthropic/instructor and requires ANTHROPIC_API_KEY."
-        if has_gemini_key
-        else ""
-    )
-    raise RuntimeError(
-        "ANTHROPIC_API_KEY is missing or empty. Add it to .env before running the pipeline."
-        + detail
-    )
+_AZURE_ENDPOINT = "https://azapimdev.worldbank.org/conversationalai/v2/"
+_AZURE_API_VERSION = "2025-04-01-preview"
 
-_client = instructor.from_anthropic(
-    anthropic.Anthropic(api_key=_ANTHROPIC_API_KEY)
+_token_class = DesktopToken()
+_token_provider = lambda: _token_class.get_token(env="DEV_DESKTOP")
+
+_client = instructor.from_openai(
+    AzureOpenAI(
+        azure_endpoint=_AZURE_ENDPOINT,
+        api_version=_AZURE_API_VERSION,
+        azure_ad_token_provider=_token_provider,
+    )
 )
 
-MODEL      = "claude-sonnet-4-6"
-MAX_TOKENS = 4096
+MODEL      = "gpt-4.1-mini"
+MAX_TOKENS = 16384
 MAX_RETRIES = 3   # instructor will retry this many times on schema validation failure
 
 
@@ -95,9 +92,9 @@ def extract_survey_metadata(
         instructor.exceptions.InstructorRetryException if the LLM fails
         to produce valid output after MAX_RETRIES attempts.
     """
-    meta: _SurveyMeta = _client.messages.create(
+    meta: _SurveyMeta = _client.chat.completions.create(
         model=MODEL,
-        max_tokens=MAX_TOKENS,
+        max_completion_tokens=MAX_TOKENS,
         max_retries=MAX_RETRIES,
         messages=[{
             "role": "user",
@@ -144,9 +141,9 @@ def extract_variables_from_chunk(chunk: DocumentChunk) -> list[SurveyVariable]:
         text=chunk.text,
     )
 
-    batch: _VariableBatch = _client.messages.create(
+    batch: _VariableBatch = _client.chat.completions.create(
         model=MODEL,
-        max_tokens=MAX_TOKENS,
+        max_completion_tokens=MAX_TOKENS,
         max_retries=MAX_RETRIES,
         messages=[{"role": "user", "content": prompt}],
         response_model=_VariableBatch,

@@ -20,7 +20,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-import instructor
+from instructor.v2.core.errors import InstructorError
 
 from agents.svis_agent import extract_survey_metadata, extract_variables_from_chunk
 from extractors.pdf import process_pdf
@@ -85,7 +85,7 @@ def run(pdf_path: Path, output_dir: Path) -> None:
         print(f"        Survey  : {questionnaire.survey_name}")
         print(f"        Country : {questionnaire.country_code}  |  Year: {questionnaire.year}")
         print(f"        Type    : {questionnaire.study_type}")
-    except instructor.exceptions.InstructorRetryException as exc:
+    except InstructorError as exc:
         print(f"  [ERROR] Metadata extraction failed after retries: {exc}")
         print("          Using placeholder metadata. Manually correct the output file.\n")
         from schemas.svis import SurveySVIS
@@ -115,7 +115,7 @@ def run(pdf_path: Path, output_dir: Path) -> None:
             flagged = sum(1 for v in variables if v.needs_review)
             print(f"        [{chunk.chunk_index:02d}] {label:<55}  "
                   f"{len(variables):3d} vars  ({flagged} flagged)")
-        except instructor.exceptions.InstructorRetryException as exc:
+        except InstructorError as exc:
             print(f"        [{chunk.chunk_index:02d}] {label:<55}  "
                   f"ERROR — {exc}")
             skipped_chunks.append(chunk.module_name)

@@ -32,3 +32,8 @@ Thumbs.db
 # Jupyter
 .ipynb_checkpoints/
 *.ipynb
+
+# mAI
+uv.toml
+pyproject.toml
+.python-version

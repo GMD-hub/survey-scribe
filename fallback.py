@@ -137,7 +137,7 @@ _STUDY_TYPE_KEYWORDS: dict[str, StudyType] = {
     "census": StudyType.census,
 }
 
-_YEAR_RE = re.compile(r"\b(19|20)\d{2}\b")
+_YEAR_RE = re.compile(r"(?<!\d)(19|20)\d{2}(?!\d)")
 
 
 def _guess_survey_metadata(opening_text: str, filename: str) -> dict:
@@ -246,7 +246,8 @@ _NUMERIC_KEYWORDS = (
 
 _DATE_KEYWORDS = ("date", "naissance", "born", "birth")
 
-_ROSTER_KEYWORDS = ("membre", "member", "roster", "[nom]", "[name]")
+_ROSTER_WORD_KEYWORDS = ("membre", "member", "roster")
+_ROSTER_BRACKET_KEYWORDS = ("[nom]", "[name]")
 
 _NUMBERED_OPTION_RE = re.compile(r"^\s*(\d{1,3})\s*[-.\)]+\s*(.+?)\s*$")
 
@@ -257,17 +258,51 @@ _RANGE_RE = re.compile(
 )
 
 
+def _make_keyword_regex(keywords: tuple[str, ...]) -> re.Pattern:
+    """
+    Compiles a case-insensitive, word-boundary regex from a keyword list.
+    Using \b...\b instead of naive substring checks avoids false positives
+    like "ménage" matching the keyword "age", or "message" matching "age".
+    """
+    alternation = "|".join(re.escape(k) for k in keywords)
+    return re.compile(rf"\b(?:{alternation})\b", re.IGNORECASE)
+
+
+_MISSING_RE = _make_keyword_regex(_MISSING_KEYWORDS)
+_NUMERIC_RE = _make_keyword_regex(_NUMERIC_KEYWORDS)
+_DATE_RE = _make_keyword_regex(_DATE_KEYWORDS)
+_ROSTER_WORD_RE = _make_keyword_regex(_ROSTER_WORD_KEYWORDS)
+
+
+def _has_roster_hint(text: str) -> bool:
+    return bool(_ROSTER_WORD_RE.search(text)) or any(k in text for k in _ROSTER_BRACKET_KEYWORDS)
+
+
+# Field-label words that show up in admin/instruction lines (dates, signatures,
+# observation boxes, etc.) rather than genuine answer options. Lines containing
+# these are rejected so cover-page/identification tables don't get misread as
+# categorical answer lists.
+_NON_OPTION_KEYWORDS = (
+    "date", "heure", "jour", "mois", "année", "annee", "observation",
+    "signature", "numéro", "numero", "nom du", "prénom", "prenom",
+    "minutes",
+)
+_NON_OPTION_RE = _make_keyword_regex(_NON_OPTION_KEYWORDS)
+
+
 def _looks_like_option_line(line: str) -> bool:
-    if not line or len(line) > 40:
+    if not line or len(line) > 30:
         return False
     if QUESTION_RE.search(line):
         return False
-    if line.startswith(("#", "|", "-", "*")):
+    if line.startswith(("#", "|", "-", "*", "<!--")):
         return False
     if "?" in line:
         return False
+    if _NON_OPTION_RE.search(line):
+        return False
     word_count = len(line.split())
-    return 1 <= word_count <= 6
+    return 1 <= word_count <= 5
 
 
 def _parse_categories(body_lines: list[str]) -> tuple[list[AnswerCategory] | None, bool]:
@@ -288,12 +323,12 @@ def _parse_categories(body_lines: list[str]) -> tuple[list[AnswerCategory] | Non
         if numbered:
             code = int(numbered.group(1))
             label = numbered.group(2).strip(" -")
-            is_missing = any(k in label.lower() for k in _MISSING_KEYWORDS)
+            is_missing = bool(_MISSING_RE.search(label))
             categories.append(AnswerCategory(code=code, label=label, is_missing=is_missing))
             explicit_codes = True
         elif _looks_like_option_line(stripped):
             code = len(categories) + 1
-            is_missing = any(k in stripped.lower() for k in _MISSING_KEYWORDS)
+            is_missing = bool(_MISSING_RE.search(stripped))
             categories.append(AnswerCategory(code=code, label=stripped, is_missing=is_missing))
 
         if len(categories) >= 12:
@@ -305,12 +340,12 @@ def _parse_categories(body_lines: list[str]) -> tuple[list[AnswerCategory] | Non
 
 
 def _guess_data_type(question_text: str | None, categories: list[AnswerCategory] | None) -> DataType:
-    text = (question_text or "").lower()
+    text = question_text or ""
     if categories:
         return DataType.categorical_single
-    if any(k in text for k in _DATE_KEYWORDS):
+    if _DATE_RE.search(text):
         return DataType.date
-    if any(k in text for k in _NUMERIC_KEYWORDS):
+    if _NUMERIC_RE.search(text):
         return DataType.numeric
     return DataType.text
 
@@ -334,16 +369,22 @@ def _guess_universe(chunk_text_lower: str, question_text: str | None) -> str | N
     text = (question_text or "").lower()
     if "chef de ménage" in text or "household head" in text or "head of household" in text:
         return "Household head only"
-    if any(k in chunk_text_lower for k in _ROSTER_KEYWORDS) or any(k in text for k in _ROSTER_KEYWORDS):
+    if _has_roster_hint(chunk_text_lower) or _has_roster_hint(text):
         return "All household members"
     return None
 
 
-def _guess_unit_of_analysis(module_name: str, universe: str | None) -> UnitLevel:
+def _guess_unit_of_analysis(module_name: str) -> UnitLevel:
+    # Based purely on the section/module topic — describes the dwelling or
+    # shared household assets rather than an individual person. The universe
+    # field (who is asked) is a separate concept and is not used here: e.g.
+    # "All household members" or "Household head only" both describe
+    # PERSON-level questions, not household-level ones.
     module_lower = module_name.lower()
-    if universe and "household" in universe.lower() and "head" not in universe.lower():
-        return UnitLevel.household
-    if any(k in module_lower for k in ("dwelling", "housing", "logement", "habitat")) and "member" not in module_lower:
+    is_dwelling_module = any(
+        k in module_lower for k in ("dwelling", "housing", "logement", "habitat")
+    )
+    if is_dwelling_module and "membre" not in module_lower and "member" not in module_lower:
         return UnitLevel.household
     return UnitLevel.individual
 
@@ -351,7 +392,7 @@ def _guess_unit_of_analysis(module_name: str, universe: str | None) -> UnitLevel
 def _build_label(question_text: str | None, qid: str) -> str:
     if not question_text:
         return f"Question {qid}"
-    label = re.sub(r"\[.*?\]", "", question_text).strip(" ?:")
+    label = re.sub(r"\\?\[.*?\]\\?", "", question_text).strip(" ?:")
     label = re.sub(r"\s+", " ", label)
     return label[:80] if label else f"Question {qid}"
 
@@ -393,7 +434,7 @@ def _extract_variables_from_chunk(chunk: DocumentChunk) -> list[SurveyVariable]:
         data_type = _guess_data_type(question_text, categories)
         numeric_range = _guess_numeric_range(segment) if data_type == DataType.numeric else None
         universe = _guess_universe(chunk_text_lower, question_text)
-        unit_of_analysis = _guess_unit_of_analysis(chunk.module_name, universe)
+        unit_of_analysis = _guess_unit_of_analysis(chunk.module_name)
         label = _build_label(question_text, qid)
 
         # Confidence is built up from how much structure was reliably recovered.
@@ -404,7 +445,7 @@ def _extract_variables_from_chunk(chunk: DocumentChunk) -> list[SurveyVariable]:
         if question_text and len(question_text) > 10:
             confidence += 0.15
         if categories:
-            confidence += 0.20 if explicit_codes else 0.10
+            confidence += 0.20 if explicit_codes else 0.05
         if data_type != DataType.text:
             confidence += 0.10
         if universe:
