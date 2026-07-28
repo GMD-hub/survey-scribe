@@ -1,18 +1,24 @@
 """
-Pipeline Orchestrator
-======================
-Main entry point for the GMD survey parser.
+Docling Pipeline Orchestrator
+==============================
+Alternative entry point for the GMD survey parser that converts PDFs to
+Markdown with Docling (extractors/docling_pdf.py) instead of MarkItDown
+(extractors/pdf.py). Everything downstream — survey metadata extraction,
+variable extraction, the quality gate, and SVIS JSON output — is
+identical to pipeline.py and uses the same Azure OpenAI-backed agents
+(agents/svis_agent.py).
 
-Given a questionnaire PDF, runs the full extraction pipeline
-and writes a validated SVIS JSON file.
+Use this instead of pipeline.py when a questionnaire's tables or
+scanned/image-heavy pages need Docling's OCR and table-structure model
+rather than MarkItDown's lighter-weight conversion.
 
 Usage (command line):
-    python pipeline.py path/to/questionnaire.pdf
-    python pipeline.py path/to/questionnaire.pdf --output-dir ./output
+    python pipeline_docling.py path/to/questionnaire.pdf
+    python pipeline_docling.py path/to/questionnaire.pdf --output-dir ./output
 
 Usage (from Python):
     from pathlib import Path
-    from pipeline import run
+    from pipeline_docling import run
     run(Path("questionnaire.pdf"), Path("output"))
 """
 from __future__ import annotations
@@ -23,15 +29,25 @@ from pathlib import Path
 from instructor.v2.core.errors import InstructorError
 
 from agents.svis_agent import extract_survey_metadata, extract_variables_from_chunk
-from extractors.pdf import process_pdf
+from extractors.docling_pdf import process_pdf
 
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
-# Number of characters from the first chunk to send for metadata extraction.
-# The first chunk is typically the cover page. Sending the full first chunk
-# avoids truncating mid-sentence in case the cover page has a lot of text.
+# Total character budget for the text sent to the metadata extraction call.
 METADATA_CHAR_LIMIT = 3000
+
+# Docling produces much finer-grained heading chunks than MarkItDown (one
+# per sub-question block, not just per top-level section) -- so the actual
+# cover-page/survey-title heading is often several chunks in rather than
+# being chunk 0 (e.g. preceded by "INTERVIEWER", "TO BE FILLED BY THE
+# SUPERVISOR", etc.). Metadata extraction therefore samples a bounded
+# excerpt from each of the first MAX_CHUNKS_FOR_METADATA chunks instead of
+# relying on chunk 0 alone, so the title heading isn't missed and one large
+# early chunk (e.g. a household roster table) can't crowd out everything
+# after it.
+MAX_CHUNKS_FOR_METADATA = 15
+MAX_CHARS_PER_CHUNK_FOR_METADATA = 400
 
 # Confidence threshold below which a variable is flagged for human review.
 # This mirrors the threshold described in the schema and the prompts.
@@ -43,10 +59,11 @@ REVIEW_THRESHOLD = 0.70
 
 def run(pdf_path: Path, output_dir: Path) -> None:
     """
-    Full extraction pipeline for one PDF questionnaire.
+    Full extraction pipeline for one PDF questionnaire, using Docling
+    for PDF -> Markdown conversion.
 
     Steps:
-      1.  Pre-process: detect scan, convert to Markdown, chunk by section
+      1.  Pre-process: detect scan, convert to Markdown with Docling, chunk by section
       2.  Extract survey metadata from the document opening
       3.  Extract variables from each section chunk (loop)
       4.  Apply quality gate: flag low-confidence variables
@@ -64,27 +81,29 @@ def run(pdf_path: Path, output_dir: Path) -> None:
     is_scanned, chunks = process_pdf(pdf_path)
 
     if is_scanned:
-        print("  [SKIP] Scanned PDF — cannot extract without OCR.\n")
+        print("[SKIP] Scanned PDF -- cannot extract without OCR.\n")
         return
 
     if not chunks:
-        print("  [SKIP] No content chunks produced after conversion.\n")
+        print("[SKIP] No content chunks produced after conversion.\n")
         return
 
-    print(f"  {len(chunks)} section(s) to process.\n")
-
     # ── Step 2: Survey metadata ───────────────────────────────────────────────
-    print("  [1/3] Extracting survey metadata ...")
-    opening_text = chunks[0].text[:METADATA_CHAR_LIMIT]
+    print("\n  [1/3] Extracting survey metadata ...")
+    opening_text = "\n\n".join(
+        chunk.text[:MAX_CHARS_PER_CHUNK_FOR_METADATA]
+        for chunk in chunks[:MAX_CHUNKS_FOR_METADATA]
+    )[:METADATA_CHAR_LIMIT]
     try:
         questionnaire = extract_survey_metadata(
             opening_text=opening_text,
             source_file=pdf_path.name,
             source_format="pdf",
         )
+        study_type = questionnaire.study_type.value if questionnaire.study_type else "unknown"
         print(f"        Survey  : {questionnaire.survey_name}")
         print(f"        Country : {questionnaire.country_code}  |  Year: {questionnaire.year}")
-        print(f"        Type    : {questionnaire.study_type}")
+        print(f"        Type    : {study_type}")
     except InstructorError as exc:
         print(f"  [ERROR] Metadata extraction failed after retries: {exc}")
         print("          Using placeholder metadata. Manually correct the output file.\n")
@@ -130,9 +149,9 @@ def run(pdf_path: Path, output_dir: Path) -> None:
 
     # ── Step 4: Quality gate summary ─────────────────────────────────────────
     flagged_vars = [v for v in all_variables if v.needs_review]
-    print(f"\n  [3/3] Quality gate (threshold = {REVIEW_THRESHOLD}):")
-    print(f"        Total variables extracted : {len(all_variables)}")
-    print(f"        Flagged for human review  : {len(flagged_vars)}")
+    print(f"\n  [3/3] Quality gate (threshold = {REVIEW_THRESHOLD:.2f}):")
+    print(f"        Total variables extracted : {len(all_variables):3d}")
+    print(f"        Flagged for human review  : {len(flagged_vars):3d}")
     if flagged_vars:
         names = ", ".join(v.raw_name for v in flagged_vars[:10])
         if len(flagged_vars) > 10:
@@ -143,13 +162,13 @@ def run(pdf_path: Path, output_dir: Path) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     output_file = output_dir / f"{questionnaire.survey_id}_svis.json"
     if output_file.exists():
-        print(f"  [INFO] Existing output for {questionnaire.survey_id} found — replacing it.")
+        print(f"  [INFO] Existing output for {questionnaire.survey_id} found -- replacing it.")
         output_file.unlink()
     output_file.write_text(
         questionnaire.model_dump_json(indent=2),
         encoding="utf-8",
     )
-    print(f"\n  [DONE] Output → {output_file}")
+    print(f"\n  [DONE] Output --> {output_file}")
     print(f"{'=' * 60}\n")
 
 
@@ -157,12 +176,12 @@ def run(pdf_path: Path, output_dir: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Extract structured variable information from a questionnaire PDF.",
+        description="Extract structured variable information from a questionnaire PDF using Docling.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Examples:\n"
-            "  python pipeline.py questionnaire.pdf\n"
-            "  python pipeline.py questionnaire.pdf --output-dir ./output\n"
+            "  python pipeline_docling.py questionnaire.pdf\n"
+            "  python pipeline_docling.py questionnaire.pdf --output-dir ./output\n"
         ),
     )
     parser.add_argument(

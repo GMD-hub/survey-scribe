@@ -5,6 +5,7 @@ marker-pdf>=1.9.0          # Marker PDF to Markdown conversion and section struc
 openai>=1.0.0               # OpenAI SDK, used against the World Bank Azure OpenAI gateway
 instructor>=1.0.0           # Structured LLM output with automatic retry
 pydantic>=2.0.0             # Schema definition and validation
+tenacity>=8.0.0              # Exponential-backoff retry for Azure OpenAI rate-limit (429) errors
 
 # PDF scan detection (used alongside MarkItDown)
 pymupdf>=1.24.0             # PDF text layer detection only

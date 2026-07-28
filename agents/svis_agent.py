@@ -15,13 +15,15 @@ can be caught, logged, and routed to the human review queue.
 """
 from __future__ import annotations
 
+import re
 from datetime import date
 from typing import Optional
 
 import instructor
 from itsai.platform.authentication import DesktopToken
-from openai import AzureOpenAI
+from openai import AzureOpenAI, RateLimitError
 from pydantic import BaseModel
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_random_exponential
 
 from agents.prompts import SURVEY_METADATA_PROMPT, VARIABLE_EXTRACTION_PROMPT
 from extractors.pdf import DocumentChunk
@@ -49,6 +51,27 @@ MODEL      = "gpt-4.1-mini"
 MAX_TOKENS = 16384
 MAX_RETRIES = 3   # instructor will retry this many times on schema validation failure
 
+# The Azure OpenAI gateway enforces a short-window request-rate limit —
+# under sustained per-chunk extraction calls this surfaces as HTTP 429
+# ("Rate limit is exceeded. Try again in N seconds"). instructor's own
+# max_retries only governs schema-validation retries, not this kind of
+# transport-level error, so it is retried here explicitly with
+# exponential backoff (respecting jitter to avoid retry storms) before
+# giving up.
+RATE_LIMIT_MAX_ATTEMPTS = 6
+
+
+@retry(
+    retry=retry_if_exception_type(RateLimitError),
+    wait=wait_random_exponential(min=2, max=30),
+    stop=stop_after_attempt(RATE_LIMIT_MAX_ATTEMPTS),
+    reraise=True,
+)
+def _create(**kwargs):
+    """Thin wrapper around _client.chat.completions.create() that adds
+    rate-limit retry/backoff on top of instructor's schema-validation retries."""
+    return _client.chat.completions.create(**kwargs)
+
 
 # ── Internal response models ──────────────────────────────────────────────────
 # These are minimal models used only for individual LLM calls.
@@ -74,6 +97,29 @@ class _VariableBatch(BaseModel):
     variables: list[SurveyVariable]
 
 
+# The LLM's raw `year` field has proven unreliable -- it is a required
+# `int` (not Optional), so when it can't find a year it may fall back to
+# a placeholder like 0, and it has also been observed to hallucinate an
+# unrelated year (e.g. the current year) even when a correct year is
+# present in the sampled text. The survey name and filename are far more
+# reliable: questionnaire titles conventionally embed the reference year
+# (e.g. "EICVM 2009-2010", "...HBS_2014.pdf"), so the year is derived
+# from those deterministically via regex and only falls back to the LLM's
+# raw value if neither contains a parseable year.
+_YEAR_RE = re.compile(r"(?<!\d)(19|20)\d{2}(?!\d)")
+
+
+def _resolve_year(meta_year: int, survey_name: str | None, source_file: str) -> int:
+    """Prefers a year parsed from survey_name, then source_file, then
+    falls back to the LLM-reported meta_year if neither yields one."""
+    for text in (survey_name, source_file):
+        if text:
+            match = _YEAR_RE.search(text)
+            if match:
+                return int(match.group(0))
+    return meta_year
+
+
 # ── Agent functions ───────────────────────────────────────────────────────────
 
 def extract_survey_metadata(
@@ -92,7 +138,7 @@ def extract_survey_metadata(
         instructor.exceptions.InstructorRetryException if the LLM fails
         to produce valid output after MAX_RETRIES attempts.
     """
-    meta: _SurveyMeta = _client.chat.completions.create(
+    meta: _SurveyMeta = _create(
         model=MODEL,
         max_completion_tokens=MAX_TOKENS,
         max_retries=MAX_RETRIES,
@@ -103,10 +149,12 @@ def extract_survey_metadata(
         response_model=_SurveyMeta,
     )
 
+    year = _resolve_year(meta.year, meta.survey_name, source_file)
+
     return SurveySVIS(
         survey_id=meta.survey_id,
         country_code=meta.country_code,
-        year=meta.year,
+        year=year,
         survey_name=meta.survey_name,
         study_type=meta.study_type,
         data_collection_mode=meta.data_collection_mode,
@@ -141,7 +189,7 @@ def extract_variables_from_chunk(chunk: DocumentChunk) -> list[SurveyVariable]:
         text=chunk.text,
     )
 
-    batch: _VariableBatch = _client.chat.completions.create(
+    batch: _VariableBatch = _create(
         model=MODEL,
         max_completion_tokens=MAX_TOKENS,
         max_retries=MAX_RETRIES,
