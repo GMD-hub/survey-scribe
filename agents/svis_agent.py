@@ -21,12 +21,13 @@ from typing import Optional
 
 import instructor
 from itsai.platform.authentication import DesktopToken
+from lingua import LanguageDetectorBuilder
 from openai import AzureOpenAI, RateLimitError
 from pydantic import BaseModel
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_random_exponential
 
 from agents.prompts import SURVEY_METADATA_PROMPT, VARIABLE_EXTRACTION_PROMPT
-from extractors.pdf import DocumentChunk
+from extractors.docling_pdf import DocumentChunk
 from schemas.svis import StudyType, SurveySVIS, SurveyVariable
 
 # ── Client ────────────────────────────────────────────────────────────────────
@@ -120,6 +121,30 @@ def _resolve_year(meta_year: int, survey_name: str | None, source_file: str) -> 
     return meta_year
 
 
+def _resolve_survey_id(survey_id: str, country_code: str, year: int) -> str:
+    """Reconciles the LLM-composed survey_id (COUNTRYISO3_YEAR_ACRONYM) with
+    the resolved year, so a placeholder like "ALB_0000_HBSA" becomes
+    "ALB_2014_HBSA" instead of silently disagreeing with the year field."""
+    parts = survey_id.split("_")
+    if len(parts) >= 3 and parts[0] == country_code and parts[1].isdigit():
+        parts[1] = str(year)
+        return "_".join(parts)
+    return _YEAR_RE.sub(str(year), survey_id, count=1) if _YEAR_RE.search(survey_id) else survey_id
+
+
+# Lazily built on first use since loading language models has a startup cost;
+# only needed when the LLM can't determine the language from the sampled text.
+_language_detector = None
+
+
+def _detect_language(text: str) -> str | None:
+    global _language_detector
+    if _language_detector is None:
+        _language_detector = LanguageDetectorBuilder.from_all_languages().build()
+    detected = _language_detector.detect_language_of(text)
+    return detected.name.capitalize() if detected else None
+
+
 # ── Agent functions ───────────────────────────────────────────────────────────
 
 def extract_survey_metadata(
@@ -150,15 +175,17 @@ def extract_survey_metadata(
     )
 
     year = _resolve_year(meta.year, meta.survey_name, source_file)
+    survey_id = _resolve_survey_id(meta.survey_id, meta.country_code, year)
+    language = meta.language or _detect_language(opening_text)
 
     return SurveySVIS(
-        survey_id=meta.survey_id,
+        survey_id=survey_id,
         country_code=meta.country_code,
         year=year,
         survey_name=meta.survey_name,
         study_type=meta.study_type,
         data_collection_mode=meta.data_collection_mode,
-        language=meta.language,
+        language=language,
         variables=[],
         source_file=source_file,
         source_format=source_format,

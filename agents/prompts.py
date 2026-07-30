@@ -45,6 +45,10 @@ country_code
 year
   Survey reference year as a 4-digit integer.
   Use the fieldwork year, not the publication year if both appear.
+  If the survey spans multiple years, use the starting year of data collection.
+    Example: 2009-2010, use 2009.
+  Look for a year in the document opening, or in the title page, or in the header/footer.
+  Example: 2009, 2014, 2024, 2010
 
 survey_name
   Full official name of the survey.

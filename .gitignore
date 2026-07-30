@@ -37,3 +37,10 @@ Thumbs.db
 uv.toml
 pyproject.toml
 .python-version
+
+# Quarto book
+book/_book/
+book/.quarto/
+
+/.quarto/
+**/*.quarto_ipynb
