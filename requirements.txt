@@ -1,20 +1,16 @@
 # Core pipeline
-docling>=2.0.0             # PDF to Markdown conversion for pipeline
-marker-pdf>=1.9.0          # Marker PDF to Markdown conversion and section structure
-openai>=1.0.0               # OpenAI SDK, used against the World Bank Azure OpenAI gateway
-instructor>=1.0.0           # Structured LLM output with automatic retry
-pydantic>=2.0.0             # Schema definition and validation
-tenacity>=8.0.0              # Exponential-backoff retry for Azure OpenAI rate-limit (429) errors
+docling>=2.0.0               # PDF to Markdown conversion for pipeline
+openai>=1.0.0                # OpenAI SDK, used against the World Bank Azure OpenAI gateway
+instructor>=1.0.0            # Structured LLM output with automatic retry
+pydantic>=2.0.0              # Schema definition and validation
+tenacity>=8.0.0               # Exponential-backoff retry for Azure OpenAI rate-limit (429) errors
 
 # PDF scan detection (used alongside Docling)
-pymupdf>=1.24.0             # PDF text layer detection only
-accelerate>=1.0.0            # Required by docling/transformers model loading (device_map)
+pymupdf>=1.24.0              # PDF text layer detection only
+accelerate>=1.0.0             # Required by docling/transformers model loading (device_map)
 
-# recognition/ sub-project (document metadata extraction)
-lingua-language-detector>=2.0.0   # Also used as a fallback when the metadata LLM call can't determine the survey language
-
-# Utilities
-python-dotenv>=1.0.0        # Load environment variables from .env file
+# Fallback used when the metadata LLM call can't determine the survey language
+lingua-language-detector>=2.0.0
 
 # Testing
 pytest>=8.0.0

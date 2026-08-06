@@ -48,7 +48,7 @@ _client = instructor.from_openai(
     )
 )
 
-MODEL      = "gpt-4.1-mini"
+MODEL      = "gpt-4.1"
 MAX_TOKENS = 16384
 MAX_RETRIES = 3   # instructor will retry this many times on schema validation failure
 

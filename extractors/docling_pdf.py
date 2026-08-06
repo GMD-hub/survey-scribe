@@ -3,14 +3,14 @@ Docling-based PDF Pre-processing Module
 =========================================
 
 Converts a PDF to Markdown using Docling, then chunks it by section
-heading for the LLM extraction agents (see pipeline_docling.py).
+heading for the LLM extraction agents (see docling_pipeline.py).
 
-Reuses the PyPdfiumDocumentBackend fix already applied in fallback.py
-and recognition/extractors/docling_convert.py: the default docling-parse
-PDF backend has a known unresolved bug (docling-project/docling#3671)
-that silently drops all pages after a native std::bad_alloc crash
-partway through longer or denser PDFs, with no exception raised.
-PyPdfiumDocumentBackend avoids the crash entirely.
+Uses PyPdfiumDocumentBackend instead of Docling's default backend: the
+default docling-parse PDF backend has a known unresolved bug
+(docling-project/docling#3671) that silently drops all pages after a
+native std::bad_alloc crash partway through longer or denser PDFs,
+with no exception raised. PyPdfiumDocumentBackend avoids the crash
+entirely.
 """
 from __future__ import annotations
 
@@ -140,8 +140,8 @@ def pdf_to_markdown(pdf_path: Path) -> str:
 
     OCR and table-structure recognition are both enabled so scanned or
     image-only pages still yield extractable text, and answer-code
-    tables are modeled as proper Markdown tables (same reason
-    extractors/pdf.py uses MarkItDown rather than raw text extraction).
+    tables are modeled as proper Markdown tables rather than raw,
+    unstructured text.
 
     Uses PyPdfiumDocumentBackend instead of Docling's default backend
     to avoid the std::bad_alloc page-loss bug described above.
@@ -172,7 +172,8 @@ def process_pdf(pdf_path: Path) -> tuple[bool, list[DocumentChunk]]:
     """
     Full Docling-based pre-processing pipeline for one PDF questionnaire.
 
-    Returns (is_scanned, chunks); empty chunks if is_scanned is True.
+    Returns (is_scanned, chunks); chunks is empty if is_scanned is True
+    or conversion failed.
     """
     pdf_path = Path(pdf_path)
 

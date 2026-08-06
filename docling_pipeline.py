@@ -1,24 +1,18 @@
 """
 Docling Pipeline Orchestrator
 ==============================
-Alternative entry point for the GMD survey parser that converts PDFs to
-Markdown with Docling (extractors/docling_pdf.py) instead of MarkItDown
-(extractors/pdf.py). Everything downstream — survey metadata extraction,
-variable extraction, the quality gate, and SVIS JSON output — is
-identical to pipeline.py and uses the same Azure OpenAI-backed agents
-(agents/svis_agent.py).
-
-Use this instead of pipeline.py when a questionnaire's tables or
-scanned/image-heavy pages need Docling's OCR and table-structure model
-rather than MarkItDown's lighter-weight conversion.
+Main entry point for the GMD survey parser. Converts a questionnaire PDF
+to Markdown with Docling (extractors/docling_pdf.py), chunks it by
+section, then calls the Azure OpenAI-backed extraction agents
+(agents/svis_agent.py) to produce a SVIS JSON file.
 
 Usage (command line):
-    python pipeline_docling.py path/to/questionnaire.pdf
-    python pipeline_docling.py path/to/questionnaire.pdf --output-dir ./output
+    python docling_pipeline.py path/to/questionnaire.pdf
+    python docling_pipeline.py path/to/questionnaire.pdf --output-dir ./output
 
 Usage (from Python):
     from pathlib import Path
-    from pipeline_docling import run
+    from docling_pipeline import run
     run(Path("questionnaire.pdf"), Path("output"))
 """
 from __future__ import annotations
@@ -168,6 +162,7 @@ def run(pdf_path: Path, output_dir: Path) -> None:
         questionnaire.model_dump_json(indent=2),
         encoding="utf-8",
     )
+
     print(f"\n  [DONE] Output --> {output_file}")
     print(f"{'=' * 60}\n")
 
@@ -180,8 +175,8 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Examples:\n"
-            "  python pipeline_docling.py questionnaire.pdf\n"
-            "  python pipeline_docling.py questionnaire.pdf --output-dir ./output\n"
+            "  python docling_pipeline.py questionnaire.pdf\n"
+            "  python docling_pipeline.py questionnaire.pdf --output-dir ./output\n"
         ),
     )
     parser.add_argument(

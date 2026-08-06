@@ -28,7 +28,7 @@ Section chunking (one chunk per heading/module)
                     SVIS JSON output (output/{survey_id}_svis.json)
 ```
 
-The LLM calls go to the World Bank's Azure OpenAI gateway (model: `gpt-4.1-mini`), authenticated with your own Azure AD identity (no shared API key). The pipeline never sends the raw PDF to the model — only the Docling-converted Markdown text, chunked by section.
+The LLM calls go to the World Bank's Azure OpenAI gateway (model configured via `MODEL` in `agents/svis_agent.py` — see the settings table below), authenticated with your own Azure AD identity (no shared API key). The pipeline never sends the raw PDF to the model — only the Docling-converted Markdown text, chunked by section.
 
 ------------------------------------------------------------------------
 
@@ -213,6 +213,42 @@ Every extracted variable carries `extraction_confidence` and `needs_review` — 
 | Confidence score + `needs_review` per variable | Lets the quality gate flag uncertain extractions without manual inspection of every variable |
 | `is_missing` flag on `AnswerCategory` | Non-substantive codes (don't know, refused, not applicable) must be recoded to missing in GMD; flagging them at extraction time prevents downstream errors |
 | Scanned PDFs skipped | OCR quality assurance is a separate, complex problem; skipping now keeps scope manageable |
+
+------------------------------------------------------------------------
+
+## Next steps
+
+This project was built during an internship and handed off before every idea below could be implemented. None of these are required for the pipeline to work — they are recommendations for what to tackle next, roughly in priority order.
+
+### 1. An independent review agent (highest priority)
+
+The pipeline currently has no automated way to check whether its own output is accurate — quality checking so far has been manual (see `tests/samples/quality_review.md` for the methodology used on one file). The idea: a second script that
+
+  - loads a `*_svis.json` output file,
+  - loads the Markdown/source text Docling produced for that same PDF (currently discarded after chunking — you'd need to persist it, e.g. write it to `output/{survey_id}.md` in `docling_pipeline.py`, so the reviewer isn't re-running slow Docling conversion),
+  - and sends each variable + its source section text to an LLM call, asking it to verify the extraction against the source and return a verdict (`correct` / `partial` / `wrong`) with specific issues.
+
+**Important: call this through a different model than `agents/svis_agent.py` uses** (e.g. a Claude or Gemini model available on the same mAI gateway). Using the same model to check its own work will tend to rubber-stamp its own systematic errors. Give this reviewer its own client/config, entirely separate from `svis_agent.py`, so changing the extraction model can never silently change what reviews it. Known failure modes worth specifically prompting the reviewer to check for (found via manual review): fabricated/hallucinated categories, sentinel codes (don't know/refused) not flagged `is_missing`, `question_text`/`categories` mismatched with a neighboring question, and `raw_name` copied from the questionnaire's printed code instead of being descriptive.
+
+Scope the first version to just the variables already flagged `needs_review: true` or with low `extraction_confidence` — reviewing everything is more thorough but much slower and more expensive.
+
+### 2. An auto-fix / improver agent
+
+Once the review agent above produces verdicts, a natural follow-up is a script that takes `wrong`/`partial` verdicts plus their suggested fixes and re-generates just those variables (not the whole chunk) — then writes a corrected JSON. Keep a human-in-the-loop step here (e.g. write a diff/summary of what changed rather than silently overwriting) until this has been validated against a hand-reviewed file like the ALB one.
+
+### 3. Known model-quality tradeoff (needs investigation before switching models)
+
+An empirical comparison between `gpt-4.1-mini` and `gpt-4.1` on the same PDF (Burkina Faso EBCVM 2009-10) found that the bigger model, while more accurate on individual fields, **silently dropped 50-90% of variables in the largest, most repetitive chunks** (e.g. a governance module with many similar Likert-scale sub-questions went from 37 extracted variables down to 14). It appears to summarize/consolidate repeated patterns rather than exhaustively enumerating every one, whereas `gpt-4.1-mini` extracted every instance. If you change `MODEL` in `agents/svis_agent.py`, re-run this kind of per-module variable-count comparison on a densely-repetitive test PDF before trusting the new output — don't assume a "smarter" model is more complete. Splitting the largest chunks into smaller pieces, or adding an explicit "do not consolidate repeated rows — extract every one separately" instruction to `VARIABLE_EXTRACTION_PROMPT`, are both worth trying.
+
+### 4. Page tracking
+
+`SurveyVariable.source_page` is currently always stamped as the chunk's `page_start`, which `chunk_markdown()` in `extractors/docling_pdf.py` always sets to `0` (see the comment `# page tracking: future improvement` in that function) — real page numbers aren't tracked through the Docling → chunk pipeline yet. Worth fixing so `source_page` is actually useful for manual review.
+
+### 5. Other handoff loose ends
+
+  - **Fill in the Contact section below** — it still has a placeholder.
+  - Consider adding a GitHub Actions workflow to run `pytest tests/test_schema.py` on every push/PR, so schema regressions are caught automatically instead of relying on someone remembering to run it.
+  - `tests/samples/quality_review.md` documents the manual review methodology and the prompt fixes it led to — worth repeating on a new output file periodically to catch prompt/quality regressions, until the review agent above exists to automate it.
 
 ------------------------------------------------------------------------
 
