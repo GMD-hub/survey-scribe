@@ -32,3 +32,15 @@ Thumbs.db
 # Jupyter
 .ipynb_checkpoints/
 *.ipynb
+
+# mAI
+uv.toml
+pyproject.toml
+.python-version
+
+# Quarto book
+book/_book/
+book/.quarto/
+
+/.quarto/
+**/*.quarto_ipynb

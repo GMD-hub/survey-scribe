@@ -45,6 +45,10 @@ country_code
 year
   Survey reference year as a 4-digit integer.
   Use the fieldwork year, not the publication year if both appear.
+  If the survey spans multiple years, use the starting year of data collection.
+    Example: 2009-2010, use 2009.
+  Look for a year in the document opening, or in the title page, or in the header/footer.
+  Example: 2009, 2014, 2024, 2010
 
 survey_name
   Full official name of the survey.
@@ -104,11 +108,19 @@ DO NOT extract:
 FOR EACH QUESTION, provide these fields:
 
 raw_name  [string, required]
-  The variable code printed next to or above the question.
-  Examples: Q4, h_educ, s2b_q4, B3a, HH14
-  If no code is printed, construct a short snake_case name from the
-  question content. Examples: highest_educ_level, age_completed_years.
+  A short, descriptive snake_case identifier for this variable, built from
+  the question content (e.g. highest_educ_level, age_completed_years).
   Keep it under 32 characters.
+  # CHANGED 2026-07-28: raw_name must never be the questionnaire's own
+  # printed item/COICOP code (e.g. "096011", "3 031221", "112011"). Those
+  # codes belong in the category `code` sub-field, not in raw_name — using
+  # them as raw_name produces meaningless identifiers and breaks downstream
+  # harmonization joins.
+  raw_name must also be UNIQUE across every variable you return for this
+  chunk. If two questions would naturally produce the same name (e.g. two
+  separate "Amount paid in Old Leks" questions in different subsections),
+  disambiguate them by appending the specific item they refer to
+  (e.g. amount_paid_old_leks_equipment, amount_paid_old_leks_vehicle).
 
 label  [string or null]
   A short description of what this variable measures.
@@ -138,12 +150,30 @@ categories  [list or null]
                 Must be taken exactly from the questionnaire.
     label       The text of the answer option.
     is_missing  true if this code means "don't know", "refused",
-                "not applicable", "not stated", or any similar
+                "not applicable", "not stated", "can't remember", or
+                "not present"/"not applicable" — or any similar
                 non-substantive response. false for all real answers.
+  # CHANGED 2026-07-28: Sentinel codes are common in these questionnaires
+  # (e.g. "if no present write 99", "9 = can't remember the amount",
+  # codes ending in 98 or 99). Always set is_missing=true for such codes,
+  # and give them a label that describes the missing-value meaning itself
+  # (e.g. "Not present", "Can't remember") rather than reusing the
+  # question's own wording or a neighboring substantive answer's label.
+  # A sentinel code must never also be labeled as if it were a literal
+  # substantive answer (e.g. code 9 cannot mean both "No" and be marked
+  # is_missing=true at the same time — pick one, and it is almost always
+  # the missing-value meaning).
 
   IMPORTANT: Never invent codes that are not in the questionnaire.
   If a table of codes did not extract cleanly, note this in the
   notes field and lower your confidence score.
+  # CHANGED 2026-07-28: If you notice the same code appearing more than
+  # once with different labels, or a code with no legible label at all
+  # (e.g. a garbled multi-column table), do NOT fabricate a plausible-
+  # looking placeholder label (like "Equipment 073211" or "Type 1
+  # appliance"). Instead, keep only the labels you are confident about,
+  # set needs_review=true, set extraction_confidence to 0.5 or below, and
+  # describe the garbling in notes.
 
 numeric_range  [object or null]
   For numeric variables ONLY. Leave null for all other types.
@@ -217,7 +247,9 @@ notes  [string or null]
 
 IMPORTANT RULES:
   1. Never invent answer codes that are not in the questionnaire text.
-  2. Never invent variable names; construct them from question content.
+  2. Never invent variable names; construct them from question content,
+     never from the questionnaire's own printed item/COICOP code, and
+     never reuse the same raw_name for two different questions.
   3. If a Markdown table is garbled, note it and lower confidence — do not guess.
   4. Return ONLY the structured output. No preamble, no commentary.
 
@@ -227,3 +259,4 @@ Chunk: {chunk_index}
 
 {text}
 """
+

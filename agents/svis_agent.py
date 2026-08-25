@@ -3,7 +3,8 @@ SVIS Extraction Agents
 =======================
 LLM-powered extraction of survey metadata and variable information.
 
-Uses the `instructor` library, which wraps the Anthropic SDK and:
+Uses the `instructor` library, which wraps the World Bank Azure OpenAI
+gateway (via the OpenAI SDK) and:
   1. Enforces the Pydantic schema on LLM output
   2. Automatically sends validation errors back to the LLM and retries
   3. Raises an exception after max_retries failed attempts
@@ -14,30 +15,63 @@ can be caught, logged, and routed to the human review queue.
 """
 from __future__ import annotations
 
-import os
+import re
 from datetime import date
 from typing import Optional
 
-import anthropic
 import instructor
-from dotenv import load_dotenv
+from itsai.platform.authentication import DesktopToken
+from lingua import LanguageDetectorBuilder
+from openai import AzureOpenAI, RateLimitError
 from pydantic import BaseModel
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_random_exponential
 
 from agents.prompts import SURVEY_METADATA_PROMPT, VARIABLE_EXTRACTION_PROMPT
-from extractors.pdf import DocumentChunk
+from extractors.docling_pdf import DocumentChunk
 from schemas.svis import StudyType, SurveySVIS, SurveyVariable
 
-load_dotenv()   # reads ANTHROPIC_API_KEY from .env
-
 # ── Client ────────────────────────────────────────────────────────────────────
+# Authenticates against the World Bank Azure OpenAI gateway using an
+# Azure AD token (via DesktopToken) instead of a static API key.
 
-_client = instructor.from_anthropic(
-    anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+_AZURE_ENDPOINT = "https://azapimdev.worldbank.org/conversationalai/v2/"
+_AZURE_API_VERSION = "2025-04-01-preview"
+
+_token_class = DesktopToken()
+_token_provider = lambda: _token_class.get_token(env="DEV_DESKTOP")
+
+_client = instructor.from_openai(
+    AzureOpenAI(
+        azure_endpoint=_AZURE_ENDPOINT,
+        api_version=_AZURE_API_VERSION,
+        azure_ad_token_provider=_token_provider,
+    )
 )
 
-MODEL      = "claude-sonnet-4-6"
-MAX_TOKENS = 4096
+MODEL      = "gpt-4.1"
+MAX_TOKENS = 16384
 MAX_RETRIES = 3   # instructor will retry this many times on schema validation failure
+
+# The Azure OpenAI gateway enforces a short-window request-rate limit —
+# under sustained per-chunk extraction calls this surfaces as HTTP 429
+# ("Rate limit is exceeded. Try again in N seconds"). instructor's own
+# max_retries only governs schema-validation retries, not this kind of
+# transport-level error, so it is retried here explicitly with
+# exponential backoff (respecting jitter to avoid retry storms) before
+# giving up.
+RATE_LIMIT_MAX_ATTEMPTS = 6
+
+
+@retry(
+    retry=retry_if_exception_type(RateLimitError),
+    wait=wait_random_exponential(min=2, max=30),
+    stop=stop_after_attempt(RATE_LIMIT_MAX_ATTEMPTS),
+    reraise=True,
+)
+def _create(**kwargs):
+    """Thin wrapper around _client.chat.completions.create() that adds
+    rate-limit retry/backoff on top of instructor's schema-validation retries."""
+    return _client.chat.completions.create(**kwargs)
 
 
 # ── Internal response models ──────────────────────────────────────────────────
@@ -64,6 +98,53 @@ class _VariableBatch(BaseModel):
     variables: list[SurveyVariable]
 
 
+# The LLM's raw `year` field has proven unreliable -- it is a required
+# `int` (not Optional), so when it can't find a year it may fall back to
+# a placeholder like 0, and it has also been observed to hallucinate an
+# unrelated year (e.g. the current year) even when a correct year is
+# present in the sampled text. The survey name and filename are far more
+# reliable: questionnaire titles conventionally embed the reference year
+# (e.g. "EICVM 2009-2010", "...HBS_2014.pdf"), so the year is derived
+# from those deterministically via regex and only falls back to the LLM's
+# raw value if neither contains a parseable year.
+_YEAR_RE = re.compile(r"(?<!\d)(19|20)\d{2}(?!\d)")
+
+
+def _resolve_year(meta_year: int, survey_name: str | None, source_file: str) -> int:
+    """Prefers a year parsed from survey_name, then source_file, then
+    falls back to the LLM-reported meta_year if neither yields one."""
+    for text in (survey_name, source_file):
+        if text:
+            match = _YEAR_RE.search(text)
+            if match:
+                return int(match.group(0))
+    return meta_year
+
+
+def _resolve_survey_id(survey_id: str, country_code: str, year: int) -> str:
+    """Reconciles the LLM-composed survey_id (COUNTRYISO3_YEAR_ACRONYM) with
+    the resolved year, so a placeholder like "ALB_0000_HBSA" becomes
+    "ALB_2014_HBSA" instead of silently disagreeing with the year field."""
+    parts = survey_id.split("_")
+    if len(parts) >= 3 and parts[0] == country_code and parts[1].isdigit():
+        parts[1] = str(year)
+        return "_".join(parts)
+    return _YEAR_RE.sub(str(year), survey_id, count=1) if _YEAR_RE.search(survey_id) else survey_id
+
+
+# Lazily built on first use since loading language models has a startup cost;
+# only needed when the LLM can't determine the language from the sampled text.
+_language_detector = None
+
+
+def _detect_language(text: str) -> str | None:
+    global _language_detector
+    if _language_detector is None:
+        _language_detector = LanguageDetectorBuilder.from_all_languages().build()
+    detected = _language_detector.detect_language_of(text)
+    return detected.name.capitalize() if detected else None
+
+
 # ── Agent functions ───────────────────────────────────────────────────────────
 
 def extract_survey_metadata(
@@ -82,9 +163,9 @@ def extract_survey_metadata(
         instructor.exceptions.InstructorRetryException if the LLM fails
         to produce valid output after MAX_RETRIES attempts.
     """
-    meta: _SurveyMeta = _client.messages.create(
+    meta: _SurveyMeta = _create(
         model=MODEL,
-        max_tokens=MAX_TOKENS,
+        max_completion_tokens=MAX_TOKENS,
         max_retries=MAX_RETRIES,
         messages=[{
             "role": "user",
@@ -93,14 +174,18 @@ def extract_survey_metadata(
         response_model=_SurveyMeta,
     )
 
+    year = _resolve_year(meta.year, meta.survey_name, source_file)
+    survey_id = _resolve_survey_id(meta.survey_id, meta.country_code, year)
+    language = meta.language or _detect_language(opening_text)
+
     return SurveySVIS(
-        survey_id=meta.survey_id,
+        survey_id=survey_id,
         country_code=meta.country_code,
-        year=meta.year,
+        year=year,
         survey_name=meta.survey_name,
         study_type=meta.study_type,
         data_collection_mode=meta.data_collection_mode,
-        language=meta.language,
+        language=language,
         variables=[],
         source_file=source_file,
         source_format=source_format,
@@ -131,9 +216,9 @@ def extract_variables_from_chunk(chunk: DocumentChunk) -> list[SurveyVariable]:
         text=chunk.text,
     )
 
-    batch: _VariableBatch = _client.messages.create(
+    batch: _VariableBatch = _create(
         model=MODEL,
-        max_tokens=MAX_TOKENS,
+        max_completion_tokens=MAX_TOKENS,
         max_retries=MAX_RETRIES,
         messages=[{"role": "user", "content": prompt}],
         response_model=_VariableBatch,
