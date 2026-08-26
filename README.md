@@ -1,6 +1,11 @@
-# GMD Survey Parser
+# Survey Scribe
 
 Extracts structured variable information from household survey questionnaire PDFs and saves it as a **Survey Variable Information Schema (SVIS)** JSON file. The SVIS output feeds the GMD AI-assisted harmonization pipeline.
+
+> **Engineering status**: Phase 1 provides an installable schema package,
+> characterization tests, and a bootstrap CLI. The legacy World Bank pipeline
+> remains frozen for compatibility and still requires unavailable internal
+> authentication. No license or public release has been approved.
 
 If you are new to this repo, read this whole document before running anything.
 
@@ -37,7 +42,10 @@ The LLM calls go to the World Bank's Azure OpenAI gateway (model configured via 
 ```
 survey-scribe/
 ├── README.md                  ← you are here
-├── requirements.txt           ← Python dependencies
+├── pyproject.toml             ← Authoritative package and dependency metadata
+├── uv.lock                    ← Reproducible dependency lock
+├── src/survey_scribe/         ← Installable package and canonical SVIS models
+├── requirements.txt           ← Deprecated legacy dependency list
 ├── docling_pipeline.py        ← main orchestrator; run this
 │
 ├── schemas/
@@ -84,31 +92,27 @@ cd survey-scribe
 
 ...or, if you received this project as a `.zip` file, extract it and open a terminal in the extracted `survey-scribe` folder.
 
-### 2. Create a virtual environment
+### 2. Install the locked engineering environment
 
-``` powershell
-python -m venv .venv
-.venv\Scripts\Activate.ps1
+```powershell
+uv sync --locked --python 3.11
 ```
 
-If PowerShell blocks the activation script, run once per session:
-``` powershell
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-```
+This creates `.venv`, installs the package in editable mode, and installs the
+locked development tools. `requirements.txt` is retained only to document the
+pre-package proof of concept and is no longer an installation authority.
 
-### 3. Install Python dependencies
-
-``` powershell
-python -m pip install -r requirements.txt
-```
-
-This installs Docling (PDF → Markdown, OCR, table structure), the Azure OpenAI SDK, `instructor` (structured LLM output), `pydantic`, `tenacity` (retry/backoff), and `lingua-language-detector` (language-detection fallback). See `requirements.txt` for the full list with comments on why each package is needed.
+Verify the package bootstrap with `uv run survey-scribe --help` and
+`uv run pytest tests/characterization tests/test_schema.py`.
 
 ### 4. Configure World Bank Azure OpenAI (mAI) authentication
 
-This pipeline does **not** use a static API key. Authentication is handled by the internal `itsai` package (`itsai.platform.authentication.DesktopToken`), which acquires a token for your own Azure AD identity via MSAL — the same pattern used across World Bank mAI projects.
+The frozen legacy pipeline does **not** use a static API key. Authentication is
+handled by the internal `itsai` package. `itsai` is deliberately not a public
+package dependency and no client or credential provider is loaded by package
+import or CLI help.
 
-- `itsai` is a World Bank-internal package, not on public PyPI — make sure it's available in your Python environment (ask your team lead if `pip install -r requirements.txt` doesn't resolve it; it may need to come from an internal package index already configured on your machine).
+- `itsai` is a World Bank-internal package and is not available from public PyPI. The legacy extraction command is unavailable in a public clean install until its later compatibility shim is completed.
 - The first time the pipeline actually calls the model, MSAL may open an interactive sign-in window (native Windows/broker dialog, sometimes a browser tab). It can appear behind other windows — check your taskbar if the terminal seems to hang after starting a run. After you sign in once, subsequent runs typically reuse a cached/silent token.
 - No `.env` file or API key is required for the Azure OpenAI calls themselves.
 
