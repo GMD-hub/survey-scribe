@@ -1,0 +1,31 @@
+{
+  "schemaVersion": "compound-gpid-roadmap-v1",
+  "milestones": [
+    {
+      "id": "future-product-extensions",
+      "title": "Future Product Extensions",
+      "objective": "Explore post-production extensions for independent review, managed hosting, and secure remote questionnaire ingestion.",
+      "status": "planned",
+      "features": [
+        {
+          "id": "independent-review-and-auto-fix-agents",
+          "title": "Independent review and auto-fix agents",
+          "status": "idea",
+          "plan": null
+        },
+        {
+          "id": "hosted-survey-scribe-service",
+          "title": "Hosted Survey Scribe service",
+          "status": "idea",
+          "plan": null
+        },
+        {
+          "id": "remote-url-questionnaire-ingestion",
+          "title": "Remote URL questionnaire ingestion",
+          "status": "idea",
+          "plan": null
+        }
+      ]
+    }
+  ]
+}
