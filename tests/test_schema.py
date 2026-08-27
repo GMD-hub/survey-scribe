@@ -13,10 +13,13 @@ These tests use the canonical working examples from the GMD project:
 If all tests pass, the Pydantic schema is correctly installed
 and the models work as expected.
 """
-import pytest
+
 from datetime import date
 
-from schemas.svis import (
+import pytest
+from pydantic import ValidationError
+
+from survey_scribe.models.svis import (
     AnswerCategory,
     DataType,
     NumericRange,
@@ -26,8 +29,8 @@ from schemas.svis import (
     UnitLevel,
 )
 
-
 # ── AnswerCategory ────────────────────────────────────────────────────────────
+
 
 class TestAnswerCategory:
     def test_substantive_code(self):
@@ -50,6 +53,7 @@ class TestAnswerCategory:
 
 # ── NumericRange ──────────────────────────────────────────────────────────────
 
+
 class TestNumericRange:
     def test_age_range(self):
         rng = NumericRange(min_value=0, max_value=120)
@@ -60,7 +64,7 @@ class TestNumericRange:
         rng = NumericRange(
             min_value=0,
             max_value=25,
-            notes="Codes 98 and 99 in the data represent 'don't know' and 'refused'."
+            notes="Codes 98 and 99 in the data represent 'don't know' and 'refused'.",
         )
         assert rng.notes is not None
 
@@ -71,6 +75,7 @@ class TestNumericRange:
 
 
 # ── SurveyVariable: canonical examples ───────────────────────────────────────
+
 
 class TestSurveyVariableMale:
     """Canonical example: the GMD 'male' variable."""
@@ -92,9 +97,11 @@ class TestSurveyVariableMale:
         )
 
     def test_categories_count(self):
+        assert self.var.categories is not None
         assert len(self.var.categories) == 3
 
     def test_missing_flag(self):
+        assert self.var.categories is not None
         missing = [c for c in self.var.categories if c.is_missing]
         assert len(missing) == 1
         assert missing[0].code == 9
@@ -120,8 +127,8 @@ class TestSurveyVariableAge:
                 min_value=0,
                 max_value=120,
                 notes="Codes 98 and 99 in the raw data mean 'don't know' "
-                      "and 'refused'. They appear as numeric values but should "
-                      "be treated as missing."
+                "and 'refused'. They appear as numeric values but should "
+                "be treated as missing.",
             ),
             universe="All household members",
             unit_of_analysis=UnitLevel.individual,
@@ -132,10 +139,13 @@ class TestSurveyVariableAge:
         assert self.var.data_type == DataType.numeric
 
     def test_numeric_range_set(self):
+        assert self.var.numeric_range is not None
         assert self.var.numeric_range.min_value == 0
         assert self.var.numeric_range.max_value == 120
 
     def test_range_notes(self):
+        assert self.var.numeric_range is not None
+        assert self.var.numeric_range.notes is not None
         assert "98" in self.var.numeric_range.notes
 
     def test_no_categories(self):
@@ -176,14 +186,17 @@ class TestSurveyVariableEducation:
         )
 
     def test_substantive_categories(self):
+        assert self.var.categories is not None
         substantive = [c for c in self.var.categories if not c.is_missing]
         assert len(substantive) == 7
 
     def test_missing_categories(self):
+        assert self.var.categories is not None
         missing = [c for c in self.var.categories if c.is_missing]
         assert len(missing) == 2
 
     def test_universe_recorded(self):
+        assert self.var.universe is not None
         assert "aged 5" in self.var.universe
 
     def test_skip_condition_preserved(self):
@@ -192,17 +205,18 @@ class TestSurveyVariableEducation:
 
 # ── Confidence and review flag ────────────────────────────────────────────────
 
+
 class TestConfidenceValidation:
     def test_confidence_upper_bound(self):
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             SurveyVariable(
                 raw_name="test",
                 data_type=DataType.numeric,
-                extraction_confidence=1.5,   # invalid: > 1.0
+                extraction_confidence=1.5,  # invalid: > 1.0
             )
 
     def test_confidence_lower_bound(self):
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             SurveyVariable(
                 raw_name="test",
                 data_type=DataType.numeric,
@@ -220,6 +234,7 @@ class TestConfidenceValidation:
 
 
 # ── SurveySVIS container ──────────────────────────────────────────────────────
+
 
 class TestSurveySVIS:
     def setup_method(self):

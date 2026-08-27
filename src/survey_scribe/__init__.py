@@ -1,4 +1,6 @@
-"""Deprecated compatibility re-export for the packaged SVIS models."""
+"""Public package surface for Survey Scribe."""
+
+from importlib.metadata import version
 
 from survey_scribe.models.svis import (
     AnswerCategory,
@@ -19,3 +21,5 @@ __all__ = [
     "SurveyVariable",
     "UnitLevel",
 ]
+
+__version__ = version("survey-scribe")

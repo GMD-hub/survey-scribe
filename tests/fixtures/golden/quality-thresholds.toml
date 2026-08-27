@@ -1,0 +1,12 @@
+schema_version = 1
+
+[metrics]
+exact_schema_compatibility = 1.0
+variable_recall = 0.95
+field_accuracy = 0.95
+dense_repeated_table_recall = 0.95
+
+[availability]
+synthetic_mechanics = true
+approved_real_corpus = false
+reason = "No rights-approved real questionnaire corpus is committed."

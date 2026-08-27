@@ -1,0 +1,20 @@
+schema_version = 1
+corpus_status = "synthetic-only"
+
+[[fixtures]]
+id = "schema-contract-v1"
+path = "tests/fixtures/legacy/schema-contract-v1.json"
+kind = "synthetic-expected-output"
+rights_basis = "repository-synthetic"
+restrictions = "Public test use only; does not substantiate real-document quality."
+creator = "Survey Scribe Phase 1 implementation"
+purpose = "Freeze deterministic legacy SVIS serialization mechanics."
+provenance = "Authored from fictional values; no source questionnaire or provider response was used."
+approval_reference = "2026-08-26 production-package execution instruction"
+approval_date = "2026-08-26"
+sha256 = "8783b9fcc2b3273fc70d6df2c846c6c877631da06c0860b4a68856447418cc61"
+expected_variable_count = 1
+field_judgments = "All fields are authored synthetic expectations."
+provider = "none"
+model = "none"
+prompt_version = "legacy-schema-v1"

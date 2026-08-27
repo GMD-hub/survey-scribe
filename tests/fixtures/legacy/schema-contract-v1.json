@@ -1,0 +1,35 @@
+{
+  "survey_id": "TST_2024_SYNTH",
+  "country_code": "TST",
+  "year": 2024,
+  "survey_name": "Synthetic Questionnaire 2024",
+  "study_type": "other",
+  "data_collection_mode": null,
+  "language": "English",
+  "variables": [
+    {
+      "raw_name": "q_age",
+      "label": "Age in completed years",
+      "question_text": "How old is [NAME]?",
+      "data_type": "numeric",
+      "categories": null,
+      "numeric_range": {
+        "min_value": 0.0,
+        "max_value": 120.0,
+        "notes": null
+      },
+      "universe": "All household members",
+      "skip_condition_raw": null,
+      "module": "Roster",
+      "unit_of_analysis": "individual",
+      "source_page": 0,
+      "extraction_confidence": 1.0,
+      "needs_review": false,
+      "notes": null
+    }
+  ],
+  "source_file": "synthetic-questionnaire.pdf",
+  "source_format": "pdf",
+  "extraction_date": "2024-06-01",
+  "extraction_notes": null
+}

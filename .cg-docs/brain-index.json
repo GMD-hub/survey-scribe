@@ -1,0 +1,222 @@
+{
+  "edge_count": 2,
+  "edges": [
+    {
+      "edge_type": "reviews",
+      "source": ".cg-docs/reviews/2026-08-26-survey-scribe-production-package-review.md",
+      "target": ".cg-docs/plans/2026-08-26-survey-scribe-production-package.md",
+      "target_missing": false
+    },
+    {
+      "edge_type": "references",
+      "source": ".cg-docs/brainstorms/2026-08-26-survey-scribe-production-package.md",
+      "target": ".cg-docs/plans/2026-08-26-survey-scribe-production-package.md",
+      "target_missing": false
+    }
+  ],
+  "entities": [
+    {
+      "date": "2026-08-26",
+      "entity_type": "brainstorm",
+      "path": ".cg-docs/brainstorms/2026-08-26-survey-scribe-production-package.md",
+      "slug": "2026-08-26-survey-scribe-production-package",
+      "status": "decided",
+      "summary": "<!-- Valid status values: decided, in-progress, abandoned -->",
+      "tags": [
+        "python",
+        "packaging",
+        "architecture",
+        "llm",
+        "docling",
+        "svis",
+        "providers",
+        "open-source"
+      ],
+      "title": "Survey Scribe Production Package Architecture",
+      "top_keywords": [
+        "docling_pipeline.py",
+        "compound-gpid.md",
+        "approach",
+        "world bank",
+        "package",
+        "architecture",
+        "partial",
+        "validation",
+        "failed",
+        "success"
+      ]
+    },
+    {
+      "date": "2026-08-26",
+      "entity_type": "plan",
+      "path": ".cg-docs/plans/2026-08-26-survey-scribe-production-package.md",
+      "slug": "2026-08-26-survey-scribe-production-package",
+      "status": "active",
+      "summary": "Refactor the current questionnaire-to-SVIS proof-of-concept into an installable, typed, local-first `survey-scribe` engineering release candidate. The finished repository will expose SVIS-first sync/async Python APIs and a CLI, support BYOK provider and questionnaire-source adapters, preserve the legacy SVIS JSON contract and selected entry points, enforce deterministic quality/status rules, and include executed local and remote CI evidence plus publishable documentation.",
+      "tags": [
+        "python",
+        "packaging",
+        "architecture",
+        "llm",
+        "docling",
+        "svis",
+        "providers",
+        "testing",
+        "documentation"
+      ],
+      "title": "Survey Scribe Production Python Package",
+      "top_keywords": [
+        "test scenarios",
+        "itsai",
+        "survey solutions",
+        "docling_pipeline.py",
+        "contract",
+        "phase",
+        "surveyscribe",
+        "world bank",
+        "test_clean_install.py",
+        "/cg-work"
+      ]
+    },
+    {
+      "date": "2026-08-26",
+      "entity_type": "review",
+      "path": ".cg-docs/reviews/2026-08-26-survey-scribe-production-package-review.md",
+      "slug": "2026-08-26-survey-scribe-production-package-review",
+      "status": "",
+      "summary": "**Review mode**: full (verification fallback; no prior fixed review existed) **Files reviewed**: 29 implementation, test, policy, and workflow files plus related execution records **Findings**: 20 (P0: 1, P1: 7, P2: 10, P3: 2)",
+      "tags": [],
+      "title": "2026-08-26-survey-scribe-production-package-review",
+      "top_keywords": [
+        "safe_auto",
+        "[safe_auto]",
+        "manual",
+        "[manual]",
+        "tests",
+        "package",
+        "phase",
+        "scripts",
+        "survey_scribe",
+        "dependencies"
+      ]
+    },
+    {
+      "date": "2026-08-26",
+      "entity_type": "solution",
+      "path": ".cg-docs/solutions/build-errors/2026-08-26-bound-python-package-artifacts-and-evidence.md",
+      "slug": "2026-08-26-bound-python-package-artifacts-and-evidence",
+      "status": "",
+      "summary": "The package worked in an editable checkout and its wheel built successfully, but review found several release-boundary failures: - Hatchling's default sdist discovery included local `.kilo/` and `.cg-docs/` state. - The wheel omitted a required root compatibility namespace that remained visible during checkout-based tests. - CI built artifacts after tests and never installed what it built. - An offline install passed only with an ambient warm cache and arbitrary wheel discovery. - Dependency probes inherited user index configuration and did not import native OCR modules. - Fixture checksum validation lacked typed provenance and negative tests.",
+      "tags": [
+        "hatchling",
+        "uv",
+        "packaging",
+        "sdist",
+        "wheel",
+        "offline-install",
+        "ci",
+        "provenance"
+      ],
+      "title": "Bound Python Package Artifacts and Evidence",
+      "top_keywords": [
+        "bound python package artifacts",
+        "package",
+        "evidence",
+        "python",
+        "artifacts",
+        "bound",
+        "root",
+        "problem",
+        "cause",
+        "solution"
+      ]
+    },
+    {
+      "date": "",
+      "entity_type": "feature",
+      "path": "roadmap.json#independent-review-and-auto-fix-agents",
+      "slug": "independent-review-and-auto-fix-agents",
+      "status": "idea",
+      "summary": "Independent review and auto-fix agents",
+      "tags": [],
+      "title": "Independent review and auto-fix agents",
+      "top_keywords": [
+        "future product extensions\nobjective",
+        "independent",
+        "review",
+        "auto-fix",
+        "agents",
+        "extensions",
+        "feature",
+        "milestone",
+        "future",
+        "product"
+      ]
+    },
+    {
+      "date": "",
+      "entity_type": "feature",
+      "path": "roadmap.json#hosted-survey-scribe-service",
+      "slug": "hosted-survey-scribe-service",
+      "status": "idea",
+      "summary": "Hosted Survey Scribe service",
+      "tags": [],
+      "title": "Hosted Survey Scribe service",
+      "top_keywords": [
+        "hosted survey scribe",
+        "future product extensions\nobjective",
+        "hosted",
+        "survey",
+        "scribe",
+        "service",
+        "extensions",
+        "feature",
+        "milestone",
+        "future"
+      ]
+    },
+    {
+      "date": "",
+      "entity_type": "feature",
+      "path": "roadmap.json#remote-url-questionnaire-ingestion",
+      "slug": "remote-url-questionnaire-ingestion",
+      "status": "idea",
+      "summary": "Remote URL questionnaire ingestion",
+      "tags": [],
+      "title": "Remote URL questionnaire ingestion",
+      "top_keywords": [
+        "future product extensions\nobjective",
+        "remote",
+        "questionnaire",
+        "ingestion",
+        "url",
+        "extensions",
+        "feature",
+        "milestone",
+        "future",
+        "product"
+      ]
+    }
+  ],
+  "entity_count": 7,
+  "generated": "2026-08-26",
+  "schema_version": "0.2.0",
+  "topic_count": 1,
+  "topics": [
+    {
+      "entity_count": 3,
+      "entity_paths": [
+        "roadmap.json#independent-review-and-auto-fix-agents",
+        "roadmap.json#hosted-survey-scribe-service",
+        "roadmap.json#remote-url-questionnaire-ingestion"
+      ],
+      "keywords": [
+        "future product extensions\nobjective",
+        "hosted survey scribe",
+        "ingestion"
+      ],
+      "label": "Future Product Extensions\nObjective / Hosted Survey Scribe / Ingestion",
+      "slug": "future-product-extensions-objective-hosted-survey-scribe-ingestion"
+    }
+  ]
+}

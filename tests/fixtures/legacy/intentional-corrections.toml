@@ -1,0 +1,41 @@
+schema_version = 1
+
+[[corrections]]
+id = "deterministic-needs-review"
+phase = 3
+description = "Set needs_review from the approved deterministic quality table."
+affected_paths = ["variables[*].needs_review"]
+baseline_behavior = "The model-provided needs_review value is retained unchanged."
+corrected_behavior = "The deterministic quality action table sets review flags."
+rationale = "Make documented quality policy executable and reproducible."
+approval_reference = "Production package plan default quality action table"
+
+[[corrections]]
+id = "real-page-provenance"
+phase = 2
+description = "Replace placeholder page zero with actual source provenance."
+affected_paths = ["variables[*].source_page"]
+baseline_behavior = "Every source_page is zero."
+corrected_behavior = "Each source_page records available source provenance."
+rationale = "Enable auditable human review without changing JSON structure."
+approval_reference = "Production package plan compatibility contract"
+
+[[corrections]]
+id = "process-scanned-input"
+phase = 2
+description = "Process approved scanned fixtures through the selected offline OCR path."
+affected_paths = ["variables", "extraction_notes"]
+baseline_behavior = "Scanned inputs return without output."
+corrected_behavior = "Approved scans use offline OCR and report diagnostics."
+rationale = "Scanned questionnaires are a required Tier 1 source."
+approval_reference = "Production package plan OCR contract"
+
+[[corrections]]
+id = "explicit-partial-diagnostics"
+phase = 2
+description = "Represent omitted or failed blocks with typed partial diagnostics."
+affected_paths = ["extraction_notes"]
+baseline_behavior = "Failures are represented only by free-text notes or no output."
+corrected_behavior = "Failures produce explicit partial diagnostics while preserving legacy JSON."
+rationale = "Prevent silent acceptance of incomplete extraction."
+approval_reference = "Production package plan failure behavior contract"

@@ -1,4 +1,4 @@
-"""Deprecated compatibility re-export for the packaged SVIS models."""
+"""Pydantic models used by Survey Scribe."""
 
 from survey_scribe.models.svis import (
     AnswerCategory,

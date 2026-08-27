@@ -9,15 +9,17 @@ env/
 dist/
 build/
 
-# Environment variables — NEVER commit this file
+# Environment variables - NEVER commit these files
 .env
+.env.*
+!.env.example
 
 # Generated outputs
-output/
+output/*
 !output/.gitkeep
 
 # Test samples — questionnaire PDFs may be restricted data
-tests/samples/
+tests/samples/*
 !tests/samples/.gitkeep
 
 # IDE
@@ -33,10 +35,15 @@ Thumbs.db
 .ipynb_checkpoints/
 *.ipynb
 
-# mAI
+# Local uv configuration
 uv.toml
-pyproject.toml
-.python-version
+
+# Test and tooling caches
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.cache/
 
 # Quarto book
 book/_book/
@@ -44,3 +51,14 @@ book/.quarto/
 
 /.quarto/
 **/*.quarto_ipynb
+
+# Compound GPID managed items (junctions + copied file - do not commit)
+.compound-gpid/managed-files.json
+.kilo/AGENTS.md
+.kilo/agents
+.kilo/commands
+.kilo/instructions
+.kilo/kilo.json
+.kilo/shared
+.kilo/skills
+.kilo/plans
