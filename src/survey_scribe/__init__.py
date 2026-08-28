@@ -20,6 +20,7 @@ __all__ = [
     "SurveySVIS",
     "SurveyVariable",
     "UnitLevel",
+    "__version__",
 ]
 
 __version__ = version("survey-scribe")

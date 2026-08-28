@@ -8,6 +8,7 @@ env/
 *.egg-info/
 dist/
 build/
+site/
 
 # Environment variables - NEVER commit these files
 .env
@@ -18,7 +19,7 @@ build/
 output/*
 !output/.gitkeep
 
-# Test samples — questionnaire PDFs may be restricted data
+# Test samples-  questionnaire PDFs may be restricted data
 tests/samples/*
 !tests/samples/.gitkeep
 
@@ -42,6 +43,7 @@ uv.toml
 .pytest_cache/
 .ruff_cache/
 .coverage
+coverage.xml
 htmlcov/
 .cache/
 
@@ -54,11 +56,10 @@ book/.quarto/
 
 # Compound GPID managed items (junctions + copied file - do not commit)
 .compound-gpid/managed-files.json
-.kilo/AGENTS.md
 .kilo/agents
+.kilo/AGENTS.md
 .kilo/commands
 .kilo/instructions
 .kilo/kilo.json
 .kilo/shared
 .kilo/skills
-.kilo/plans
