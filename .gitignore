@@ -19,7 +19,7 @@ site/
 output/*
 !output/.gitkeep
 
-# Test samples — questionnaire PDFs may be restricted data
+# Test samples-  questionnaire PDFs may be restricted data
 tests/samples/*
 !tests/samples/.gitkeep
 
@@ -56,11 +56,10 @@ book/.quarto/
 
 # Compound GPID managed items (junctions + copied file - do not commit)
 .compound-gpid/managed-files.json
-.kilo/AGENTS.md
 .kilo/agents
+.kilo/AGENTS.md
 .kilo/commands
 .kilo/instructions
 .kilo/kilo.json
 .kilo/shared
 .kilo/skills
-.kilo/plans
