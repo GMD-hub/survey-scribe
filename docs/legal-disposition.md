@@ -11,7 +11,8 @@ copyright, licensing, and contribution decisions remain unresolved.
 - Repository: `https://github.com/GMD-hub/survey-scribe`
 - Visibility checked on 2026-08-26: public
 - Default branch: `main`
-- Approved license metadata: none in the working tree
+- Approved license metadata: MIT, selected in the 2026-08-27 package-readiness
+  instruction
 - Recorded contributor identities: StephenON, Stephen Obundah Nwobike,
   R.Andres Castaneda, and R.Andres Castaneda with accented spelling
 - Copyright ownership and accepted-contribution provenance: not established by
@@ -30,13 +31,14 @@ opening one pull request. Under that instruction:
   a fixture has a separate rights and checksum record.
 
 This authorization does not establish ownership, approve a license, accept
-outside contributions, or authorize release/publication.
+outside contributions, or authorize release/publication. The 2026-08-27
+package-readiness instruction separately approved the MIT license and authorized
+release-readiness engineering, including build-only package and documentation
+artifacts. It explicitly retained the publication gate.
 
 ## Prohibited Until Formal Approval
 
 - PyPI, TestPyPI, GitHub Pages, package release, or deployment
-- OSI or open-source claims
-- Adding license text or contributor-acceptance terms
 - Restricted, confidential, personal, or unsanitized questionnaires
 - Public model responses or traces derived from restricted inputs
 - Workflows with tag triggers, repository-wide write permission, or publication
@@ -56,5 +58,5 @@ count as quality evidence.
 ## Review Trigger
 
 Revisit this disposition before adding real fixtures, accepting contributions,
-adding a license, enabling public artifacts beyond pull-request test output, or
-performing any release action.
+enabling public artifacts beyond build-only workflow output, or performing any
+release action.

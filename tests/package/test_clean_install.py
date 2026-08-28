@@ -71,7 +71,10 @@ socket.socket = deny_network
 socket.create_connection = deny_network
 import survey_scribe
 import schemas.svis
+from importlib.metadata import version
 from survey_scribe.cli import main
+assert survey_scribe.__version__ == version("survey-scribe")
+assert schemas.svis.SurveySVIS is survey_scribe.SurveySVIS
 try:
     main(["--help"])
 except SystemExit as exc:

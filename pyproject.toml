@@ -8,33 +8,66 @@ version = "0.1.0"
 description = "Local-first questionnaire extraction to the Survey Variable Information Schema"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
   {name = "World Bank Global Monitoring Database team"},
 ]
+keywords = [
+  "data extraction",
+  "household surveys",
+  "metadata",
+  "pydantic",
+  "questionnaires",
+  "schema",
+  "structured data",
+  "survey harmonization",
+  "survey metadata",
+  "SVIS",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering :: Information Analysis",
+  "Typing :: Typed",
+]
 dependencies = [
-  "pydantic==2.11.7",
+  "pydantic>=2.11.7,<3",
 ]
 
 [project.optional-dependencies]
 openai = [
-  "instructor==1.10.0",
-  "openai==1.99.9",
-  "tenacity==9.1.2",
-  "tiktoken==0.11.0",
+  "instructor>=1.10.0,<2",
+  "openai>=1.99.9,<2",
+  "tenacity>=9.1.2,<10",
+  "tiktoken>=0.11.0,<1",
 ]
 anthropic = [
-  "anthropic==0.64.0",
-  "instructor==1.10.0",
+  "anthropic>=0.64.0,<1",
+  "instructor>=1.10.0,<2",
 ]
 pdf = [
-  "docling==2.54.0",
-  "easyocr==1.7.2",
-  "lingua-language-detector==2.1.1",
-  "pymupdf==1.26.4",
+  "docling>=2.54.0,<3",
+  "easyocr>=1.7.2,<2",
+  "lingua-language-detector>=2.1.1,<3",
+  "pymupdf>=1.26.4,<2",
 ]
 tabular = [
-  "openpyxl==3.1.5",
+  "openpyxl>=3.1.5,<4",
 ]
+
+[project.urls]
+Homepage = "https://github.com/GMD-hub/survey-scribe"
+Documentation = "https://gmd-hub.github.io/survey-scribe/"
+Repository = "https://github.com/GMD-hub/survey-scribe.git"
+Issues = "https://github.com/GMD-hub/survey-scribe/issues"
+Changelog = "https://github.com/GMD-hub/survey-scribe/blob/main/CHANGELOG.md"
 
 [project.scripts]
 survey-scribe = "survey_scribe.cli:main"
@@ -53,6 +86,7 @@ dev = [
   "pytest-cov==6.2.1",
   "ruff==0.12.8",
   "tomli==2.2.1",
+  "twine==6.1.0",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -60,6 +94,8 @@ packages = ["src/survey_scribe", "schemas"]
 
 [tool.hatch.build.targets.sdist]
 include = [
+  "/CHANGELOG.md",
+  "/LICENSE",
   "/README.md",
   "/pyproject.toml",
   "/schemas",
@@ -98,6 +134,7 @@ include = [
   "tests/characterization",
   "tests/package",
   "tests/test_schema.py",
+  "tests/unit",
 ]
 exclude = [
   "agents",
@@ -111,5 +148,11 @@ source = ["survey_scribe"]
 branch = true
 
 [tool.coverage.report]
+fail_under = 95
+precision = 1
 show_missing = true
 skip_covered = true
+exclude_also = [
+  "if TYPE_CHECKING:",
+  "raise NotImplementedError",
+]

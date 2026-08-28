@@ -8,6 +8,7 @@ env/
 *.egg-info/
 dist/
 build/
+site/
 
 # Environment variables - NEVER commit these files
 .env
@@ -42,6 +43,7 @@ uv.toml
 .pytest_cache/
 .ruff_cache/
 .coverage
+coverage.xml
 htmlcov/
 .cache/
 
