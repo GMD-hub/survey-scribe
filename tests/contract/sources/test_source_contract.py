@@ -153,10 +153,14 @@ def test_limits_are_configurable_and_checked_before_adapter_work(tmp_path: Path)
     assert raised.value.limit == "max_source_bytes"
 
 
-def test_non_pdf_adapter_enforces_total_conversion_deadline(tmp_path: Path) -> None:
+def test_non_pdf_adapter_enforces_total_conversion_deadline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     source = tmp_path / "questionnaire.txt"
     source.write_text("Question", encoding="utf-8")
-    limits = replace(DEFAULT_SOURCE_LIMITS, deadline_seconds=1e-12)
+    moments = iter((100.0, 101.0))
+    monkeypatch.setattr("survey_scribe.sources.docling.time.monotonic", lambda: next(moments))
+    limits = replace(DEFAULT_SOURCE_LIMITS, deadline_seconds=0.5)
 
     with pytest.raises(SourceTimeoutError):
         SourceRegistry.default().convert(source, limits=limits)
