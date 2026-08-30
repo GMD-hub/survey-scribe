@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from survey_scribe.sources.base import (
     SourceBlock,
     SourceDocument,
@@ -106,3 +108,110 @@ def test_repeated_row_inventory_tracks_each_actual_row_origin() -> None:
         ("table-000001", 2),
         ("table-000001", 3),
     ]
+
+
+@pytest.mark.parametrize(
+    ("max_tokens", "overlap_tokens"),
+    [(0, 0), (5, -1), (5, 5)],
+)
+def test_chunking_rejects_invalid_token_budgets(max_tokens: int, overlap_tokens: int) -> None:
+    with pytest.raises(ValueError):
+        chunk_document(
+            _document(),
+            max_tokens=max_tokens,
+            overlap_tokens=overlap_tokens,
+            estimator=WordEstimator(),
+        )
+
+
+def test_text_groups_split_at_budget_and_empty_documents_stay_empty() -> None:
+    provenance = SourceProvenance(source_name="questionnaire.txt")
+    document = SourceDocument(
+        source_name="questionnaire.txt",
+        media_type="text/plain",
+        blocks=tuple(
+            SourceBlock(
+                id=f"block-{index}",
+                order=index,
+                kind="text",
+                text=text,
+                provenance=provenance,
+            )
+            for index, text in enumerate(("one two", "three four", "five six"))
+        ),
+    )
+
+    result = chunk_document(document, max_tokens=3, estimator=WordEstimator())
+    empty = chunk_document(
+        SourceDocument(source_name="empty.txt", media_type="text/plain", blocks=()),
+        max_tokens=3,
+        estimator=WordEstimator(),
+    )
+
+    assert [chunk.new_block_ids for chunk in result.chunks] == [
+        ("block-0",),
+        ("block-1",),
+        ("block-2",),
+    ]
+    assert empty.chunks == ()
+
+
+def test_table_first_and_table_overlap_paths_keep_tables_atomic() -> None:
+    source = "questionnaire.csv"
+    provenance = SourceProvenance(source_name=source, row_start=1, row_end=1)
+    table = SourceTable(id="table-1", rows=(("Q1",),), provenance=provenance)
+    document = SourceDocument(
+        source_name=source,
+        media_type="text/csv",
+        blocks=(
+            SourceBlock(
+                id="table-block",
+                order=0,
+                kind="table",
+                text="Q1",
+                provenance=provenance,
+                table=table,
+            ),
+            SourceBlock(
+                id="text-block",
+                order=1,
+                kind="text",
+                text="closing",
+                provenance=SourceProvenance(source_name=source),
+            ),
+        ),
+    )
+
+    result = chunk_document(document, max_tokens=3, overlap_tokens=2, estimator=WordEstimator())
+
+    assert result.chunks[0].new_block_ids == ("table-block",)
+    assert result.chunks[1].overlap_block_ids == ()
+
+
+def test_repeated_rows_normalize_whitespace_before_comparison() -> None:
+    source = "questionnaire.csv"
+    provenance = SourceProvenance(source_name=source, row_start=4, row_end=5)
+    table = SourceTable(
+        id="table-1",
+        rows=(("Q1", "Age"), (" Q1 ", "Age\n")),
+        provenance=provenance,
+    )
+    document = SourceDocument(
+        source_name=source,
+        media_type="text/csv",
+        blocks=(
+            SourceBlock(
+                id="block-1",
+                order=0,
+                kind="table",
+                text="Q1 | Age",
+                provenance=provenance,
+                table=table,
+            ),
+        ),
+    )
+
+    repeated = chunk_document(document, max_tokens=10).repeated_rows[0]
+
+    assert repeated.row == ("Q1", "Age")
+    assert [origin.row for origin in repeated.origins] == [4, 5]

@@ -5,23 +5,29 @@ from __future__ import annotations
 import hashlib
 import importlib
 import sys
+import time
 import zipfile
 from dataclasses import replace
+from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+from survey_scribe.sources import tabular as tabular_source
 from survey_scribe.sources.base import (
     DEFAULT_SOURCE_LIMITS,
+    SourceConversionError,
+    SourceDependencyError,
     SourceFormatError,
     SourceLimitError,
     SourceSecurityError,
+    SourceTimeoutError,
     resolve_local_source,
 )
 from survey_scribe.sources.registry import SourceRegistry
-from survey_scribe.sources.tabular import XlsxAdapter
+from survey_scribe.sources.tabular import CsvAdapter, XlsxAdapter
 
 CONTENT_TYPES = """<?xml version="1.0"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types" />
@@ -339,3 +345,179 @@ def test_fixture_content_is_synthetic_and_deterministic() -> None:
         hashlib.sha256(payload).hexdigest()
         == "7c197ec18d1cf0767f67e68a45e0b31b7199d593da14bc14528d3374951e73eb"
     )
+
+
+def test_csv_empty_invalid_utf8_malformed_and_io_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    empty = tmp_path / "empty.csv"
+    empty.write_text("", encoding="utf-8")
+    assert SourceRegistry.default().convert(empty).blocks == ()
+
+    invalid = tmp_path / "invalid.csv"
+    invalid.write_bytes(b"\xff")
+    with pytest.raises(SourceFormatError, match="UTF-8"):
+        SourceRegistry.default().convert(invalid)
+
+    malformed = tmp_path / "malformed.csv"
+    malformed.write_text('code,"unterminated', encoding="utf-8")
+    with pytest.raises(SourceFormatError, match="malformed"):
+        SourceRegistry.default().convert(malformed)
+
+    unreadable = tmp_path / "unreadable.csv"
+    unreadable.write_text("code,label", encoding="utf-8")
+    resolved = resolve_local_source(unreadable)
+
+    def fail_open(*_args: object, **_kwargs: object) -> object:
+        raise OSError
+
+    monkeypatch.setattr(Path, "open", fail_open)
+    with pytest.raises(SourceConversionError, match="could not be read"):
+        CsvAdapter().convert(resolved, limits=DEFAULT_SOURCE_LIMITS)
+
+
+def test_xlsx_loader_errors_are_typed(tmp_path: Path) -> None:
+    path = tmp_path / "questionnaire.xlsx"
+    _write_xlsx_container(path)
+    source = resolve_local_source(path)
+
+    def missing_loader(*_args: object, **_kwargs: object) -> object:
+        raise SourceDependencyError("missing dependency")
+
+    def broken_loader(*_args: object, **_kwargs: object) -> object:
+        raise RuntimeError("broken workbook")
+
+    with pytest.raises(SourceDependencyError, match="missing dependency"):
+        XlsxAdapter(workbook_loader=missing_loader).convert(source, limits=DEFAULT_SOURCE_LIMITS)
+    with pytest.raises(SourceFormatError, match="could not be opened"):
+        XlsxAdapter(workbook_loader=broken_loader).convert(source, limits=DEFAULT_SOURCE_LIMITS)
+
+
+def test_xlsx_runtime_cell_limit_and_empty_sheet_are_handled(tmp_path: Path) -> None:
+    path = tmp_path / "questionnaire.xlsx"
+    _write_xlsx_container(path)
+    source = resolve_local_source(path)
+    many_cells = FakeWorkbook(
+        [
+            [FakeCell("A"), FakeCell("B")],
+            [FakeCell("C"), FakeCell("D")],
+            [FakeCell("E")],
+        ]
+    )
+
+    with pytest.raises(SourceLimitError, match="cell limit"):
+        XlsxAdapter(workbook_loader=lambda _path, **_kwargs: many_cells).convert(
+            source,
+            limits=replace(DEFAULT_SOURCE_LIMITS, max_cells=4),
+        )
+
+    empty_workbook = FakeWorkbook([])
+    document = XlsxAdapter(workbook_loader=lambda _path, **_kwargs: empty_workbook).convert(
+        source, limits=DEFAULT_SOURCE_LIMITS
+    )
+    assert document.blocks == ()
+    assert empty_workbook.closed is True
+
+
+def test_openpyxl_loader_reports_missing_optional_dependency(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def missing_import(_name: str) -> object:
+        raise ModuleNotFoundError
+
+    monkeypatch.setattr(tabular_source, "import_module", missing_import)
+    with pytest.raises(SourceDependencyError, match="optional 'tabular'"):
+        tabular_source._load_openpyxl_workbook(tmp_path / "questionnaire.xlsx")
+
+
+def test_xlsx_relationship_validation_rejects_malformed_and_remote_targets() -> None:
+    with pytest.raises(SourceFormatError, match="relationship XML is malformed"):
+        tabular_source._reject_external_relationships(b"<Relationships", "XLSX")
+    with pytest.raises(SourceSecurityError, match="external relationship"):
+        tabular_source._reject_external_relationships(
+            b'<Relationships><Relationship Target="https://example.invalid" /></Relationships>',
+            "XLSX",
+        )
+    tabular_source._reject_external_relationships(
+        b'<Relationships><Relationship Target="worksheet.xml" /></Relationships>',
+        "XLSX",
+    )
+
+
+def test_xlsx_preflight_accepts_local_relationships(tmp_path: Path) -> None:
+    path = tmp_path / "local-relationship.xlsx"
+    _write_xlsx_container(
+        path,
+        extra_files={
+            "xl/_rels/workbook.xml.rels": (
+                '<Relationships><Relationship Target="worksheets/sheet1.xml" /></Relationships>'
+            )
+        },
+    )
+
+    document = XlsxAdapter(workbook_loader=lambda _path, **_kwargs: FakeWorkbook([])).convert(
+        resolve_local_source(path), limits=DEFAULT_SOURCE_LIMITS
+    )
+
+    assert document.blocks == ()
+
+
+def test_xlsx_rejects_malformed_worksheet_and_package_io_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    malformed = tmp_path / "malformed.xlsx"
+    _write_xlsx_container(malformed, sheet_xml="<worksheet")
+    with pytest.raises(SourceFormatError, match="package XML is malformed"):
+        XlsxAdapter(workbook_loader=lambda _path, **_kwargs: FakeWorkbook([])).convert(
+            resolve_local_source(malformed), limits=DEFAULT_SOURCE_LIMITS
+        )
+
+    path = tmp_path / "unreadable.xlsx"
+    path.write_bytes(b"package")
+    entry = SimpleNamespace(filename="xl/worksheets/sheet1.xml")
+    monkeypatch.setattr(tabular_source, "inspect_zip_archive", lambda _path, _limits: (entry,))
+
+    class BrokenArchive:
+        def __init__(self, _path: Path) -> None:
+            raise OSError
+
+    monkeypatch.setattr(tabular_source.zipfile, "ZipFile", BrokenArchive)
+    with pytest.raises(SourceConversionError, match="could not be inspected"):
+        tabular_source._inspect_xlsx(path, DEFAULT_SOURCE_LIMITS, time.monotonic() + 10)
+
+
+def test_xlsx_coordinate_dimension_and_observed_bounds() -> None:
+    assert tabular_source._dimension_bound(None, DEFAULT_SOURCE_LIMITS) is None
+    assert tabular_source._cell_coordinates("$AA$10") == (27, 10)
+
+    with pytest.raises(SourceLimitError, match="dimension exceeds"):
+        tabular_source._dimension_bound("A1:B2", replace(DEFAULT_SOURCE_LIMITS, max_cells=3))
+    with pytest.raises(SourceFormatError, match="malformed"):
+        tabular_source._cell_coordinates("A0")
+    with pytest.raises(SourceFormatError, match="Excel worksheet limits"):
+        tabular_source._cell_coordinates("XFE1")
+    with pytest.raises(SourceLimitError, match="dimension exceeds"):
+        tabular_source._check_observed_bound(
+            declared=None,
+            observed=(2, 2),
+            limits=replace(DEFAULT_SOURCE_LIMITS, max_cells=3),
+        )
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (None, ""),
+        (True, "TRUE"),
+        (False, "FALSE"),
+        (date(2026, 8, 30), "2026-08-30"),
+        (42, "42"),
+    ],
+)
+def test_xlsx_cell_rendering_is_stable(value: object, expected: str) -> None:
+    assert tabular_source._render_cell(value) == expected
+
+
+def test_tabular_deadline_check_is_typed() -> None:
+    with pytest.raises(SourceTimeoutError):
+        tabular_source._check_deadline(time.monotonic() - 1)
