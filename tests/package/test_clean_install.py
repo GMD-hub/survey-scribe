@@ -71,10 +71,31 @@ socket.socket = deny_network
 socket.create_connection = deny_network
 import survey_scribe
 import schemas.svis
+import tempfile
+from pathlib import Path
 from importlib.metadata import version
 from survey_scribe.cli import main
+from survey_scribe.config import SurveyScribeConfig
+from survey_scribe.results import ExtractionResult
+from survey_scribe.serialization.artifacts import write_result
+from survey_scribe.serialization import legacy_payload
+from survey_scribe.sources import SourceLimits
+from survey_scribe.sources.chunking import ConservativeTokenEstimator
+from survey_scribe.sources.ocr import APPROVED_OCR_ARTIFACTS
+from survey_scribe.sources.registry import SourceRegistry
 assert survey_scribe.__version__ == version("survey-scribe")
 assert schemas.svis.SurveySVIS is survey_scribe.SurveySVIS
+assert SurveyScribeConfig().provider == "openai"
+assert ExtractionResult is not None
+assert write_result is not None
+assert legacy_payload({"safe": True}) == {"safe": True}
+assert SourceLimits().max_pages == 2000
+assert ConservativeTokenEstimator().estimate("abc") == 1
+assert len(APPROVED_OCR_ARTIFACTS) == 2
+with tempfile.TemporaryDirectory() as temporary_directory:
+    source = Path(temporary_directory) / "questionnaire.txt"
+    source.write_text("Q1 Age?", encoding="utf-8")
+    assert SourceRegistry.default().convert(source).blocks[0].text == "Q1 Age?"
 try:
     main(["--help"])
 except SystemExit as exc:

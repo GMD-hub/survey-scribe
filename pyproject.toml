@@ -132,9 +132,12 @@ typeCheckingMode = "basic"
 include = [
   "src",
   "tests/characterization",
+  "tests/contract",
+  "tests/integration",
   "tests/package",
   "tests/test_schema.py",
   "tests/unit",
+  "scripts/validate_ocr_artifacts.py",
 ]
 exclude = [
   "agents",
