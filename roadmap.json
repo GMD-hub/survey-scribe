@@ -26,6 +26,20 @@
           "plan": null
         }
       ]
+    },
+    {
+      "id": "production-package-completion",
+      "title": "Production Package Completion",
+      "objective": "Complete the installable local-first Survey Scribe extraction runtime, provider/source adapters, CLI, evidence, documentation, and gated release readiness.",
+      "status": "in-progress",
+      "features": [
+        {
+          "id": "complete-survey-scribe-production-package",
+          "title": "Complete Survey Scribe production package",
+          "status": "active",
+          "plan": ".cg-docs/plans/2026-08-28-survey-scribe-production-package-refined.md"
+        }
+      ]
     }
   ]
 }

@@ -1,6 +1,17 @@
 # 🧠 Project Brain — Chronological Log
 
-_Generated 2026-08-26 · 4 artifacts (newest first) + 3 roadmap features_
+_Generated 2026-08-28 · 8 artifacts (newest first) + 4 roadmap features_
+
+## 2026-08-28
+
+- **[2026-08-28-survey-scribe-production-package-refined-review](.cg-docs/reviews/2026-08-28-survey-scribe-production-package-refined-review.md)** · `review` · _—_ · `2026-08-28`
+  > **Review mode**: full **Files reviewed**: 29 implementation, test, script, configuration, and workflow-state files **…
+- **[2026-08-28-survey-scribe-production-package-refined-verify-review](.cg-docs/reviews/2026-08-28-survey-scribe-production-package-refined-verify-review.md)** · `review` · _—_ · `2026-08-28`
+  > **Review mode**: light verification **Parent review**: `.cg-docs/reviews/2026-08-28-survey-scribe-production-package-…
+- **[Close Credential Redaction Boundaries](.cg-docs/solutions/bugs/2026-08-28-close-credential-redaction-boundaries.md)** · `solution` · _—_ · `2026-08-28`
+  > Typed secret fields were excluded from configuration serialization, but equivalent credentials could still enter outp…
+- **[Survey Scribe Production Package Completion](.cg-docs/plans/2026-08-28-survey-scribe-production-package-refined.md)** · `plan` · _active_ · `2026-08-28`
+  > Complete the refactor of Survey Scribe from a repository-only questionnaire-to-SVIS proof of concept into a functiona…
 
 ## 2026-08-26
 
@@ -15,6 +26,8 @@ _Generated 2026-08-26 · 4 artifacts (newest first) + 3 roadmap features_
 
 ## Roadmap Features
 
+- **[Complete Survey Scribe production package](roadmap.json#complete-survey-scribe-production-package)** · `feature` · _active_ · `—`
+  > Complete Survey Scribe production package
 - **[Hosted Survey Scribe service](roadmap.json#hosted-survey-scribe-service)** · `feature` · _idea_ · `—`
   > Hosted Survey Scribe service
 - **[Independent review and auto-fix agents](roadmap.json#independent-review-and-auto-fix-agents)** · `feature` · _idea_ · `—`

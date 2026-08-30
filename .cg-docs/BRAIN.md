@@ -1,6 +1,6 @@
 # 🧠 Project Brain
 
-_Generated 2026-08-26 · 7 entities · 1 topics · 2 edges_
+_Generated 2026-08-28 · 12 entities · 1 topics · 6 edges_
 
 ## How to Use
 
@@ -13,23 +13,25 @@ _Generated 2026-08-26 · 7 entities · 1 topics · 2 edges_
 
 | # | Topic | Entities | File |
 |---|-------|----------|------|
-| 1 | [Future Product Extensions Objective / Hosted Survey Scribe / Ingestion](BRAIN-01.md#future-product-extensions-objective-hosted-survey-scribe-ingestion) | 3 | BRAIN-01.md |
+| 1 | [Future Product Extensions Objective / Scribe / Survey](BRAIN-01.md#future-product-extensions-objective-scribe-survey) | 4 | BRAIN-01.md |
 
 ## Entity Summary
 
 | Type | Count |
 |------|-------|
 | brainstorm | 1 |
-| feature | 3 |
-| plan | 1 |
-| review | 1 |
-| solution | 1 |
+| feature | 4 |
+| plan | 2 |
+| review | 3 |
+| solution | 2 |
 
-_4 entities not assigned to any topic_
+_8 entities not assigned to any topic_
 
 ## Relationship Summary
 
 | Edge Type | Count |
 |-----------|-------|
+| implements | 2 |
 | references | 1 |
-| reviews | 1 |
+| reviews | 2 |
+| verifies | 1 |
