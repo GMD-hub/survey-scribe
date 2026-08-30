@@ -1,0 +1,150 @@
+"""Frozen typed extraction results and stable diagnostics."""
+
+from __future__ import annotations
+
+from copy import deepcopy
+from enum import StrEnum
+from os import PathLike
+from pathlib import Path
+from typing import Any, Generic, TypeVar
+from uuid import uuid4
+
+from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
+
+T = TypeVar("T")
+
+
+class ResultStatus(StrEnum):
+    """Derived extraction outcome."""
+
+    success = "success"
+    partial = "partial"
+    failed = "failed"
+
+
+class DiagnosticSeverity(StrEnum):
+    """Operational effect of a diagnostic."""
+
+    info = "info"
+    warning = "warning"
+    error = "error"
+
+
+class DiagnosticCode(StrEnum):
+    """Stable built-in diagnostic codes."""
+
+    quality_low_confidence = "QUALITY_LOW_CONFIDENCE"
+    quality_missing_categories = "QUALITY_MISSING_CATEGORIES"
+    quality_duplicate_raw_name = "QUALITY_DUPLICATE_RAW_NAME"
+    quality_overlap_deduped = "QUALITY_OVERLAP_DEDUPED"
+    quality_possible_duplicate = "QUALITY_POSSIBLE_DUPLICATE"
+    quality_module_reconciled = "QUALITY_MODULE_RECONCILED"
+    metadata_incomplete = "METADATA_INCOMPLETE"
+    source_unreadable = "SOURCE_UNREADABLE"
+    provider_failed = "PROVIDER_FAILED"
+    provider_truncated = "PROVIDER_TRUNCATED"
+    validation_failed = "VALIDATION_FAILED"
+    block_failed = "BLOCK_FAILED"
+
+
+class Diagnostic(BaseModel):
+    """One stable diagnostic without raw provider response data."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    code: DiagnosticCode | str
+    message: str
+    severity: DiagnosticSeverity = DiagnosticSeverity.warning
+    details: dict[str, Any] = Field(default_factory=dict)
+
+
+class FailedBlock(BaseModel):
+    """A source block that did not produce usable structured output."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    block_id: str
+    message: str
+    source_order: int | None = Field(default=None, ge=0)
+
+
+class ArtifactKind(StrEnum):
+    """Published artifact role."""
+
+    main = "main"
+    sidecar = "sidecar"
+    manifest = "manifest"
+    legacy = "legacy"
+    active_pointer = "active_pointer"
+
+
+class ArtifactReference(BaseModel):
+    """Reference to one validated local artifact."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: ArtifactKind | str
+    path: Path
+    generation_id: str
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class ExtractionResult(BaseModel, Generic[T]):
+    """Frozen result envelope; caller-owned output ``T`` can remain mutable."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, arbitrary_types_allowed=True)
+
+    output: T | None
+    survey_id: str | None = None
+    run_id: str = Field(default_factory=lambda: uuid4().hex)
+    diagnostics: tuple[Diagnostic, ...] = ()
+    failed_blocks: tuple[FailedBlock, ...] = ()
+    artifacts: tuple[ArtifactReference, ...] = ()
+
+    @model_validator(mode="after")
+    def derive_survey_id(self) -> ExtractionResult[T]:
+        """Use the output survey identifier when no envelope value was supplied."""
+        if self.survey_id is None and self.output is not None:
+            output_survey_id = getattr(self.output, "survey_id", None)
+            if isinstance(output_survey_id, str):
+                object.__setattr__(self, "survey_id", output_survey_id)
+        return self
+
+    @computed_field(return_type=ResultStatus)
+    @property
+    def status(self) -> ResultStatus:
+        """Derive status from usable output and operational failures."""
+        if self.output is None:
+            return ResultStatus.failed
+        partial_codes = {
+            DiagnosticCode.metadata_incomplete,
+            DiagnosticCode.source_unreadable,
+            DiagnosticCode.provider_failed,
+            DiagnosticCode.provider_truncated,
+            DiagnosticCode.validation_failed,
+            DiagnosticCode.block_failed,
+        }
+        if self.failed_blocks:
+            return ResultStatus.partial
+        if any(
+            diagnostic.severity is DiagnosticSeverity.error or diagnostic.code in partial_codes
+            for diagnostic in self.diagnostics
+        ):
+            return ResultStatus.partial
+        return ResultStatus.success
+
+    def serialization_snapshot(self) -> dict[str, Any]:
+        """Return a detached JSON-compatible snapshot of the current envelope."""
+        return deepcopy(self.model_dump(mode="json"))
+
+    def write(
+        self,
+        output_dir: str | PathLike[str],
+        *,
+        sidecar: bool = True,
+        overwrite: bool = False,
+    ) -> ExtractionResult[T]:
+        """Write one transaction and return a new frozen result with artifacts."""
+        from survey_scribe.serialization.artifacts import write_result
+
+        return write_result(self, Path(output_dir), sidecar=sidecar, overwrite=overwrite)
