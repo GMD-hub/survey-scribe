@@ -9,7 +9,18 @@ from pydantic import BaseModel, TypeAdapter
 
 
 def legacy_payload(output: Any) -> Any:
-    """Convert structured output to JSON values while preserving field order."""
+    """Convert structured output to JSON values while preserving field order.
+
+    Args:
+        output: Pydantic model or another value supported by Pydantic's type
+            adapter.
+
+    Returns:
+        A JSON-compatible value with model field order preserved.
+
+    Raises:
+        TypeError: A nested mapping uses a non-string key.
+    """
     if isinstance(output, BaseModel):
         _require_string_mapping_keys(output.model_dump(mode="python"))
         return output.model_dump(mode="json")
@@ -18,7 +29,18 @@ def legacy_payload(output: Any) -> Any:
 
 
 def legacy_json_bytes(output: Any) -> bytes:
-    """Serialize the compatibility projection as deterministic UTF-8 JSON."""
+    """Serialize the compatibility projection as deterministic UTF-8 JSON.
+
+    Args:
+        output: Pydantic model or another supported Python value.
+
+    Returns:
+        Two-space-indented UTF-8 JSON bytes with field order preserved.
+
+    Raises:
+        TypeError: A nested mapping uses a non-string key.
+        ValueError: The converted value contains a non-finite JSON number.
+    """
     rendered = json.dumps(
         legacy_payload(output),
         ensure_ascii=False,

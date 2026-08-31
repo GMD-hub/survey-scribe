@@ -113,7 +113,12 @@ class ExtractionResult(BaseModel, Generic[T]):
     @computed_field(return_type=ResultStatus)
     @property
     def status(self) -> ResultStatus:
-        """Derive status from usable output and operational failures."""
+        """Derive status from usable output and operational failures.
+
+        Returns:
+            ``failed`` without output, ``partial`` after an operational failure,
+            or ``success`` when usable output has no operational failure.
+        """
         if self.output is None:
             return ResultStatus.failed
         partial_codes = {
@@ -134,7 +139,12 @@ class ExtractionResult(BaseModel, Generic[T]):
         return ResultStatus.success
 
     def serialization_snapshot(self) -> dict[str, Any]:
-        """Return a detached JSON-compatible snapshot of the current envelope."""
+        """Return a detached JSON-compatible snapshot of the current envelope.
+
+        Returns:
+            A deep-copied dictionary that does not change if caller-owned output
+            is later mutated.
+        """
         return deepcopy(self.model_dump(mode="json"))
 
     def write(
@@ -144,7 +154,28 @@ class ExtractionResult(BaseModel, Generic[T]):
         sidecar: bool = True,
         overwrite: bool = False,
     ) -> ExtractionResult[T]:
-        """Write one transaction and return a new frozen result with artifacts."""
+        """Publish one versioned generation and return its artifact references.
+
+        Args:
+            output_dir: Trusted local directory for stable and generation files.
+            sidecar: Whether to include the diagnostic sidecar.
+            overwrite: Whether to publish a new generation when stable artifacts
+                already exist.
+
+        Returns:
+            A new frozen result containing references and SHA-256 digests for the
+            published files.
+
+        Raises:
+            ArtifactCollisionError: Artifacts exist and overwrite is disabled, or
+                another writer holds the survey lock.
+            ArtifactWriteError: Validation, generation, projection, pointer, or
+                filesystem publication fails.
+
+        Note:
+            Each file replacement is atomic, but publication is not crash-atomic
+            across the legacy projection and active pointer.
+        """
         from survey_scribe.serialization.artifacts import write_result
 
         return write_result(self, Path(output_dir), sidecar=sidecar, overwrite=overwrite)

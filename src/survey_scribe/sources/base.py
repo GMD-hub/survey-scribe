@@ -255,7 +255,20 @@ def resolve_local_source(
     *,
     limits: SourceLimits = DEFAULT_SOURCE_LIMITS,
 ) -> ResolvedSource:
-    """Validate local-only input and confine every bundle path after resolution."""
+    """Validate local-only input and confine bundle paths after resolution.
+
+    Args:
+        source: Existing local file or a bundle rooted in one local directory.
+        limits: Resource ceilings applied to the primary and companion files.
+
+    Returns:
+        Absolute validated paths for the selected source.
+
+    Raises:
+        SourceInputError: A path is remote, missing, not a file, or escapes its
+            bundle root.
+        SourceLimitError: File size or companion count exceeds a configured limit.
+    """
     if isinstance(source, SourceBundle):
         if len(source.companions) > limits.max_companions:
             raise SourceLimitError(

@@ -50,7 +50,19 @@ def validate_ocr_cache(
     *,
     manifest: Sequence[OcrArtifact] = APPROVED_OCR_ARTIFACTS,
 ) -> tuple[OcrArtifactValidation, ...]:
-    """Validate local files only; never fetch or redistribute an artifact."""
+    """Validate local files without fetching or redistributing artifacts.
+
+    Args:
+        cache: Local directory that contains OCR archives.
+        manifest: Expected artifact names, byte sizes, and SHA-256 digests.
+
+    Returns:
+        One validation result per manifest item in manifest order.
+
+    Note:
+        Validation is caller-enforced. PDF conversion does not call this function
+        automatically.
+    """
     cache_root = cache.resolve()
     results: list[OcrArtifactValidation] = []
     for artifact in manifest:
@@ -85,7 +97,17 @@ def main(
     stdout: TextIO | None = None,
     stderr: TextIO | None = None,
 ) -> int:
-    """Validate the configured local OCR cache and return a deterministic exit code."""
+    """Validate the configured local OCR cache and return a deterministic exit code.
+
+    Args:
+        environ: Environment mapping used to locate the cache.
+        stdout: Stream for per-artifact status and successful summary output.
+        stderr: Stream for configuration and validation failures.
+
+    Returns:
+        ``0`` when every artifact is valid, ``1`` after validation failures, or
+        ``2`` when no existing cache directory is configured.
+    """
     environment = os.environ if environ is None else environ
     output = sys.stdout if stdout is None else stdout
     errors = sys.stderr if stderr is None else stderr

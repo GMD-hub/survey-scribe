@@ -80,7 +80,24 @@ def chunk_document(
     overlap_tokens: int = 0,
     estimator: TokenEstimator | None = None,
 ) -> ChunkedDocument:
-    """Chunk without dropping preamble, short blocks, complete tables, or source order."""
+    """Chunk without dropping preamble, complete tables, or source order.
+
+    Args:
+        document: Normalized source document to chunk.
+        max_tokens: Target maximum for grouped text blocks. A complete table or
+            one large block can exceed this value.
+        overlap_tokens: Target budget for complete prior text blocks copied into
+            the next chunk.
+        estimator: Token estimator. The conservative dependency-free estimator is
+            used when omitted.
+
+    Returns:
+        Stable chunks plus an inventory of exact repeated table rows.
+
+    Raises:
+        ValueError: ``max_tokens`` is below one, or ``overlap_tokens`` is negative
+            or not smaller than ``max_tokens``.
+    """
     if max_tokens < 1:
         raise ValueError("max_tokens must be at least 1")
     if overlap_tokens < 0 or overlap_tokens >= max_tokens:

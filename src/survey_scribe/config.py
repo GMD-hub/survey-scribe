@@ -166,7 +166,25 @@ class SurveyScribeConfig(BaseModel):
         resolve_environment: bool = False,
         environ: Mapping[str, str] | None = None,
     ) -> Self:
-        """Resolve SDK sources without any implicit TOML or environment access."""
+        """Resolve SDK settings without implicit TOML or environment access.
+
+        Args:
+            constructor: Highest-priority field values. Entries set to ``None``
+                are ignored.
+            config: Explicitly set fields from an existing configuration model.
+            config_path: Exact TOML file to read. No file is read when omitted.
+            resolve_environment: Whether to read credential and provider values
+                from ``environ`` or the process environment.
+            environ: Environment mapping to use instead of ``os.environ``.
+
+        Returns:
+            A validated, frozen configuration model.
+
+        Raises:
+            ConfigurationError: A file is missing, malformed, secret-bearing, or
+                resolves to invalid settings.
+            AmbiguousCredentialError: More than one credential form is resolved.
+        """
         file_values = _read_toml(Path(config_path)) if config_path is not None else {}
         explicit_config = _explicit_model_values(config) if config is not None else {}
         constructor_values = _without_none(dict(constructor or {}))
@@ -198,7 +216,25 @@ class SurveyScribeConfig(BaseModel):
         environ: Mapping[str, str] | None = None,
         cwd: str | os.PathLike[str] | None = None,
     ) -> Self:
-        """Resolve an explicit TOML file, or only the current-directory file."""
+        """Resolve an explicit TOML file, or only the current-directory file.
+
+        Args:
+            path: Exact TOML path. When omitted, only
+                ``cwd/survey-scribe.toml`` is considered.
+            constructor: Highest-priority field values.
+            config: Explicitly set fields from an existing configuration model.
+            resolve_environment: Whether to resolve environment values.
+            environ: Environment mapping to use instead of ``os.environ``.
+            cwd: Directory used for default-file discovery. The process current
+                directory is used when omitted.
+
+        Returns:
+            A validated, frozen configuration model.
+
+        Raises:
+            ConfigurationError: The selected file or resolved values are invalid.
+            AmbiguousCredentialError: More than one credential form is resolved.
+        """
         config_path: Path | None
         if path is not None:
             config_path = Path(path)
@@ -223,7 +259,24 @@ class SurveyScribeConfig(BaseModel):
         environ: Mapping[str, str] | None = None,
         cwd: str | os.PathLike[str] | None = None,
     ) -> Self:
-        """Resolve all CLI ranks without searching parent or home directories."""
+        """Resolve CLI settings without searching parent or home directories.
+
+        Args:
+            flags: Highest-priority non-``None`` command-line values.
+            config_path: Exact TOML path. When omitted, only
+                ``cwd/survey-scribe.toml`` is considered.
+            environ: Environment mapping. The process environment is used when
+                omitted.
+            cwd: Directory used for default-file discovery.
+
+        Returns:
+            A validated, frozen configuration model.
+
+        Raises:
+            ConfigurationError: The requested file is missing or resolved values
+                are invalid.
+            AmbiguousCredentialError: More than one credential form is resolved.
+        """
         current_directory = Path.cwd() if cwd is None else Path(cwd)
         requested_path = (
             Path(config_path)

@@ -22,11 +22,21 @@ class SourceRegistry:
     """Map verified file suffixes to minimal source adapters."""
 
     def __init__(self, adapters: Mapping[str, SourceAdapter]) -> None:
+        """Create a suffix-to-adapter registry.
+
+        Args:
+            adapters: Adapter mapping keyed by file suffix. Suffix matching is
+                case-insensitive.
+        """
         self._adapters = {suffix.lower(): adapter for suffix, adapter in adapters.items()}
 
     @classmethod
     def default(cls) -> SourceRegistry:
-        """Create the verified Tier 1 registry without importing optional SDKs."""
+        """Create the verified Tier 1 registry without importing optional SDKs.
+
+        Returns:
+            A registry for PDF, DOCX, XLSX, CSV, HTML, Markdown, and text files.
+        """
         from survey_scribe.sources.docling import (
             DoclingPdfAdapter,
             DocxAdapter,
@@ -56,7 +66,25 @@ class SourceRegistry:
         *,
         limits: SourceLimits = DEFAULT_SOURCE_LIMITS,
     ) -> SourceDocument:
-        """Resolve one local source, verify its format, and normalize it."""
+        """Resolve one local source, verify its format, and normalize it.
+
+        Args:
+            source: Existing local file or confined source bundle.
+            limits: Resource ceilings for validation and conversion.
+
+        Returns:
+            Deterministic ordered blocks with physical source provenance.
+
+        Raises:
+            SourceInputError: The local source path is invalid.
+            SourceFormatError: The suffix is unsupported or conflicts with the
+                file signature.
+            SourceSecurityError: Untrusted content contains a prohibited vector.
+            SourceDependencyError: An optional adapter dependency is unavailable.
+            SourceLimitError: A configured resource ceiling is exceeded.
+            SourceConversionError: The selected adapter cannot normalize the file.
+            SourceTimeoutError: Killable conversion exceeds its deadline.
+        """
         resolved = resolve_local_source(source, limits=limits)
         suffix = resolved.primary.suffix.lower()
         adapter = self._adapters.get(suffix)
