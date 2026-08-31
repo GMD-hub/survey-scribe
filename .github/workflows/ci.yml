@@ -48,7 +48,7 @@ jobs:
           version: "0.8.11"
           enable-cache: true
       - run: uv sync --locked --python ${{ matrix.python-version }}
-      - run: uv run pytest tests/unit tests/characterization tests/test_schema.py --cov=survey_scribe --cov-branch --cov-report=term-missing --cov-report=xml
+      - run: uv run pytest tests/unit tests/characterization tests/contract tests/integration tests/test_schema.py --cov=survey_scribe --cov-branch --cov-report=term-missing --cov-report=xml
 
   package:
     name: Build and inspect distributions

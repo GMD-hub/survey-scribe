@@ -24,6 +24,22 @@ def test_wheel_contents_are_bounded(repository_root: Path) -> None:
         member.startswith(("survey_scribe/", "schemas/", "survey_scribe-")) for member in members
     )
     assert "survey_scribe/py.typed" in members
+    required_runtime = {
+        "survey_scribe/config.py",
+        "survey_scribe/errors.py",
+        "survey_scribe/results.py",
+        "survey_scribe/serialization/__init__.py",
+        "survey_scribe/serialization/artifacts.py",
+        "survey_scribe/serialization/legacy.py",
+        "survey_scribe/sources/__init__.py",
+        "survey_scribe/sources/base.py",
+        "survey_scribe/sources/chunking.py",
+        "survey_scribe/sources/docling.py",
+        "survey_scribe/sources/ocr.py",
+        "survey_scribe/sources/registry.py",
+        "survey_scribe/sources/tabular.py",
+    }
+    assert required_runtime.issubset(members)
 
 
 def test_wheel_metadata_is_publishable(repository_root: Path) -> None:

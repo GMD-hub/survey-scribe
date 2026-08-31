@@ -1,11 +1,11 @@
 # 🧠 Project Brain — Part 1
 
-_Generated 2026-08-26_
+_Generated 2026-08-28_
 
-## Future Product Extensions Objective / Hosted Survey Scribe / Ingestion
+## Future Product Extensions Objective / Scribe / Survey
 
 _Keywords: `future product extensions
-objective` · `hosted survey scribe` · `ingestion`_ · 3 entities
+objective` · `scribe` · `survey`_ · 4 entities
 
 - **[Independent review and auto-fix agents](roadmap.json#independent-review-and-auto-fix-agents)** · `feature` · _idea_ · `—`
   > Independent review and auto-fix agents
@@ -13,3 +13,5 @@ objective` · `hosted survey scribe` · `ingestion`_ · 3 entities
   > Hosted Survey Scribe service
 - **[Remote URL questionnaire ingestion](roadmap.json#remote-url-questionnaire-ingestion)** · `feature` · _idea_ · `—`
   > Remote URL questionnaire ingestion
+- **[Complete Survey Scribe production package](roadmap.json#complete-survey-scribe-production-package)** · `feature` · _active_ · `—`
+  > Complete Survey Scribe production package

@@ -1,21 +1,24 @@
 {
   "schemaVersion": "compound-gpid-active-state-v1",
-  "updatedAt": "2026-08-26T22:13:04Z",
+  "updatedAt": "2026-08-28T15:55:53Z",
   "workflow": "/cg-work",
   "status": "handoff",
-  "branch": "feat/survey-scribe-production-package",
-  "plan": ".cg-docs/plans/2026-08-26-survey-scribe-production-package.md",
-  "executionReport": ".cg-docs/work-reports/2026-08-26-survey-scribe-production-package.md",
-  "currentPhase": 2,
+  "branch": "main",
+  "plan": ".cg-docs/plans/2026-08-28-survey-scribe-production-package-refined.md",
+  "executionReport": ".cg-docs/work-reports/2026-08-28-survey-scribe-production-package-refined.md",
+  "currentPhase": 3,
   "evidenceStatus": [
-    {"id": "V1", "status": "passed", "artifact": "docs/legal-disposition.md"},
-    {"id": "V2", "status": "passed", "artifact": "tests/characterization"}
+    {"id": "V1", "status": "passed", "artifact": ".cg-docs/work-reports/2026-08-26-survey-scribe-production-package.md"},
+    {"id": "V2", "status": "passed", "artifact": ".cg-docs/work-reports/2026-08-26-survey-scribe-production-package.md"},
+    {"id": "V3", "status": "passed", "artifact": "tests/unit"},
+    {"id": "V4", "status": "passed", "artifact": "tests/contract/sources"}
   ],
   "unresolvedDecisions": [],
   "artifactRefs": [
-    {"kind": "plan", "path": ".cg-docs/plans/2026-08-26-survey-scribe-production-package.md", "status": "active"},
-    {"kind": "work-report", "path": ".cg-docs/work-reports/2026-08-26-survey-scribe-production-package.md", "status": "active"},
-    {"kind": "review", "path": ".cg-docs/reviews/2026-08-26-survey-scribe-production-package-review.md", "status": "open"}
+    {"kind": "plan", "path": ".cg-docs/plans/2026-08-28-survey-scribe-production-package-refined.md", "status": "active"},
+    {"kind": "work-report", "path": ".cg-docs/work-reports/2026-08-28-survey-scribe-production-package-refined.md", "status": "active"},
+    {"kind": "review", "path": ".cg-docs/reviews/2026-08-28-survey-scribe-production-package-refined-review.md", "status": "open"},
+    {"kind": "verification", "path": ".cg-docs/reviews/2026-08-28-survey-scribe-production-package-refined-verify-review.md", "status": "open"}
   ],
   "nextCommand": "/cg-fix-triage"
 }

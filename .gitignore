@@ -18,6 +18,12 @@ site/
 # Generated outputs
 output/*
 !output/.gitkeep
+survey-scribe.toml
+**/.survey-scribe/
+*_svis.json
+!tests/fixtures/**/*_svis.json
+craft_mlt_25k.zip
+english_g2.zip
 
 # Test samples-  questionnaire PDFs may be restricted data
 tests/samples/*

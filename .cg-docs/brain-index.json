@@ -1,5 +1,5 @@
 {
-  "edge_count": 2,
+  "edge_count": 6,
   "edges": [
     {
       "edge_type": "reviews",
@@ -8,9 +8,33 @@
       "target_missing": false
     },
     {
+      "edge_type": "reviews",
+      "source": ".cg-docs/reviews/2026-08-28-survey-scribe-production-package-refined-review.md",
+      "target": ".cg-docs/plans/2026-08-28-survey-scribe-production-package-refined.md",
+      "target_missing": false
+    },
+    {
+      "edge_type": "verifies",
+      "source": ".cg-docs/reviews/2026-08-28-survey-scribe-production-package-refined-verify-review.md",
+      "target": ".cg-docs/reviews/2026-08-28-survey-scribe-production-package-refined-review.md",
+      "target_missing": false
+    },
+    {
       "edge_type": "references",
       "source": ".cg-docs/brainstorms/2026-08-26-survey-scribe-production-package.md",
       "target": ".cg-docs/plans/2026-08-26-survey-scribe-production-package.md",
+      "target_missing": false
+    },
+    {
+      "edge_type": "implements",
+      "source": ".cg-docs/plans/2026-08-26-survey-scribe-production-package.md",
+      "target": "roadmap.json#complete-survey-scribe-production-package",
+      "target_missing": false
+    },
+    {
+      "edge_type": "implements",
+      "source": ".cg-docs/plans/2026-08-28-survey-scribe-production-package-refined.md",
+      "target": "roadmap.json#complete-survey-scribe-production-package",
       "target_missing": false
     }
   ],
@@ -79,6 +103,40 @@
       ]
     },
     {
+      "date": "2026-08-28",
+      "entity_type": "plan",
+      "path": ".cg-docs/plans/2026-08-28-survey-scribe-production-package-refined.md",
+      "slug": "2026-08-28-survey-scribe-production-package-refined",
+      "status": "active",
+      "summary": "Complete the refactor of Survey Scribe from a repository-only questionnaire-to-SVIS proof of concept into a functional, installable, typed, local-first Python package. The finished engineering release candidate will expose SVIS-first synchronous and asynchronous APIs, a complete CLI, provider-neutral bring-your-own-key adapters, fixture-backed questionnaire-source adapters, deterministic quality and artifact behavior, legacy compatibility, cross-platform evidence, and complete documentation.",
+      "tags": [
+        "python",
+        "packaging",
+        "architecture",
+        "llm",
+        "docling",
+        "svis",
+        "providers",
+        "cli",
+        "testing",
+        "documentation",
+        "release"
+      ],
+      "title": "Survey Scribe Production Package Completion",
+      "top_keywords": [
+        "test scenarios",
+        "itsai",
+        "survey solutions",
+        "phase",
+        "contract",
+        "complete",
+        "docling_pipeline.py",
+        "survey",
+        "completion",
+        "compatibility"
+      ]
+    },
+    {
       "date": "2026-08-26",
       "entity_type": "review",
       "path": ".cg-docs/reviews/2026-08-26-survey-scribe-production-package-review.md",
@@ -98,6 +156,80 @@
         "scripts",
         "survey_scribe",
         "dependencies"
+      ]
+    },
+    {
+      "date": "2026-08-28",
+      "entity_type": "review",
+      "path": ".cg-docs/reviews/2026-08-28-survey-scribe-production-package-refined-review.md",
+      "slug": "2026-08-28-survey-scribe-production-package-refined-review",
+      "status": "",
+      "summary": "**Review mode**: full **Files reviewed**: 29 implementation, test, script, configuration, and workflow-state files **Findings**: 33 (P0: 14, P1: 14, P2: 5, P3: 0)",
+      "tags": [],
+      "title": "2026-08-28-survey-scribe-production-package-refined-review",
+      "top_keywords": [
+        "src",
+        "survey_scribe",
+        "manual",
+        "[manual]",
+        "sources",
+        "safe_auto",
+        "[safe_auto]",
+        "docling",
+        "base",
+        "serialization"
+      ]
+    },
+    {
+      "date": "2026-08-28",
+      "entity_type": "review",
+      "path": ".cg-docs/reviews/2026-08-28-survey-scribe-production-package-refined-verify-review.md",
+      "slug": "2026-08-28-survey-scribe-production-package-refined-verify-review",
+      "status": "",
+      "summary": "**Review mode**: light verification **Parent review**: `.cg-docs/reviews/2026-08-28-survey-scribe-production-package-refined-review.md` **Findings**: 6 (P0: 4, P1: 2, P2: 0, P3: 0)",
+      "tags": [],
+      "title": "2026-08-28-survey-scribe-production-package-refined-verify-review",
+      "top_keywords": [
+        "src",
+        "survey_scribe",
+        "verification",
+        "sources",
+        "validation",
+        "package",
+        "base",
+        "bypass",
+        "2026-08-28-survey-scribe-production-package-refined-review.md",
+        "tests"
+      ]
+    },
+    {
+      "date": "2026-08-28",
+      "entity_type": "solution",
+      "path": ".cg-docs/solutions/bugs/2026-08-28-close-credential-redaction-boundaries.md",
+      "slug": "2026-08-28-close-credential-redaction-boundaries",
+      "status": "",
+      "summary": "Typed secret fields were excluded from configuration serialization, but equivalent credentials could still enter output through other representations: - URL user information and query aliases such as `token`, `key`, and `sig`. - Pydantic validation errors that included the rejected input value. - Secret-named keys nested below the top level in TOML. - `Authorization` and `Proxy-Authorization` values that used different schemes or an equals separator. - Quoted, escaped, or bearer-token assignments in exception text. The initial tests covered only direct secret fields, Bearer headers with a colon, and a small query-key set. A verification review found the remaining forms.",
+      "tags": [
+        "credentials",
+        "redaction",
+        "pydantic",
+        "urls",
+        "toml",
+        "security",
+        "testing"
+      ],
+      "title": "Close Credential Redaction Boundaries",
+      "top_keywords": [
+        "redaction",
+        "close credential redaction boundaries",
+        "credential",
+        "close",
+        "boundaries",
+        "authorization",
+        "token",
+        "sig",
+        "proxy-authorization",
+        "problem"
       ]
     },
     {
@@ -196,27 +328,50 @@
         "future",
         "product"
       ]
+    },
+    {
+      "date": "",
+      "entity_type": "feature",
+      "path": "roadmap.json#complete-survey-scribe-production-package",
+      "slug": "complete-survey-scribe-production-package",
+      "status": "active",
+      "summary": "Complete Survey Scribe production package",
+      "tags": [],
+      "title": "Complete Survey Scribe production package",
+      "top_keywords": [
+        "complete survey scribe",
+        "production package completion\nobjective",
+        "survey scribe",
+        "complete",
+        "survey",
+        "scribe",
+        "production",
+        "package",
+        "feature",
+        "milestone"
+      ]
     }
   ],
-  "entity_count": 7,
-  "generated": "2026-08-26",
+  "entity_count": 12,
+  "generated": "2026-08-28",
   "schema_version": "0.2.0",
   "topic_count": 1,
   "topics": [
     {
-      "entity_count": 3,
+      "entity_count": 4,
       "entity_paths": [
         "roadmap.json#independent-review-and-auto-fix-agents",
         "roadmap.json#hosted-survey-scribe-service",
-        "roadmap.json#remote-url-questionnaire-ingestion"
+        "roadmap.json#remote-url-questionnaire-ingestion",
+        "roadmap.json#complete-survey-scribe-production-package"
       ],
       "keywords": [
         "future product extensions\nobjective",
-        "hosted survey scribe",
-        "ingestion"
+        "scribe",
+        "survey"
       ],
-      "label": "Future Product Extensions\nObjective / Hosted Survey Scribe / Ingestion",
-      "slug": "future-product-extensions-objective-hosted-survey-scribe-ingestion"
+      "label": "Future Product Extensions\nObjective / Scribe / Survey",
+      "slug": "future-product-extensions-objective-scribe-survey"
     }
   ]
 }
