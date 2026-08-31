@@ -5,15 +5,16 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 Survey Scribe provides typed Pydantic models for the Survey Variable
-Information Schema (SVIS), a structured representation of household survey
-questionnaire metadata. The repository also contains a legacy local-first PDF
-extraction pipeline used by the World Bank Global Monitoring Database team.
+Information Schema (SVIS), safe local source normalization, deterministic
+chunking, secure configuration resolution, and versioned artifacts for
+household survey questionnaire metadata. The repository also contains a legacy
+PDF extraction pipeline used by the World Bank Global Monitoring Database team.
 
-> **Alpha status:** Version `0.1.0` ships the SVIS model API and a bootstrap
-> command. The legacy extraction pipeline is not included in the wheel and
-> depends on internal authentication. PyPI and GitHub Pages publication remain
-> disabled pending the approval recorded in
-> [`docs/legal-disposition.md`](docs/legal-disposition.md).
+> **Alpha status:** Version `0.1.0` ships typed models, configuration, results,
+> serialization, and local source APIs plus a bootstrap command. The legacy
+> extraction pipeline is not included in the wheel and depends on internal
+> authentication. Package publication remains subject to the approval recorded
+> in [`docs/legal-disposition.md`](docs/legal-disposition.md).
 
 ## Features
 
@@ -21,6 +22,9 @@ extraction pipeline used by the World Bank Global Monitoring Database team.
 - Stable top-level imports for schema consumers.
 - Numeric, categorical, text, date, and other variable classifications.
 - Missing-category, source-provenance, confidence, and review metadata.
+- Local PDF, DOCX, XLSX, CSV, HTML, Markdown, and text normalization.
+- Token-aware chunking with stable overlap and table provenance.
+- Credential-safe configuration and versioned artifact manifests.
 - A PEP 561 `py.typed` marker for editor and type-checker support.
 - A dependency-free `survey-scribe --help` and `--version` command.
 
@@ -96,15 +100,17 @@ survey-scribe --version
 
 ## Documentation
 
-The documentation includes installation guidance, schema usage, practical
-examples, generated API reference, compatibility notes, and release-readiness
-instructions.
+The documentation includes installation and quickstart guides, SVIS field
+guidance, local-source and artifact workflows, API-key security practices,
+practical use cases, and a generated API reference.
 
 ```console
 uv run mkdocs serve
 ```
 
 The local site is available at `http://127.0.0.1:8000/` while the server runs.
+Pushes to `main` build and deploy the strict static site to GitHub Pages through
+`.github/workflows/deploy-docs.yml`.
 
 ## Development
 

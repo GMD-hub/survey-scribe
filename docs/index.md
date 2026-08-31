@@ -1,32 +1,110 @@
 # Survey Scribe
 
-Survey Scribe defines the Survey Variable Information Schema (SVIS) as a typed
-Python API. SVIS captures survey-level metadata and the variable-level details
-needed for questionnaire review and downstream harmonization.
+<div class="hero" markdown>
 
-## Package Scope
+**Typed questionnaire metadata with explicit provenance.**
 
-Version `0.1.0` provides:
+Survey Scribe provides the Survey Variable Information Schema (SVIS), safe local
+document normalization, deterministic chunking, secure configuration resolution,
+and versioned artifact output for household-survey workflows.
 
-- Pydantic models for complete survey and variable records.
-- Stable JSON serialization and validation behavior.
-- Top-level typed imports and a PEP 561 marker.
-- A lightweight command for package help and version inspection.
+[Install Survey Scribe](getting-started/installation.md){ .md-button .md-button--primary }
+[Open the quickstart](getting-started/quickstart.md){ .md-button }
 
-The repository's legacy PDF-to-SVIS extraction pipeline is characterized for
-compatibility but is not part of the built wheel. It requires internal World
-Bank authentication that cannot be installed from public PyPI.
+</div>
 
-## Start Here
+## What the package provides
 
-1. Follow the [installation guide](installation.md).
-2. Learn the [core schema workflow](usage.md).
-3. Adapt the [practical examples](examples.md).
-4. Consult the generated [API reference](api.md) and
-   [SVIS field guide](svis_field_guide.md).
+<div class="feature-grid" markdown>
 
-!!! note "Publication gate"
+<div class="feature-card" markdown>
 
-    CI builds and validates the documentation, but deployment to GitHub Pages
-    remains disabled pending formal release approval. See
-    [Release Readiness](release-readiness.md).
+### Typed SVIS records
+
+Build and validate survey, variable, category, range, confidence, and review
+metadata with Pydantic 2.
+
+</div>
+
+<div class="feature-card" markdown>
+
+### Local source normalization
+
+Convert local PDF, DOCX, XLSX, CSV, HTML, Markdown, and text files into one
+ordered, provenance-aware document model.
+
+</div>
+
+<div class="feature-card" markdown>
+
+### Controlled configuration
+
+Resolve non-secret TOML settings and opt-in environment credentials with clear,
+deterministic precedence.
+
+</div>
+
+<div class="feature-card" markdown>
+
+### Verifiable artifacts
+
+Write immutable generations with main output, sidecar diagnostics, manifests,
+checksums, and an active pointer.
+
+</div>
+
+</div>
+
+## Package scope
+
+Survey Scribe `0.1.x` is an alpha package. It includes:
+
+- Stable top-level imports for the seven SVIS model types.
+- Typed configuration, result, source, chunking, and serialization modules.
+- A PEP 561 `py.typed` marker for editors and type checkers.
+- A bootstrap `survey-scribe` command with `--help` and `--version`.
+
+!!! important "Extraction boundary"
+
+    The installed package does not yet include an end-to-end provider client or
+    a function that converts a `SourceDocument` into `SurveySVIS`. Source
+    normalization and SVIS modeling are separate supported APIs. The repository's
+    legacy provider pipeline is not part of the wheel.
+
+## Minimal example
+
+```python
+from datetime import date
+
+from survey_scribe import DataType, SurveySVIS, SurveyVariable
+
+survey = SurveySVIS(
+    survey_id="TST_2024_SYNTH",
+    country_code="TST",
+    year=2024,
+    survey_name="Synthetic Household Survey",
+    variables=[
+        SurveyVariable(
+            raw_name="q_age",
+            label="Age in completed years",
+            data_type=DataType.numeric,
+            extraction_confidence=0.98,
+        )
+    ],
+    source_file="questionnaire.pdf",
+    source_format="pdf",
+    extraction_date=date.today(),
+)
+
+payload = survey.model_dump_json(indent=2)
+restored = SurveySVIS.model_validate_json(payload)
+assert restored == survey
+```
+
+## Next steps
+
+1. [Install the package and optional source dependencies](getting-started/installation.md).
+2. [Build and validate your first SVIS record](getting-started/quickstart.md).
+3. [Configure API keys without persisting them](guides/security.md).
+4. [Normalize local source documents](guides/sources.md).
+5. [Use the complete typed API reference](reference/index.md).

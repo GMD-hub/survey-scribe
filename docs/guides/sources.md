@@ -1,0 +1,197 @@
+# Local Sources
+
+The source API converts untrusted local files into deterministic
+`SourceDocument` records. It preserves block order, complete tables, and physical
+provenance without calling a model provider.
+
+## Supported formats
+
+| Suffix | Adapter | Extra |
+| --- | --- | --- |
+| `.pdf` | Docling PDF conversion with local OCR artifacts | `pdf` |
+| `.docx` | Inert DOCX XML parsing | Base |
+| `.xlsx` | Read-only workbook parsing | `tabular` |
+| `.csv` | UTF-8 CSV parsing | Base |
+| `.html`, `.htm` | Visible text and table extraction | Base |
+| `.md`, `.markdown` | Markdown paragraphs and tables | Base |
+| `.txt` | UTF-8 text split at blank lines | Base |
+
+## Convert a source
+
+```python
+from pathlib import Path
+
+from survey_scribe.sources import SourceRegistry
+
+registry = SourceRegistry.default()
+document = registry.convert(Path("questionnaire.md"))
+
+assert document.trust == "untrusted"
+assert tuple(block.order for block in document.blocks) == tuple(
+    range(len(document.blocks))
+)
+```
+
+The registry verifies PDF, DOCX, and XLSX signatures against their suffixes.
+Unsupported, missing, remote, and malformed sources raise typed source errors.
+
+## Normalized model
+
+A `SourceDocument` contains:
+
+- `source_name: str`
+- `media_type: str`
+- `blocks: tuple[SourceBlock, ...]`
+- `trust: Literal["untrusted"]`
+
+Each block has a stable ID, zero-based order, text or table kind, rendered text,
+and `SourceProvenance`. Table blocks preserve complete cell rows in a
+`SourceTable`.
+
+`document.tables` returns tables in source order.
+
+## Resource limits
+
+Default `SourceLimits` protect local processing:
+
+| Limit | Default |
+| --- | ---: |
+| `max_source_bytes` | 250 MiB |
+| `max_pages` | 2,000 |
+| `max_archive_expanded_bytes` | 1 GiB |
+| `max_archive_ratio` | 100.0 |
+| `max_cells` | 2,000,000 |
+| `max_companions` | 100 |
+| `deadline_seconds` | 1,800 seconds |
+
+Set smaller limits for internet-facing or multi-tenant workloads:
+
+```python
+from pathlib import Path
+
+from survey_scribe.sources import SourceLimits, SourceRegistry
+
+limits = SourceLimits(
+    max_source_bytes=25 * 1024 * 1024,
+    max_pages=300,
+    max_archive_expanded_bytes=100 * 1024 * 1024,
+    max_archive_ratio=20.0,
+    max_cells=250_000,
+    max_companions=10,
+    deadline_seconds=120.0,
+)
+
+document = SourceRegistry.default().convert(
+    Path("questionnaire.docx"),
+    limits=limits,
+)
+```
+
+## Source bundles
+
+`SourceBundle` confines a primary file and companion files to one resolved root:
+
+```python
+from pathlib import Path
+
+from survey_scribe.sources import SourceBundle, resolve_local_source
+
+bundle = SourceBundle(
+    root=Path("survey-files"),
+    primary=Path("questionnaire.pdf"),
+    companions=(Path("codebook.csv"),),
+)
+
+resolved = resolve_local_source(bundle)
+```
+
+The resolver rejects paths that escape the root. Current adapters validate the
+companion paths but do not merge companion content into the normalized document.
+
+## Chunk a document
+
+```python
+from survey_scribe.sources.chunking import chunk_document
+
+chunked = chunk_document(
+    document,
+    max_tokens=4_000,
+    overlap_tokens=200,
+)
+
+chunk_ids = tuple(chunk.id for chunk in chunked.chunks)
+repeated_rows = chunked.repeated_rows
+```
+
+The default estimator budgets one token per three characters. You can inject an
+object with `estimate(text: str) -> int` for model-specific estimation.
+
+Chunking guarantees source order and keeps each table atomic. A complete table
+or one large text block can therefore exceed `max_tokens`. Overlap contains only
+complete prior text blocks.
+
+## PDF and OCR setup
+
+Install the PDF extra:
+
+```console
+python -m pip install "survey-scribe[pdf]"
+```
+
+PDF conversion requires a configured local Docling/EasyOCR artifact directory.
+Configure and validate it before constructing the default registry:
+
+=== "Linux and macOS"
+
+    ```bash
+    export DOCLING_ARTIFACTS_PATH="/approved/cache/easyocr"
+    ```
+
+=== "PowerShell"
+
+    ```powershell
+    $Env:DOCLING_ARTIFACTS_PATH = "C:\approved\cache\easyocr"
+    ```
+
+Validate the local cache without downloading any files:
+
+```python
+from pathlib import Path
+
+from survey_scribe.sources.ocr import validate_ocr_cache
+
+checks = validate_ocr_cache(Path("/approved/cache/easyocr"))
+invalid = tuple(check for check in checks if check.status != "valid")
+if invalid:
+    raise RuntimeError("OCR cache validation failed")
+```
+
+Cache validation is caller-enforced. The PDF adapter checks that the directory
+exists, but it does not call `validate_ocr_cache()` automatically.
+
+The PDF worker sets offline flags and blocks common Python socket calls during
+conversion. This is application-level protection, not an operating-system
+sandbox. Use process isolation and network policy for hostile documents.
+
+## XLSX safety
+
+The XLSX adapter opens workbooks in read-only mode and rejects formulas, macros,
+external links, malformed cell references, archive expansion violations, and
+excessive worksheet dimensions. It does not calculate workbook formulas.
+
+## Error handling
+
+```python
+from pathlib import Path
+
+from survey_scribe.sources import SourceError, SourceRegistry
+
+try:
+    document = SourceRegistry.default().convert(Path("questionnaire.pdf"))
+except SourceError as error:
+    code = error.diagnostic.code
+    safe_message = error.diagnostic.message
+```
+
+Use `SourceLimitError.limit` to identify the exceeded ceiling. Source exceptions
+provide stable diagnostic codes for application-level handling.

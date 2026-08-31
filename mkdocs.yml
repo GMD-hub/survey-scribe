@@ -1,59 +1,132 @@
 site_name: Survey Scribe
-site_description: Typed Survey Variable Information Schema models and extraction tooling
+site_description: Typed survey questionnaire metadata, safe local source normalization, and SVIS artifacts
 site_url: https://gmd-hub.github.io/survey-scribe/
 repo_url: https://github.com/GMD-hub/survey-scribe
 repo_name: GMD-hub/survey-scribe
 edit_uri: edit/main/docs/
 copyright: Copyright 2026 Survey Scribe contributors
+strict: true
+docs_dir: docs
+site_dir: site
+
+exclude_docs: |
+  api.md
+  dependencies.md
+  evaluation.md
+  examples.md
+  /installation.md
+  legal-disposition.md
+  pipeline_overview.md
+  project-log.md
+  release-readiness.md
+  svis_field_guide.md
+  usage.md
 
 theme:
   name: material
+  language: en
+  font: false
+  icon:
+    repo: fontawesome/brands/github
   features:
+    - content.code.annotate
     - content.code.copy
+    - content.tabs.link
+    - navigation.instant
+    - navigation.instant.progress
     - navigation.footer
     - navigation.indexes
     - navigation.sections
     - navigation.top
+    - navigation.tracking
     - search.highlight
+    - search.share
     - search.suggest
   palette:
-    primary: blue
-    accent: light blue
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: cyan
+      toggle:
+        icon: material/brightness-7
+        name: Use dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: cyan
+      toggle:
+        icon: material/brightness-4
+        name: Use light mode
 
 plugins:
   - search
   - mkdocstrings:
+      default_handler: python
       handlers:
         python:
+          paths:
+            - src
           options:
             docstring_style: google
             members_order: source
+            filters:
+              - "!^_"
+            heading_level: 2
+            merge_init_into_class: true
+            separate_signature: true
+            show_bases: true
+            show_if_no_docstring: true
             show_root_heading: true
-            show_source: true
+            show_root_full_path: false
+            show_signature_annotations: true
+            show_source: false
             signature_crossrefs: true
 
 markdown_extensions:
   - admonition
   - attr_list
+  - md_in_html
   - pymdownx.details
   - pymdownx.highlight:
       anchor_linenums: true
   - pymdownx.inlinehilite
   - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
   - tables
+  - toc:
+      permalink: true
+
+extra_css:
+  - assets/stylesheets/extra.css
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/GMD-hub/survey-scribe
+      name: Survey Scribe on GitHub
 
 nav:
   - Home: index.md
-  - Installation: installation.md
-  - Usage: usage.md
-  - Examples: examples.md
-  - API Reference: api.md
-  - SVIS Field Guide: svis_field_guide.md
-  - Compatibility: compatibility.md
-  - Dependencies: dependencies.md
-  - Release Readiness: release-readiness.md
-  - Project Notes:
-      - Pipeline Overview: pipeline_overview.md
-      - Evaluation: evaluation.md
-      - Legal Disposition: legal-disposition.md
-      - Project Log: project-log.md
+  - Getting Started:
+      - Installation: getting-started/installation.md
+      - Quickstart: getting-started/quickstart.md
+  - Guides:
+      - SVIS Field Guide: guides/svis.md
+      - Configuration: guides/configuration.md
+      - Security and API Keys: guides/security.md
+      - Local Sources: guides/sources.md
+      - Results and Artifacts: guides/results.md
+      - Use Cases: guides/use-cases.md
+  - API Reference:
+      - API Overview: reference/index.md
+      - SVIS Models: reference/models.md
+      - Configuration: reference/configuration.md
+      - Results: reference/results.md
+      - Sources: reference/sources.md
+      - Serialization: reference/serialization.md
+      - Exceptions: reference/exceptions.md
+      - Command Line: reference/cli.md
+  - Project:
+      - Compatibility: compatibility.md
+      - Documentation Site: contributing/documentation.md

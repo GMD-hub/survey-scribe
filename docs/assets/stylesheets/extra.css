@@ -1,0 +1,48 @@
+:root {
+  --ss-border: color-mix(in srgb, var(--md-default-fg-color) 18%, transparent);
+  --ss-surface: color-mix(in srgb, var(--md-primary-fg-color) 6%, transparent);
+}
+
+.hero {
+  margin: 1.5rem 0 2.25rem;
+  padding: 2rem;
+  border: 1px solid var(--ss-border);
+  border-radius: 0.75rem;
+  background:
+    linear-gradient(135deg, var(--ss-surface), transparent 65%),
+    var(--md-default-bg-color);
+}
+
+.hero > p:first-child {
+  margin-top: 0;
+  font-size: clamp(1.35rem, 3vw, 2rem);
+  line-height: 1.25;
+}
+
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  margin: 1rem 0 2rem;
+}
+
+.feature-card {
+  padding: 1rem 1.1rem;
+  border: 1px solid var(--ss-border);
+  border-radius: 0.55rem;
+  background: var(--md-default-bg-color);
+}
+
+.feature-card h3 {
+  margin-top: 0;
+}
+
+@media (max-width: 720px) {
+  .hero {
+    padding: 1.25rem;
+  }
+
+  .feature-grid {
+    grid-template-columns: 1fr;
+  }
+}
