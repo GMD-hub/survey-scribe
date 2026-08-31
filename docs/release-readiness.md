@@ -2,8 +2,8 @@
 
 ## Current State
 
-The repository is configured to produce release-candidate evidence without
-publishing it:
+The repository is configured to produce release-candidate evidence and publish
+the synthetic-only documentation site:
 
 - CI tests Python 3.11-3.13 and the supported operating systems.
 - Coverage must remain at or above 95 percent.
@@ -11,10 +11,11 @@ publishing it:
 - Hatchling builds the wheel and source distribution.
 - Twine validates core metadata and README rendering.
 - Distribution tests inspect contents and install the wheel in isolation.
-- MkDocs builds this site in strict mode and stores it as a workflow artifact.
+- MkDocs builds this site in strict mode, stores pull-request artifacts, and
+  deploys pushes to `main` through GitHub Pages.
 
-PyPI upload and GitHub Pages deployment jobs are intentionally absent. The
-project's legal disposition permits build-only artifacts but still prohibits
+PyPI and TestPyPI upload jobs remain intentionally absent. The project's legal
+disposition approves GitHub Pages documentation but still prohibits package
 publication.
 
 ## Versioning
@@ -44,16 +45,13 @@ uv build
 uv run twine check --strict dist/*
 ```
 
-## Activation After Approval
+## Package Activation After Approval
 
-Publication requires a separate recorded authorization. At that point:
+Package publication requires a separate recorded authorization. At that point:
 
 1. Configure PyPI Trusted Publishing for `GMD-hub/survey-scribe`, a protected
    `pypi` environment, and the approved workflow filename.
 2. Add an isolated manual publish job with only `id-token: write` permission.
-3. Configure GitHub Pages to use GitHub Actions as its source.
-4. Add an isolated Pages deployment job with only `pages: write` and
-   `id-token: write` permissions.
-5. Require environment approval and rerun the complete release-candidate checks.
+3. Require environment approval and rerun the complete release-candidate checks.
 
 Do not use long-lived PyPI tokens or repository-wide write permissions.

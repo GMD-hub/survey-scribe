@@ -31,18 +31,24 @@ opening one pull request. Under that instruction:
   a fixture has a separate rights and checksum record.
 
 This authorization does not establish ownership, approve a license, accept
-outside contributions, or authorize release/publication. The 2026-08-27
+outside contributions, or authorize package publication. The 2026-08-27
 package-readiness instruction separately approved the MIT license and authorized
-release-readiness engineering, including build-only package and documentation
-artifacts. It explicitly retained the publication gate.
+release-readiness engineering. The 2026-08-31 documentation instruction formally
+approved publication of synthetic-only package documentation to GitHub Pages
+through GitHub Actions. It did not approve package registry publication.
 
 ## Prohibited Until Formal Approval
 
-- PyPI, TestPyPI, GitHub Pages, package release, or deployment
+- PyPI, TestPyPI, package release, or package deployment
 - Restricted, confidential, personal, or unsanitized questionnaires
 - Public model responses or traces derived from restricted inputs
-- Workflows with tag triggers, repository-wide write permission, or publication
-  credentials
+- Workflows with tag triggers, repository-wide write permission, or package
+  publication credentials
+
+GitHub Pages deployment is limited to the generated documentation site. It uses
+the scoped `pages: write` and `id-token: write` permissions, immutable action
+revisions, the locked project environment, and no provider or package registry
+credentials.
 
 If institutional review rejects continued public development, the repository
 must be made private and pushes must stop. Any ambiguity is resolved in favor

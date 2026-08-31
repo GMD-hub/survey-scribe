@@ -44,7 +44,8 @@ Use clear commit subjects such as `feat: add workbook extraction` or
 
 ## Release Boundary
 
-Package and documentation publication remain disabled pending the approval
-recorded in `docs/legal-disposition.md`. Do not add publishing credentials,
-tag-triggered release jobs, or Pages deployment permissions without that
+GitHub Pages documentation publication is approved and uses the Pages OpenID
+Connect workflow recorded in `docs/legal-disposition.md`. Package publication
+remains disabled. Do not add package publishing credentials, tag-triggered
+release jobs, or package registry deployment permissions without separate
 approval.
