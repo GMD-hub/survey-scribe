@@ -1,0 +1,10 @@
+SYNTHETIC QUESTIONNAIRE SOURCE: SCREEN-OUT TERMINAL
+SECTION Eligibility
+ITEM T1
+Question: Is the respondent at least 15 years old?
+Responses: 1 Yes; 2 No.
+Routing instruction: If response is 2, SCREEN OUT and end the interview. If response is 1, continue to T2.
+ITEM T2
+Question: Did the respondent work for pay last week?
+ITEM T3
+Question: Did the respondent operate a business last week?

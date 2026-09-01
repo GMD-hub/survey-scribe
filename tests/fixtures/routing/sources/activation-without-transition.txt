@@ -1,0 +1,9 @@
+SYNTHETIC QUESTIONNAIRE SOURCE: ACTIVATION WITHOUT TRANSITION
+SECTION Livestock
+ITEM V1
+Question: Does the household own cattle?
+Responses: 1 Yes; 2 No.
+ITEM V2
+Question: How many cattle does the household own?
+Applicability: Ask V2 only when V1 is code 1.
+Instruction: This applicability rule does not direct interview flow to another item.

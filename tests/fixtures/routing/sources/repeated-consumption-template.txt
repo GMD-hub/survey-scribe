@@ -1,0 +1,12 @@
+SYNTHETIC QUESTIONNAIRE SOURCE: REPEATED CONSUMPTION TEMPLATE
+SECTION Food consumption
+Repeat instruction: Repeat the following item template for each listed food product.
+Repeat values: maize, rice, beans, and cooking oil.
+Repeat entry: F1.
+ITEM F1
+Question template: Did the household consume [FOOD PRODUCT] during the last seven days?
+ITEM F2
+Question template: What quantity of [FOOD PRODUCT] did the household consume?
+ITEM F3
+Question template: What was the value of [FOOD PRODUCT] consumed?
+Repeat routing: After F3, start F1 for the next product. After the final product, exit the repeat.

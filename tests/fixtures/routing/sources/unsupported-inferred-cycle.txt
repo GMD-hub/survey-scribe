@@ -1,0 +1,9 @@
+SYNTHETIC QUESTIONNAIRE SOURCE: UNSUPPORTED INFERRED CYCLE
+SECTION Consistency review
+ITEM U1
+Question: Did the household sell any maize?
+ITEM U2
+Question: What quantity of maize was sold?
+Instruction: If this quantity appears inconsistent, revisit the earlier maize answers as needed. No printed item target is provided.
+ITEM U3
+Question: What was the total value of maize sales?

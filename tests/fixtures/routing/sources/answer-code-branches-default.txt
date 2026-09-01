@@ -1,0 +1,14 @@
+SYNTHETIC QUESTIONNAIRE SOURCE: ANSWER-CODE BRANCHES WITH DEFAULT
+SECTION Main activity
+ITEM A1
+Question: What was the main activity last week?
+Responses: 1 Worked; 2 Searched for work; 3 Other.
+Routing instruction: Code 1 goes to A2. Code 2 goes to A3. All other codes go to A4.
+ITEM A2
+Question: How many hours did you work?
+Routing instruction: After this item, go to A4.
+ITEM A3
+Question: How many weeks have you searched for work?
+Routing instruction: After this item, go to A4.
+ITEM A4
+Question: What is your usual main activity?

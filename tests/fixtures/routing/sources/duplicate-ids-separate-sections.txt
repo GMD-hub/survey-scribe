@@ -1,0 +1,11 @@
+SYNTHETIC QUESTIONNAIRE SOURCE: DUPLICATE IDS IN SEPARATE SECTIONS
+SECTION Agriculture
+ITEM Q1
+Question: Did the household cultivate crops?
+ITEM Q2
+Question: How many plots were cultivated?
+SECTION Employment
+ITEM Q1
+Question: Did the respondent work last week?
+ITEM Q2
+Question: How many hours did the respondent work?

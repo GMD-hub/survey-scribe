@@ -1,0 +1,11 @@
+SYNTHETIC QUESTIONNAIRE SOURCE: SKIP WITH IMPLICIT FALLTHROUGH
+SECTION Household screening
+ITEM Q1
+Question: Does this household operate a farm?
+Responses: 1 Yes; 2 No.
+Routing instruction: If response is 2, go to Q3. Otherwise continue to the next item.
+ITEM Q2
+Question: How many plots does the household operate?
+Routing instruction: Continue to the next item.
+ITEM Q3
+Question: Does the household own its dwelling?

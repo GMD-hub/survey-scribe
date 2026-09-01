@@ -1,0 +1,229 @@
+schema_version = 1
+corpus_status = "synthetic-source-only"
+source_only = true
+benchmark_eligible = false
+newline_policy = "lf"
+
+[[fixtures]]
+id = "skip-with-fallthrough"
+path = "tests/fixtures/routing/sources/skip-with-fallthrough.txt"
+artifact_kind = "synthetic-questionnaire-source"
+source_only = true
+benchmark_eligible = false
+sensitivity = "non-sensitive"
+rights_basis = "repository-synthetic"
+restrictions = "Test mechanics only; not approved for model-quality benchmarking."
+creator = "Survey Scribe routing fixture authors"
+purpose = "Exercise one explicit skip and one implicit fallthrough path."
+provenance = "Authored as fictional questionnaire text for repository tests; no external source or model response was used."
+sha256 = "704d356cef9d7a4e1596b3eead878139b68b81286de9c644db2c581b51ca497a"
+expected_logical_cases = ["skip_implicit_fallthrough"]
+declared_item_count = 3
+
+[[fixtures]]
+id = "answer-code-branches-default"
+path = "tests/fixtures/routing/sources/answer-code-branches-default.txt"
+artifact_kind = "synthetic-questionnaire-source"
+source_only = true
+benchmark_eligible = false
+sensitivity = "non-sensitive"
+rights_basis = "repository-synthetic"
+restrictions = "Test mechanics only; not approved for model-quality benchmarking."
+creator = "Survey Scribe routing fixture authors"
+purpose = "Exercise multiple answer-code branches and a default route."
+provenance = "Authored as fictional questionnaire text for repository tests; no external source or model response was used."
+sha256 = "04422924351b333f7485f9e1afbdb44af41abdd3172d9b1b6f88fc83eb15ab32"
+expected_logical_cases = ["answer_code_branches_default"]
+declared_item_count = 4
+
+[[fixtures]]
+id = "section-target"
+path = "tests/fixtures/routing/sources/section-target.txt"
+artifact_kind = "synthetic-questionnaire-source"
+source_only = true
+benchmark_eligible = false
+sensitivity = "non-sensitive"
+rights_basis = "repository-synthetic"
+restrictions = "Test mechanics only; not approved for model-quality benchmarking."
+creator = "Survey Scribe routing fixture authors"
+purpose = "Exercise a route to a named section with an explicit entry item."
+provenance = "Authored as fictional questionnaire text for repository tests; no external source or model response was used."
+sha256 = "82f44adbd693d014a266e95515849a6593ef91a14af2a43259814527955d6d5e"
+expected_logical_cases = ["section_target"]
+declared_item_count = 4
+
+[[fixtures]]
+id = "multiple-incoming-paths"
+path = "tests/fixtures/routing/sources/multiple-incoming-paths.txt"
+artifact_kind = "synthetic-questionnaire-source"
+source_only = true
+benchmark_eligible = false
+sensitivity = "non-sensitive"
+rights_basis = "repository-synthetic"
+restrictions = "Test mechanics only; not approved for model-quality benchmarking."
+creator = "Survey Scribe routing fixture authors"
+purpose = "Exercise two source items that route to one target item."
+provenance = "Authored as fictional questionnaire text for repository tests; no external source or model response was used."
+sha256 = "7f2bcae9897a25aabcaa81617db1da789c55c81db0dca595ee5cc46096fff025"
+expected_logical_cases = ["multiple_incoming_paths"]
+declared_item_count = 4
+
+[[fixtures]]
+id = "activation-without-transition"
+path = "tests/fixtures/routing/sources/activation-without-transition.txt"
+artifact_kind = "synthetic-questionnaire-source"
+source_only = true
+benchmark_eligible = false
+sensitivity = "non-sensitive"
+rights_basis = "repository-synthetic"
+restrictions = "Test mechanics only; not approved for model-quality benchmarking."
+creator = "Survey Scribe routing fixture authors"
+purpose = "Exercise applicability that does not state a flow transition."
+provenance = "Authored as fictional questionnaire text for repository tests; no external source or model response was used."
+sha256 = "f84c2a717d1fc0a1a8cb53ae43cce3969bcff739e8737ba20b30c9e23a05c999"
+expected_logical_cases = ["activation_without_transition"]
+declared_item_count = 2
+
+[[fixtures]]
+id = "roster-loop-with-exit"
+path = "tests/fixtures/routing/sources/roster-loop-with-exit.txt"
+artifact_kind = "synthetic-questionnaire-source"
+source_only = true
+benchmark_eligible = false
+sensitivity = "non-sensitive"
+rights_basis = "repository-synthetic"
+restrictions = "Test mechanics only; not approved for model-quality benchmarking."
+creator = "Survey Scribe routing fixture authors"
+purpose = "Exercise a household-member roster repeat with a stated exit."
+provenance = "Authored as fictional questionnaire text for repository tests; no external source or model response was used."
+sha256 = "87957b3fb665c2fec3725042793c148cf2d4933e85218ae2ae2ba9da8c8ccd3a"
+expected_logical_cases = ["roster_loop_with_exit"]
+declared_item_count = 4
+
+[[fixtures]]
+id = "correction-return"
+path = "tests/fixtures/routing/sources/correction-return.txt"
+artifact_kind = "synthetic-questionnaire-source"
+source_only = true
+benchmark_eligible = false
+sensitivity = "non-sensitive"
+rights_basis = "repository-synthetic"
+restrictions = "Test mechanics only; not approved for model-quality benchmarking."
+creator = "Survey Scribe routing fixture authors"
+purpose = "Exercise an explicit correction path back to an earlier item."
+provenance = "Authored as fictional questionnaire text for repository tests; no external source or model response was used."
+sha256 = "d7e1c27f9247960cfbf7805269b0fefb194139d1af54b9281c76c5f0d33ce19b"
+expected_logical_cases = ["correction_return"]
+declared_item_count = 3
+
+[[fixtures]]
+id = "unsupported-inferred-cycle"
+path = "tests/fixtures/routing/sources/unsupported-inferred-cycle.txt"
+artifact_kind = "synthetic-questionnaire-source"
+source_only = true
+benchmark_eligible = false
+sensitivity = "non-sensitive"
+rights_basis = "repository-synthetic"
+restrictions = "Test mechanics only; not approved for model-quality benchmarking."
+creator = "Survey Scribe routing fixture authors"
+purpose = "Exercise vague return language that cannot support an accepted cycle."
+provenance = "Authored as fictional questionnaire text for repository tests; no external source or model response was used."
+sha256 = "3123db69ffbeab9dece97ff812c2b7b98305a0cef1c3b74c8e65c3f23056aafe"
+expected_logical_cases = ["unsupported_inferred_cycle"]
+declared_item_count = 3
+
+[[fixtures]]
+id = "screen-out-terminal"
+path = "tests/fixtures/routing/sources/screen-out-terminal.txt"
+artifact_kind = "synthetic-questionnaire-source"
+source_only = true
+benchmark_eligible = false
+sensitivity = "non-sensitive"
+rights_basis = "repository-synthetic"
+restrictions = "Test mechanics only; not approved for model-quality benchmarking."
+creator = "Survey Scribe routing fixture authors"
+purpose = "Exercise an explicit ineligible screen-out terminal."
+provenance = "Authored as fictional questionnaire text for repository tests; no external source or model response was used."
+sha256 = "19352d3b728ea16a9e8baf211bae2698a749e8524e767be4eb317d2ca57eea75"
+expected_logical_cases = ["screen_out_terminal"]
+declared_item_count = 3
+
+[[fixtures]]
+id = "garbled-target"
+path = "tests/fixtures/routing/sources/garbled-target.txt"
+artifact_kind = "synthetic-questionnaire-source"
+source_only = true
+benchmark_eligible = false
+sensitivity = "non-sensitive"
+rights_basis = "repository-synthetic"
+restrictions = "Test mechanics only; not approved for model-quality benchmarking."
+creator = "Survey Scribe routing fixture authors"
+purpose = "Exercise a printed routing target that cannot be resolved."
+provenance = "Authored as fictional questionnaire text for repository tests; no external source or model response was used."
+sha256 = "328ec176c68a9d4e90c4ad599115b4f9323f8e9c5bd65da79f1d22418ece6b37"
+expected_logical_cases = ["garbled_target"]
+declared_item_count = 2
+
+[[fixtures]]
+id = "repeated-consumption-template"
+path = "tests/fixtures/routing/sources/repeated-consumption-template.txt"
+artifact_kind = "synthetic-questionnaire-source"
+source_only = true
+benchmark_eligible = false
+sensitivity = "non-sensitive"
+rights_basis = "repository-synthetic"
+restrictions = "Test mechanics only; not approved for model-quality benchmarking."
+creator = "Survey Scribe routing fixture authors"
+purpose = "Exercise one logical consumption template repeated across products."
+provenance = "Authored as fictional questionnaire text for repository tests; no external source or model response was used."
+sha256 = "8d67c5c0a063f6c00eebb74a259960f9745f1053e619345a53dd588395cf6070"
+expected_logical_cases = ["repeated_consumption_template"]
+declared_item_count = 3
+
+[[fixtures]]
+id = "duplicate-ids-separate-sections"
+path = "tests/fixtures/routing/sources/duplicate-ids-separate-sections.txt"
+artifact_kind = "synthetic-questionnaire-source"
+source_only = true
+benchmark_eligible = false
+sensitivity = "non-sensitive"
+rights_basis = "repository-synthetic"
+restrictions = "Test mechanics only; not approved for model-quality benchmarking."
+creator = "Survey Scribe routing fixture authors"
+purpose = "Exercise duplicate printed item IDs scoped to separate sections."
+provenance = "Authored as fictional questionnaire text for repository tests; no external source or model response was used."
+sha256 = "5c6600e72d5bc688cea7b4b41df7d2c8b749888a48a7b6d6a5919d2d34241da1"
+expected_logical_cases = ["duplicate_source_ids_separate_sections"]
+declared_item_count = 4
+
+[[fixtures]]
+id = "prompt-injection"
+path = "tests/fixtures/routing/sources/prompt-injection.txt"
+artifact_kind = "synthetic-questionnaire-source"
+source_only = true
+benchmark_eligible = false
+sensitivity = "non-sensitive"
+rights_basis = "repository-synthetic"
+restrictions = "Test mechanics only; not approved for model-quality benchmarking."
+creator = "Survey Scribe routing fixture authors"
+purpose = "Exercise malicious instructions embedded as untrusted questionnaire text."
+provenance = "Authored as fictional questionnaire text for repository tests; no external source or model response was used."
+sha256 = "55d8defca36fc33aa0b22445955334c94ea2666203f1aac66ab9218975ee2bde"
+expected_logical_cases = ["prompt_injection_text"]
+declared_item_count = 2
+
+[[fixtures]]
+id = "scale-1000-items"
+path = "tests/fixtures/routing/sources/scale-1000-items.txt"
+artifact_kind = "synthetic-questionnaire-source"
+source_only = true
+benchmark_eligible = false
+sensitivity = "non-sensitive"
+rights_basis = "repository-synthetic"
+restrictions = "Scale-test mechanics only; not approved for model-quality benchmarking."
+creator = "Survey Scribe routing fixture authors"
+purpose = "Provide a committed deterministic source with 1000 sequential logical items."
+provenance = "Generated as numbered fictional item markers for repository scale tests; no external source or model response was used."
+sha256 = "d57589663ec3f1e9efdae9582766b21f49bf13d69674c78758aaa865c7e9b11b"
+expected_logical_cases = ["scale_1000_items"]
+declared_item_count = 1000
