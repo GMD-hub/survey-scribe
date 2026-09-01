@@ -1,5 +1,5 @@
 {
-  "edge_count": 6,
+  "edge_count": 8,
   "edges": [
     {
       "edge_type": "reviews",
@@ -15,6 +15,12 @@
     },
     {
       "edge_type": "verifies",
+      "source": ".cg-docs/reviews/2026-08-28-survey-scribe-production-package-refined-verify-review-2.md",
+      "target": ".cg-docs/reviews/2026-08-28-survey-scribe-production-package-refined-review.md",
+      "target_missing": false
+    },
+    {
+      "edge_type": "verifies",
       "source": ".cg-docs/reviews/2026-08-28-survey-scribe-production-package-refined-verify-review.md",
       "target": ".cg-docs/reviews/2026-08-28-survey-scribe-production-package-refined-review.md",
       "target_missing": false
@@ -23,6 +29,12 @@
       "edge_type": "references",
       "source": ".cg-docs/brainstorms/2026-08-26-survey-scribe-production-package.md",
       "target": ".cg-docs/plans/2026-08-26-survey-scribe-production-package.md",
+      "target_missing": false
+    },
+    {
+      "edge_type": "references",
+      "source": ".cg-docs/brainstorms/2026-08-31-questionnaire-routing-graph.md",
+      "target": ".cg-docs/plans/2026-08-31-questionnaire-routing-graph.md",
       "target_missing": false
     },
     {
@@ -68,6 +80,37 @@
         "validation",
         "failed",
         "success"
+      ]
+    },
+    {
+      "date": "2026-08-31",
+      "entity_type": "brainstorm",
+      "path": ".cg-docs/brainstorms/2026-08-31-questionnaire-routing-graph.md",
+      "slug": "2026-08-31-questionnaire-routing-graph",
+      "status": "decided",
+      "summary": "<!-- Valid status values: decided, in-progress, abandoned -->",
+      "tags": [
+        "python",
+        "pydantic",
+        "llm",
+        "questionnaire",
+        "routing",
+        "graph",
+        "structured-output",
+        "svis"
+      ],
+      "title": "Questionnaire Routing Graph for LLM-Readable SVIS",
+      "top_keywords": [
+        "prompt",
+        "graph",
+        "routing",
+        "svis",
+        "questionnaire",
+        "opaque",
+        "task",
+        "surveyvariable",
+        "approach",
+        "design"
       ]
     },
     {
@@ -137,6 +180,37 @@
       ]
     },
     {
+      "date": "2026-08-31",
+      "entity_type": "plan",
+      "path": ".cg-docs/plans/2026-08-31-questionnaire-routing-graph.md",
+      "slug": "2026-08-31-questionnaire-routing-graph",
+      "status": "active",
+      "summary": "Add a production-quality questionnaire routing capability that lets LLM agents understand and validate the complete flow of a household or labor force survey. The package will produce one versioned `RoutedSurveySVIS` artifact with source-grounded routing evidence, a canonical directed multigraph, derived forward and backward adjacency, activation conditions, terminal states, repeat templates, cycles, stable diagnostics, and an auditable discrepancy review path.",
+      "tags": [
+        "python",
+        "pydantic",
+        "llm",
+        "questionnaire",
+        "routing",
+        "graph",
+        "instructor",
+        "svis"
+      ],
+      "title": "Implement the Questionnaire Routing Graph",
+      "top_keywords": [
+        "structuredprovider",
+        "test scenarios",
+        "surveysvis",
+        "routing",
+        "contract",
+        "graph",
+        "opaque",
+        "phase",
+        "modelcapabilities",
+        "implement"
+      ]
+    },
+    {
       "date": "2026-08-26",
       "entity_type": "review",
       "path": ".cg-docs/reviews/2026-08-26-survey-scribe-production-package-review.md",
@@ -178,6 +252,28 @@
         "docling",
         "base",
         "serialization"
+      ]
+    },
+    {
+      "date": "2026-09-01",
+      "entity_type": "review",
+      "path": ".cg-docs/reviews/2026-08-28-survey-scribe-production-package-refined-verify-review-2.md",
+      "slug": "2026-08-28-survey-scribe-production-package-refined-verify-review-2",
+      "status": "",
+      "summary": "**Review mode**: light verification **Parent review**: `.cg-docs/reviews/2026-08-28-survey-scribe-production-package-refined-review.md` **Files reviewed**: all current tracked and untracked implementation, test, fixture, documentation, and workflow-state changes **Findings**: 32 (P0: 10, P1: 16, P2: 6, P3: 0)",
+      "tags": [],
+      "title": "2026-08-28-survey-scribe-production-package-refined-verify-review-2",
+      "top_keywords": [
+        "src",
+        "survey_scribe",
+        "routing",
+        "sources",
+        "docling",
+        "serialization",
+        "artifacts",
+        "docling.py",
+        "source",
+        "evidence"
       ]
     },
     {
@@ -261,6 +357,36 @@
         "problem",
         "cause",
         "solution"
+      ]
+    },
+    {
+      "date": "2026-09-01",
+      "entity_type": "solution",
+      "path": ".cg-docs/solutions/testing-patterns/2026-09-01-verify-cross-layer-invariants-beyond-coverage.md",
+      "slug": "2026-09-01-verify-cross-layer-invariants-beyond-coverage",
+      "status": "",
+      "summary": "The package passed 837 tests, Ruff, Pyright, and a 97.82 percent statement-plus-branch coverage gate. A light verification review still found blocking semantic failures. Examples included: - Accepted graph edges could cite evidence for a different route. - Routed variables could disagree with inventory links. - Independent conditional branches were compared as if they were one branch. - Source bindings omitted companion-file content. - Stable artifact projections could disagree with the active pointer after a hard process exit. - Exact-wheel tests did not exercise the changed routing runtime. The aggregate gates proved that code paths executed. They did not prove that...",
+      "tags": [
+        "verification",
+        "branch-coverage",
+        "invariants",
+        "counterexamples",
+        "routing",
+        "artifacts",
+        "source-integrity"
+      ],
+      "title": "Verify Cross-Layer Invariants Beyond Coverage",
+      "top_keywords": [
+        "invariants",
+        "verify cross",
+        "layer invariants beyond coverage",
+        "coverage",
+        "cross-layer",
+        "verify",
+        "beyond",
+        "problem",
+        "root",
+        "cause"
       ]
     },
     {
@@ -350,28 +476,82 @@
         "feature",
         "milestone"
       ]
+    },
+    {
+      "date": "",
+      "entity_type": "feature",
+      "path": "roadmap.json#questionnaire-routing-graph-for-llm-readable-svis",
+      "slug": "questionnaire-routing-graph-for-llm-readable-svis",
+      "status": "active",
+      "summary": "Questionnaire Routing Graph for LLM-Readable SVIS",
+      "tags": [],
+      "title": "Questionnaire Routing Graph for LLM-Readable SVIS",
+      "top_keywords": [
+        "questionnaire routing graph",
+        "production package completion\nobjective",
+        "survey scribe",
+        "questionnaire",
+        "routing",
+        "graph",
+        "llm-readable",
+        "svis",
+        "feature",
+        "milestone"
+      ]
     }
   ],
-  "entity_count": 12,
-  "generated": "2026-08-28",
+  "entity_count": 17,
+  "generated": "2026-09-01",
   "schema_version": "0.2.0",
-  "topic_count": 1,
+  "topic_count": 3,
   "topics": [
     {
-      "entity_count": 4,
+      "entity_count": 5,
       "entity_paths": [
         "roadmap.json#independent-review-and-auto-fix-agents",
         "roadmap.json#hosted-survey-scribe-service",
         "roadmap.json#remote-url-questionnaire-ingestion",
-        "roadmap.json#complete-survey-scribe-production-package"
+        "roadmap.json#complete-survey-scribe-production-package",
+        "roadmap.json#questionnaire-routing-graph-for-llm-readable-svis"
       ],
       "keywords": [
         "future product extensions\nobjective",
-        "scribe",
-        "survey"
+        "production package completion\nobjective",
+        "survey scribe"
       ],
-      "label": "Future Product Extensions\nObjective / Scribe / Survey",
-      "slug": "future-product-extensions-objective-scribe-survey"
+      "label": "Future Product Extensions\nObjective / Production Package Completion\nObjective / Survey Scribe",
+      "slug": "future-product-extensions-objective-production-package-completion-objective-survey-scribe"
+    },
+    {
+      "entity_count": 4,
+      "entity_paths": [
+        ".cg-docs/reviews/2026-08-26-survey-scribe-production-package-review.md",
+        ".cg-docs/reviews/2026-08-28-survey-scribe-production-package-refined-review.md",
+        ".cg-docs/reviews/2026-08-28-survey-scribe-production-package-refined-verify-review-2.md",
+        ".cg-docs/reviews/2026-08-28-survey-scribe-production-package-refined-verify-review.md"
+      ],
+      "keywords": [
+        "survey_scribe",
+        "src",
+        "sources"
+      ],
+      "label": "Survey_Scribe / Src / Sources",
+      "slug": "survey-scribe-src-sources"
+    },
+    {
+      "entity_count": 3,
+      "entity_paths": [
+        ".cg-docs/plans/2026-08-26-survey-scribe-production-package.md",
+        ".cg-docs/plans/2026-08-28-survey-scribe-production-package-refined.md",
+        ".cg-docs/plans/2026-08-31-questionnaire-routing-graph.md"
+      ],
+      "keywords": [
+        "test scenarios",
+        "contract",
+        "itsai"
+      ],
+      "label": "Test Scenarios / Contract / Itsai",
+      "slug": "test-scenarios-contract-itsai"
     }
   ]
 }
