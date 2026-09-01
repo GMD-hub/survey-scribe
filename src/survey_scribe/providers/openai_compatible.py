@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import inspect
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from importlib import import_module
 from typing import TypeVar, cast
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ValidationError, create_model
 
 from survey_scribe.config import GenerationConfig, RetryConfig
 from survey_scribe.providers.base import (
@@ -154,17 +155,22 @@ class InstructorOpenAIProvider:
         if self._base_url is not None:
             client_kwargs["base_url"] = self._base_url
         client = openai.AsyncOpenAI(**client_kwargs)
-        patched = instructor.from_openai(client)
+        patched = instructor.from_openai(client, mode=instructor.Mode.TOOLS_STRICT)
 
         async def complete(**kwargs: object) -> object:
             generation = cast(GenerationConfig, kwargs["generation"])
             messages = cast(tuple[ProviderMessage, ...], kwargs["messages"])
+            response_model = cast(type[BaseModel], kwargs["response_model"])
+            request_schema = cast(Mapping[str, object], kwargs["request_schema"])
             request: dict[str, object] = {
                 "model": kwargs["model"],
                 "messages": [
                     {"role": message.role, "content": message.content} for message in messages
                 ],
-                "response_model": kwargs["response_model"],
+                "response_model": _strict_wire_response_model(
+                    response_model,
+                    request_schema,
+                ),
                 "max_retries": 0,
                 "temperature": generation.temperature,
                 "max_tokens": generation.max_output_tokens,
@@ -189,6 +195,25 @@ class InstructorOpenAIProvider:
             }
 
         return complete
+
+
+def _strict_wire_response_model(
+    response_model: type[T],
+    request_schema: Mapping[str, object],
+) -> type[T]:
+    wire_model = create_model(
+        f"{response_model.__name__}StrictWire",
+        __base__=response_model,
+    )
+
+    def model_json_schema(
+        cls: type[BaseModel], *_args: object, **_kwargs: object
+    ) -> dict[str, object]:
+        del cls
+        return copy.deepcopy(dict(request_schema))
+
+    wire_model.model_json_schema = classmethod(model_json_schema)  # type: ignore[method-assign]
+    return cast(type[T], wire_model)
 
 
 def _split_result(result: object) -> tuple[object, object]:

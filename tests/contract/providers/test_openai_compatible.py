@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import sys
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 from pydantic import BaseModel, ConfigDict
@@ -243,6 +246,7 @@ async def test_lazy_sdk_path_converts_messages_settings_and_normalizes_metadata(
 ) -> None:
     client_kwargs: dict[str, object] = {}
     request_kwargs: dict[str, object] = {}
+    selected_modes: list[object] = []
 
     class FakeCompletions:
         async def create_with_completion(self, **kwargs: object) -> tuple[Answer, object]:
@@ -262,9 +266,18 @@ async def test_lazy_sdk_path_converts_messages_settings_and_normalizes_metadata(
             client_kwargs.update(kwargs)
 
     patched = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))
+    strict_mode = object()
+
+    def from_openai(_client: object, *, mode: object) -> object:
+        selected_modes.append(mode)
+        return patched
+
     modules = {
         "openai": SimpleNamespace(AsyncOpenAI=FakeAsyncOpenAI),
-        "instructor": SimpleNamespace(from_openai=lambda _client: patched),
+        "instructor": SimpleNamespace(
+            Mode=SimpleNamespace(TOOLS_STRICT=strict_mode),
+            from_openai=from_openai,
+        ),
     }
     monkeypatch.setattr(adapter_module, "import_module", modules.__getitem__)
     provider = InstructorOpenAIProvider(
@@ -294,6 +307,28 @@ async def test_lazy_sdk_path_converts_messages_settings_and_normalizes_metadata(
     ]
     assert request_kwargs["max_retries"] == 0
     assert request_kwargs["seed"] == 4
+    assert selected_modes == [strict_mode]
+
+    from instructor import Mode
+    from instructor.process_response import handle_response_model
+
+    _processed_model, wire_request = handle_response_model(
+        cast(type[BaseModel], request_kwargs["response_model"]),
+        mode=Mode.TOOLS_STRICT,
+        messages=request_kwargs["messages"],
+    )
+    wire_function = wire_request["tools"][0]["function"]
+    wire_schema_json = json.dumps(
+        wire_function["parameters"],
+        ensure_ascii=True,
+        allow_nan=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    assert wire_function["strict"] is True
+    assert hashlib.sha256(wire_schema_json.encode("utf-8")).hexdigest() == (
+        provider.inspect_schema(Answer).request_schema_sha256
+    )
     assert response.response_id == "sdk-response"
     assert response.usage is not None and response.usage.total_tokens == 15
 
