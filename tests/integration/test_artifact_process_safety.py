@@ -102,6 +102,17 @@ def _wait_for_marker(process: subprocess.Popen[str], marker: Path) -> None:
     pytest.fail("timed out waiting for child process to hold the artifact lock")
 
 
+def _write_after_crash_release(tmp_path: Path) -> ExtractionResult[SurveySVIS]:
+    deadline = time.monotonic() + 5
+    while True:
+        try:
+            return _result("after-crash").write(tmp_path)
+        except ArtifactCollisionError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.02)
+
+
 def test_process_owned_lock_blocks_a_writer_and_releases_after_crash(tmp_path: Path) -> None:
     marker = tmp_path / "lock-held"
     process = subprocess.Popen(
@@ -124,24 +135,91 @@ def test_process_owned_lock_blocks_a_writer_and_releases_after_crash(tmp_path: P
         process.kill()
         process.wait(timeout=10)
 
-    written = _result("after-crash").write(tmp_path)
+    written = _write_after_crash_release(tmp_path)
     assert written.artifacts
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX hostile pathname replacement")
+def test_replacing_lock_path_cannot_admit_a_second_process_writer(tmp_path: Path) -> None:
+    marker = tmp_path / "lock-held"
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            _CHILD_PROGRAM,
+            str(tmp_path),
+            "child",
+            "before_generation_commit",
+            str(marker),
+        ],
+        text=True,
+    )
+    try:
+        _wait_for_marker(process, marker)
+        lock_path = next((tmp_path / ".survey-scribe" / "aliases").glob("*.lock"))
+        lock_path.unlink()
+        lock_path.write_bytes(b"hostile replacement")
+
+        with pytest.raises(ArtifactCollisionError):
+            _result("contender").write(tmp_path)
+    finally:
+        process.kill()
+        process.wait(timeout=10)
+
+    assert _write_after_crash_release(tmp_path).artifacts
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX hostile directory replacement")
+def test_replacing_aliases_directory_cannot_admit_a_second_process_writer(tmp_path: Path) -> None:
+    marker = tmp_path / "lock-held"
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            _CHILD_PROGRAM,
+            str(tmp_path),
+            "child",
+            "before_generation_commit",
+            str(marker),
+        ],
+        text=True,
+    )
+    aliases = tmp_path / ".survey-scribe" / "aliases"
+    retained = aliases.with_name("retained-aliases")
+    try:
+        _wait_for_marker(process, marker)
+        aliases.rename(retained)
+        aliases.mkdir()
+
+        with pytest.raises(ArtifactCollisionError):
+            _result("contender").write(tmp_path)
+    finally:
+        process.kill()
+        process.wait(timeout=10)
+        if aliases.exists():
+            aliases.rmdir()
+        if retained.exists():
+            retained.rename(aliases)
+
+    assert _write_after_crash_release(tmp_path).artifacts
+
+
 @pytest.mark.parametrize(
-    ("checkpoint", "expected_run_id"),
+    ("checkpoint", "immediate_run_id", "expected_run_id"),
     [
-        ("before_generation_commit", "prior"),
-        ("after_generation_commit", "prior"),
-        ("before_projection", "replacement"),
-        ("after_projection", "replacement"),
-        ("before_pointer", "replacement"),
-        ("after_pointer", "replacement"),
+        ("before_generation_commit", "prior", "prior"),
+        ("after_generation_commit", "prior", "prior"),
+        ("before_projection", "prior", "replacement"),
+        ("after_commit_marker_clear", None, "replacement"),
+        ("after_projection", None, "replacement"),
+        ("before_pointer", None, "replacement"),
+        ("after_pointer", "replacement", "replacement"),
     ],
 )
 def test_hard_exit_recovery_is_idempotent_and_keeps_projection_with_pointer(
     tmp_path: Path,
     checkpoint: str,
+    immediate_run_id: str | None,
     expected_run_id: str,
 ) -> None:
     prior = _result("prior").write(tmp_path)
@@ -161,6 +239,25 @@ def test_hard_exit_recovery_is_idempotent_and_keeps_projection_with_pointer(
         text=True,
     )
     assert completed.returncode == 86
+
+    if immediate_run_id is None:
+        assert not active_path.exists()
+        assert (active_path.parent / "transaction").is_dir()
+    else:
+        immediate_pointer = json.loads(active_path.read_text(encoding="utf-8"))
+        immediate_generation = active_path.parent / immediate_pointer["path"]
+        immediate_manifest = json.loads(
+            (immediate_generation / "manifest.json").read_text(encoding="utf-8")
+        )
+        immediate_main_name = next(
+            item["path"] for item in immediate_manifest["files"] if item["kind"] == "main"
+        )
+        immediate_projection = tmp_path / "TST_2024_SYNTH_svis.json"
+        assert (
+            immediate_projection.read_bytes()
+            == (immediate_generation / immediate_main_name).read_bytes()
+        )
+        assert immediate_pointer["run_id"] == immediate_run_id
 
     with pytest.raises(ArtifactCollisionError):
         _result("recovery-probe").write(tmp_path)

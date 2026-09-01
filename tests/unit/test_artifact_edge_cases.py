@@ -530,6 +530,10 @@ def _journal_payload(*, generation_id: str = "1" * 32) -> dict[str, Any]:
             "generation identity",
         ),
         (
+            lambda payload: payload["pointer"].update(path=f"generations/{'2' * 32}"),
+            "pointer path",
+        ),
+        (
             lambda payload: payload["backups"].append(
                 {
                     "scope": "survey",
@@ -580,8 +584,23 @@ def _recovery_tree(tmp_path: Path) -> tuple[Path, Path, dict[str, Any]]:
     transaction = survey_root / "transaction"
     generation.mkdir(parents=True)
     transaction.mkdir()
-    manifest_content = b'{"schema_version": 1}'
     publication_content = b'{"value": 1}'
+    manifest_content = artifacts._json_bytes(
+        {
+            "schema_version": 1,
+            "survey_id": "EDGE_CASE",
+            "run_id": "run-edge",
+            "generation_id": generation_id,
+            "files": [
+                {
+                    "kind": "main",
+                    "path": "EDGE_CASE_result.json",
+                    "sha256": artifacts._sha256(publication_content),
+                    "size": len(publication_content),
+                }
+            ],
+        }
+    )
     (generation / "manifest.json").write_bytes(manifest_content)
     (generation / "EDGE_CASE_result.json").write_bytes(publication_content)
     payload = _journal_payload(generation_id=generation_id)
@@ -616,6 +635,18 @@ def test_recovery_rejects_changed_generation_content(
         artifacts._recover_transaction(root, survey_root, "EDGE_CASE")
 
     assert (survey_root / "transaction").exists()
+
+
+def test_recovery_rejects_journal_publications_that_differ_from_manifest(tmp_path: Path) -> None:
+    root, survey_root, payload = _recovery_tree(tmp_path)
+    payload["publications"] = []
+    (survey_root / "transaction" / "journal.json").write_text(
+        json.dumps(payload),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ArtifactWriteError, match="publications do not match"):
+        artifacts._recover_transaction(root, survey_root, "EDGE_CASE")
 
 
 def test_rollback_skips_unpublished_targets_and_removes_new_targets(tmp_path: Path) -> None:
@@ -725,9 +756,18 @@ def test_validate_generation_rejects_record_digest_mismatch(tmp_path: Path) -> N
 def test_lock_open_failure_is_classified_as_lock_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def fail_open(path: Path, flags: int, mode: int) -> int:
-        del path, flags, mode
-        raise OSError(errno.EIO, "lock device failed")
+    real_open = artifacts.os.open
+
+    def fail_open(
+        path: Any,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        if path == "survey.lock" and dir_fd is not None:
+            raise OSError(errno.EIO, "lock device failed")
+        return real_open(path, flags, mode, dir_fd=dir_fd)
 
     monkeypatch.setattr(artifacts.os, "open", fail_open)
 
@@ -743,11 +783,11 @@ def test_lock_open_failure_is_classified_as_lock_error(
 def test_atomic_write_removes_temporary_file_after_replace_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def fail_replace(source: Path, destination: Path) -> None:
-        del source, destination
+    def fail_replace(*args: Any, **kwargs: Any) -> None:
+        del args, kwargs
         raise OSError("replace failed")
 
-    monkeypatch.setattr(artifacts, "_durable_replace", fail_replace)
+    monkeypatch.setattr(artifacts.os, "replace", fail_replace)
 
     with pytest.raises(OSError, match="replace failed"):
         artifacts._atomic_write_bytes(tmp_path / "target.json", b"{}")
@@ -784,7 +824,7 @@ def test_read_rejects_descriptor_that_is_not_regular(
     def non_regular_fstat(descriptor: int) -> Any:
         nonlocal calls
         calls += 1
-        if calls == 1:
+        if calls == 2:
             return SimpleNamespace(st_mode=stat.S_IFDIR, st_dev=before.st_dev, st_ino=before.st_ino)
         return real_fstat(descriptor)
 
@@ -792,6 +832,93 @@ def test_read_rejects_descriptor_that_is_not_regular(
 
     with pytest.raises(OSError, match="not a regular file"):
         artifacts._read_bytes_no_follow(path)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX descriptor-relative operation contract")
+@pytest.mark.parametrize("operation", ["new", "replace"])
+def test_write_retains_verified_parent_during_hostile_path_swap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+) -> None:
+    parent = tmp_path / "parent"
+    parent.mkdir()
+    retained = tmp_path / "retained"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    target = parent / "artifact.json"
+    if operation == "replace":
+        target.write_bytes(b"old")
+
+    real_open = artifacts.os.open
+    swapped = False
+
+    def swap_after_parent_open(
+        path: str | os.PathLike[str],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal swapped
+        descriptor = real_open(path, flags, mode, dir_fd=dir_fd)
+        if not swapped and dir_fd is None and Path(path) == parent:
+            parent.rename(retained)
+            parent.symlink_to(outside, target_is_directory=True)
+            swapped = True
+        return descriptor
+
+    monkeypatch.setattr(artifacts.os, "open", swap_after_parent_open)
+
+    if operation == "new":
+        artifacts._write_new_file(target, b"safe")
+    else:
+        artifacts._atomic_write_bytes(target, b"safe")
+
+    assert (retained / target.name).read_bytes() == b"safe"
+    assert list(outside.iterdir()) == []
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX ancestor identity contract")
+def test_registered_ancestor_replacement_is_rejected_before_write(tmp_path: Path) -> None:
+    internal = tmp_path / ".survey-scribe"
+    parent = internal / "surveys"
+    parent.mkdir(parents=True)
+    retained = tmp_path / "retained-internal"
+
+    with artifacts._directory_identity_scope((tmp_path, internal, parent)):
+        internal.rename(retained)
+        parent.mkdir(parents=True)
+
+        with pytest.raises(ArtifactWriteError, match="anchor changed"):
+            artifacts._write_new_file(parent / "escaped.json", b"unsafe")
+
+    assert not (parent / "escaped.json").exists()
+
+
+def test_directory_identity_scope_rejects_unsafe_paths_and_registers_once(tmp_path: Path) -> None:
+    regular = tmp_path / "regular"
+    regular.write_bytes(b"x")
+    with (
+        pytest.raises(ArtifactWriteError, match="anchor is unsafe"),
+        artifacts._directory_identity_scope((regular,)),
+    ):
+        pytest.fail("unsafe identity scope entered")
+    with (
+        pytest.raises(ArtifactWriteError, match="path"),
+        artifacts._directory_identity_scope((tmp_path / "missing",)),
+    ):
+        pytest.fail("missing identity scope entered")
+
+    child = tmp_path / "child"
+    child.mkdir()
+    artifacts._register_directory_identity(child)
+    assert artifacts._ACTIVE_DIRECTORY_IDENTITIES.get() == ()
+    with artifacts._directory_identity_scope((tmp_path,)):
+        artifacts._register_directory_identity(child)
+        artifacts._register_directory_identity(child)
+        assert len(artifacts._ACTIVE_DIRECTORY_IDENTITIES.get()) == 2
+        artifacts._verify_active_directory_chain(Path("unrelated"))
 
 
 def test_reject_reparse_enforces_expected_path_type(tmp_path: Path) -> None:
@@ -823,14 +950,14 @@ def test_safe_remove_tree_refuses_unsafe_entries(
     root.mkdir()
     entry = root / "entry"
     entry.write_bytes(b"data")
-    real_lstat = artifacts.os.lstat
+    real_stat = artifacts.os.stat
 
-    def unsafe_entry_lstat(path: Path) -> Any:
-        if Path(path) == entry:
+    def unsafe_entry_stat(path: Any, *args: Any, **kwargs: Any) -> Any:
+        if path == entry.name and kwargs.get("dir_fd") is not None:
             return SimpleNamespace(st_mode=entry_mode, st_file_attributes=0)
-        return real_lstat(path)
+        return real_stat(path, *args, **kwargs)
 
-    monkeypatch.setattr(artifacts.os, "lstat", unsafe_entry_lstat)
+    monkeypatch.setattr(artifacts.os, "stat", unsafe_entry_stat)
 
     with pytest.raises(OSError, match=message):
         artifacts._safe_remove_tree(root)
@@ -839,16 +966,16 @@ def test_safe_remove_tree_refuses_unsafe_entries(
 def test_remove_file_durable_handles_missing_and_existing_targets(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    synced: list[Path] = []
+    synced: list[int] = []
     target = tmp_path / "artifact.json"
 
-    monkeypatch.setattr(artifacts, "_fsync_directory", synced.append)
+    monkeypatch.setattr(artifacts.os, "fsync", synced.append)
     artifacts._remove_file_durable(target)
     target.write_bytes(b"{}")
     artifacts._remove_file_durable(target)
 
     assert not target.exists()
-    assert synced == [tmp_path]
+    assert len(synced) == 1
 
 
 def test_posix_lock_helpers_delegate_to_flock(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -871,10 +998,10 @@ def test_posix_lock_helpers_delegate_to_flock(monkeypatch: pytest.MonkeyPatch) -
 def test_posix_durable_replace_uses_atomic_os_replace(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    del monkeypatch
     source = tmp_path / "source.tmp"
     destination = tmp_path / "destination.json"
     source.write_bytes(b"replacement")
-    monkeypatch.setattr(artifacts, "os", SimpleNamespace(name="posix", replace=os.replace))
 
     artifacts._durable_replace(source, destination)
 
@@ -882,21 +1009,28 @@ def test_posix_durable_replace_uses_atomic_os_replace(
     assert not source.exists()
 
 
-def test_posix_directory_sync_closes_descriptor(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_posix_directory_sync_closes_descriptor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     calls: list[tuple[str, int]] = []
-    posix_os = SimpleNamespace(
-        name="posix",
-        O_RDONLY=os.O_RDONLY,
-        O_DIRECTORY=getattr(os, "O_DIRECTORY", 0),
-        open=lambda path, flags: 19,
-        fsync=lambda descriptor: calls.append(("fsync", descriptor)),
-        close=lambda descriptor: calls.append(("close", descriptor)),
+    real_close = artifacts.os.close
+
+    monkeypatch.setattr(
+        artifacts.os,
+        "fsync",
+        lambda descriptor: calls.append(("fsync", descriptor)),
     )
-    monkeypatch.setattr(artifacts, "os", posix_os)
 
-    artifacts._fsync_directory(Path("directory"))
+    def close(descriptor: int) -> None:
+        calls.append(("close", descriptor))
+        real_close(descriptor)
 
-    assert calls == [("fsync", 19), ("close", 19)]
+    monkeypatch.setattr(artifacts.os, "close", close)
+
+    artifacts._fsync_directory(tmp_path)
+
+    assert [name for name, _ in calls] == ["fsync", "close"]
+    assert calls[0][1] == calls[1][1]
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows durable replacement branch")

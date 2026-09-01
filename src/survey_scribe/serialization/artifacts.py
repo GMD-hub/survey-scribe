@@ -11,6 +11,7 @@ import stat
 import tempfile
 from collections.abc import Mapping
 from contextlib import contextmanager, suppress
+from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,7 +32,6 @@ from pydantic import (
 from survey_scribe.errors import (
     ArtifactCollisionError,
     ArtifactWriteError,
-    redact_data,
     redact_exception,
 )
 from survey_scribe.models.svis import SurveySVIS
@@ -59,6 +59,10 @@ _RESERVED_WINDOWS_NAMES = frozenset(
 _REPARSE_ATTRIBUTE = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
 _O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
+_ACTIVE_DIRECTORY_IDENTITIES: ContextVar[tuple[tuple[Path, int, int], ...]] = ContextVar(
+    "survey_scribe_artifact_directory_identities",
+    default=(),
+)
 
 
 class ArtifactFileRecord(BaseModel):
@@ -443,8 +447,9 @@ def write_result(
 
     alias_key = _identity_key(_portable_identity(survey_id))
     lock_path = aliases_root / f"{alias_key}.lock"
-    with _survey_lock(lock_path, survey_id):
+    with _survey_lock(lock_path, survey_id, anchor_path=root) as verify_lock:
         try:
+            verify_lock()
             _claim_identity_alias(root, aliases_root, alias_key, survey_id, plan)
             survey_root = _prepare_survey_root(surveys_root, survey_id)
             active_path = survey_root / "active.json"
@@ -475,6 +480,7 @@ def write_result(
 
         try:
             generation = _write_generation(result, plan, survey_root, sidecar=sidecar)
+            verify_lock()
         except Exception as error:
             if isinstance(error, ArtifactWriteError):
                 raise
@@ -494,6 +500,7 @@ def write_result(
             manifest_sha256=_sha256(generation.manifest_content),
         )
         try:
+            verify_lock()
             transaction = _prepare_transaction(
                 root,
                 survey_root,
@@ -512,11 +519,16 @@ def write_result(
             ) from None
         journal = _load_journal(transaction / "journal.json", survey_id)
         published = False
-        pointer_written = False
         stage = "projection"
         try:
+            verify_lock()
             _publication_checkpoint("before_projection")
             published = bool(journal.publications)
+            # The active pointer is the public commit marker. Remove it before
+            # changing stable projections so a hard exit cannot expose a
+            # projection from one generation under another generation's marker.
+            _remove_file_durable(active_path)
+            _publication_checkpoint("after_commit_marker_clear")
             for publication in journal.publications:
                 source = generation.directory / publication.source_filename
                 content = _read_bytes_no_follow(source)
@@ -527,13 +539,14 @@ def write_result(
             journal = _replace_journal_phase(transaction, journal, "projection_published")
 
             stage = "pointer"
+            verify_lock()
             _publication_checkpoint("before_pointer")
             pointer_content = _model_json_bytes(pointer)
-            pointer_written = True
             _atomic_write_bytes(active_path, pointer_content)
             _publication_checkpoint("after_pointer")
             journal = _replace_journal_phase(transaction, journal, "pointer_published")
             _safe_remove_tree(transaction)
+            verify_lock()
         except Exception as error:
             rollback_error = _rollback_transaction(
                 root,
@@ -541,7 +554,7 @@ def write_result(
                 transaction,
                 journal,
                 restore_publications=published,
-                restore_pointer=pointer_written,
+                restore_pointer=True,
             )
             if routed_publication:
                 raise ArtifactWriteError(stage, "Routed artifact publication failed") from None
@@ -683,36 +696,69 @@ def _claim_identity_alias(
 
 
 @contextmanager
-def _survey_lock(lock_path: Path, survey_id: str) -> Any:
-    _reject_reparse(lock_path.parent, require_directory=True)
-    if _path_exists_no_follow(lock_path):
-        _reject_reparse(lock_path, require_directory=False)
-    flags = os.O_CREAT | os.O_RDWR
-    flags |= _O_NOFOLLOW
-    try:
-        descriptor = os.open(lock_path, flags, 0o600)
-        if os.fstat(descriptor).st_size == 0:
-            os.write(descriptor, b"\0")
+def _survey_lock(lock_path: Path, survey_id: str, *, anchor_path: Path | None = None) -> Any:
+    del survey_id
+    anchor = anchor_path or lock_path.parent
+    identity_paths = tuple(dict.fromkeys((anchor, lock_path.parent.parent, lock_path.parent)))
+    with (
+        _directory_identity_scope(identity_paths),
+        _cooperative_directory_lock(anchor),
+        _secured_directory(lock_path.parent) as parent_descriptor,
+    ):
+        descriptor: int | None = None
+        try:
+            flags = os.O_CREAT | os.O_RDWR | _O_NOFOLLOW
+            descriptor = (
+                _open_windows_lock_file(lock_path)
+                if parent_descriptor is None
+                else os.open(lock_path.name, flags, 0o600, dir_fd=parent_descriptor)
+            )
+            expected_identity = os.fstat(descriptor)
+            if not stat.S_ISREG(expected_identity.st_mode):
+                raise OSError("Artifact lock is not a regular file")
+            if expected_identity.st_size == 0:
+                os.write(descriptor, b"\0")
+                os.fsync(descriptor)
+            _lock_descriptor(descriptor)
+        except OSError as error:
+            if descriptor is not None:
+                with suppress(OSError):
+                    os.close(descriptor)
+            if error.errno in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}:
+                raise ArtifactCollisionError(
+                    "Another artifact writer is active for this survey"
+                ) from None
+            raise ArtifactWriteError("lock", redact_exception(error)) from None
+
+        def verify_identity() -> None:
+            try:
+                current = (
+                    os.lstat(lock_path)
+                    if parent_descriptor is None
+                    else os.stat(lock_path.name, dir_fd=parent_descriptor, follow_symlinks=False)
+                )
+            except OSError:
+                raise ArtifactWriteError("lock", "Artifact lock identity changed") from None
+            if (
+                stat.S_ISLNK(current.st_mode)
+                or getattr(current, "st_file_attributes", 0) & _REPARSE_ATTRIBUTE
+                or (current.st_dev, current.st_ino)
+                != (expected_identity.st_dev, expected_identity.st_ino)
+            ):
+                raise ArtifactWriteError("lock", "Artifact lock identity changed")
+
+        try:
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            os.ftruncate(descriptor, 0)
+            os.write(descriptor, f"pid={os.getpid()}\n".encode("ascii"))
             os.fsync(descriptor)
-        _lock_descriptor(descriptor)
-    except OSError as error:
-        with suppress(UnboundLocalError):
+            verify_identity()
+            yield verify_identity
+            verify_identity()
+        finally:
+            with suppress(OSError):
+                _unlock_descriptor(descriptor)
             os.close(descriptor)
-        if error.errno in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}:
-            raise ArtifactCollisionError(
-                "Another artifact writer is active for this survey"
-            ) from None
-        raise ArtifactWriteError("lock", redact_exception(error)) from None
-    try:
-        os.lseek(descriptor, 0, os.SEEK_SET)
-        os.ftruncate(descriptor, 0)
-        os.write(descriptor, f"pid={os.getpid()}\n".encode("ascii"))
-        os.fsync(descriptor)
-        yield
-    finally:
-        with suppress(OSError):
-            _unlock_descriptor(descriptor)
-        os.close(descriptor)
 
 
 def _lock_descriptor(descriptor: int) -> None:
@@ -751,8 +797,7 @@ def _write_generation(
     _reject_reparse(generations, require_directory=True)
     staging = generations / f".{generation_id}.staging"
     final = generations / generation_id
-    os.mkdir(staging)
-    _fsync_directory(generations)
+    _ensure_directory(generations, staging.name)
     references: list[ArtifactReference] = []
     publications: list[_JournalPublication] = []
     file_records: list[dict[str, Any]] = []
@@ -785,13 +830,7 @@ def _write_generation(
             sidecar_name = f"{plan.survey_id}_sidecar.json"
             _validate_artifact_filename(sidecar_name)
             if plan.routed_metadata is None:
-                sidecar_values = result.model_dump(mode="json", exclude={"output", "artifacts"})
-                sidecar_content = _json_bytes(
-                    redact_data(
-                        sidecar_values,
-                        sensitive_values=_questionnaire_text(result.output),
-                    )
-                )
+                sidecar_content = _json_bytes(_operational_sidecar(result))
             else:
                 sidecar_content = _model_json_bytes(
                     _RoutedArtifactSidecar(
@@ -831,6 +870,7 @@ def _write_generation(
         _publication_checkpoint("before_generation_commit")
         _durable_replace(staging, final)
         committed = True
+        _register_directory_identity(final)
         _fsync_directory(generations)
         _publication_checkpoint("after_generation_commit")
 
@@ -888,8 +928,7 @@ def _prepare_transaction(
     staging = survey_root / f".transaction.{generation.generation_id}.staging"
     if _path_exists_no_follow(transaction) or _path_exists_no_follow(staging):
         raise ArtifactWriteError("recovery", "An unrecovered artifact transaction already exists")
-    os.mkdir(staging)
-    _fsync_directory(survey_root)
+    _ensure_directory(survey_root, staging.name)
     backups: list[_JournalBackup] = []
     try:
         for index, publication in enumerate(generation.publications):
@@ -920,6 +959,7 @@ def _prepare_transaction(
         _write_new_file(staging / "journal.json", _model_json_bytes(journal))
         _fsync_directory(staging)
         _durable_replace(staging, transaction)
+        _register_directory_identity(transaction)
         _fsync_directory(survey_root)
     except Exception:
         if _path_exists_no_follow(staging):
@@ -990,13 +1030,48 @@ def _recover_transaction(root: Path, survey_root: Path, survey_id: str) -> None:
     generation = survey_root / "generations" / journal.generation_id
     _reject_reparse(generation, require_directory=True)
     manifest = generation / "manifest.json"
-    if _sha256(_read_bytes_no_follow(manifest)) != journal.pointer.manifest_sha256:
+    manifest_content = _read_bytes_no_follow(manifest)
+    if _sha256(manifest_content) != journal.pointer.manifest_sha256:
         raise ArtifactWriteError("recovery", "Recovery generation manifest digest does not match")
+    parsed_manifest = parse_artifact_manifest(manifest_content)
+    manifest_files = {item.path: item for item in parsed_manifest.files}
+    expected_publications = tuple(
+        (
+            item.path,
+            item.path,
+            (
+                ArtifactKind.legacy.value
+                if parsed_manifest.schema_version == 2 or item.path.endswith("_svis.json")
+                else ArtifactKind.projection.value
+            ),
+            item.sha256,
+        )
+        for item in parsed_manifest.files
+        if (parsed_manifest.schema_version == 1 and item.kind == ArtifactKind.main.value)
+        or (parsed_manifest.schema_version == 2 and item.kind == ArtifactKind.projection.value)
+    )
+    actual_publications = tuple(
+        (
+            item.filename,
+            item.source_filename,
+            item.kind,
+            item.sha256,
+        )
+        for item in journal.publications
+    )
+    if actual_publications != expected_publications:
+        raise ArtifactWriteError("recovery", "Recovery publications do not match the manifest")
     for publication in journal.publications:
         _validate_artifact_filename(publication.filename)
         _validate_artifact_filename(publication.source_filename)
         source_content = _read_bytes_no_follow(generation / publication.source_filename)
-        if _sha256(source_content) != publication.sha256:
+        manifest_file = manifest_files.get(publication.source_filename)
+        if (
+            manifest_file is None
+            or manifest_file.sha256 != publication.sha256
+            or manifest_file.size != len(source_content)
+            or _sha256(source_content) != publication.sha256
+        ):
             raise ArtifactWriteError("recovery", "Recovery publication digest does not match")
         _atomic_write_bytes(root / publication.filename, source_content)
     _atomic_write_bytes(survey_root / "active.json", _model_json_bytes(journal.pointer))
@@ -1012,6 +1087,8 @@ def _load_journal(path: Path, survey_id: str) -> _PublicationJournal:
         raise ArtifactWriteError("recovery", "Recovery journal survey identity does not match")
     if journal.generation_id != journal.pointer.generation_id:
         raise ArtifactWriteError("recovery", "Recovery journal generation identity does not match")
+    if journal.pointer.path != f"generations/{journal.generation_id}":
+        raise ArtifactWriteError("recovery", "Recovery pointer path is invalid")
     for publication in journal.publications:
         _validate_artifact_filename(publication.filename)
         _validate_artifact_filename(publication.source_filename)
@@ -1046,17 +1123,21 @@ def _cleanup_staging(survey_root: Path) -> None:
 
 
 def _write_new_file(path: Path, content: bytes) -> None:
-    _reject_reparse(path.parent, require_directory=True)
     flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
     flags |= _O_NOFOLLOW
-    descriptor = os.open(path, flags, 0o600)
-    try:
-        with os.fdopen(descriptor, "wb", closefd=False) as stream:
-            stream.write(content)
-            stream.flush()
-            os.fsync(stream.fileno())
-    finally:
-        os.close(descriptor)
+    with _secured_directory(path.parent) as parent_descriptor:
+        descriptor = (
+            os.open(path, flags, 0o600)
+            if parent_descriptor is None
+            else os.open(path.name, flags, 0o600, dir_fd=parent_descriptor)
+        )
+        try:
+            with os.fdopen(descriptor, "wb", closefd=False) as stream:
+                stream.write(content)
+                stream.flush()
+                os.fsync(stream.fileno())
+        finally:
+            os.close(descriptor)
 
 
 def _validate_generation(
@@ -1082,40 +1163,65 @@ def _validate_generation(
 
 
 def _atomic_write_bytes(path: Path, content: bytes) -> None:
-    _reject_reparse(path.parent, require_directory=True)
-    if _path_exists_no_follow(path):
-        _reject_reparse(path, require_directory=False)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
-    )
-    temporary_path = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "wb") as stream:
-            stream.write(content)
-            stream.flush()
-            os.fsync(stream.fileno())
-        _durable_replace(temporary_path, path)
-        _fsync_directory(path.parent)
-    finally:
-        if _path_exists_no_follow(temporary_path):
-            temporary_path.unlink()
+    with _secured_directory(path.parent) as parent_descriptor:
+        if _path_exists_no_follow(path):
+            _reject_reparse(path, require_directory=False)
+        if parent_descriptor is None:
+            descriptor, temporary_name = tempfile.mkstemp(
+                prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+            )
+            temporary_path = Path(temporary_name)
+            try:
+                with os.fdopen(descriptor, "wb") as stream:
+                    stream.write(content)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                _durable_replace(temporary_path, path)
+                _fsync_directory(path.parent)
+            finally:
+                if _path_exists_no_follow(temporary_path):
+                    temporary_path.unlink()
+            return
+
+        temporary_name = f".{path.name}.{uuid4().hex}.tmp"
+        flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | _O_NOFOLLOW
+        descriptor = os.open(temporary_name, flags, 0o600, dir_fd=parent_descriptor)
+        try:
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(content)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(
+                temporary_name,
+                path.name,
+                src_dir_fd=parent_descriptor,
+                dst_dir_fd=parent_descriptor,
+            )
+            os.fsync(parent_descriptor)
+        finally:
+            with suppress(FileNotFoundError):
+                os.unlink(temporary_name, dir_fd=parent_descriptor)
 
 
 def _read_bytes_no_follow(path: Path) -> bytes:
-    before = _reject_reparse(path, require_directory=False)
-    flags = os.O_RDONLY
-    flags |= _O_NOFOLLOW
-    descriptor = os.open(path, flags)
-    try:
-        after = os.fstat(descriptor)
-        if not stat.S_ISREG(after.st_mode):
-            raise OSError("Artifact path is not a regular file")
-        if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
-            raise OSError("Artifact path changed during no-follow open")
-        with os.fdopen(descriptor, "rb", closefd=False) as stream:
-            return stream.read()
-    finally:
-        os.close(descriptor)
+    with _secured_directory(path.parent) as parent_descriptor:
+        before = _reject_reparse(path, require_directory=False)
+        flags = os.O_RDONLY | _O_NOFOLLOW
+        descriptor = (
+            _open_windows_file_no_follow(path)
+            if parent_descriptor is None
+            else os.open(path.name, flags, dir_fd=parent_descriptor)
+        )
+        try:
+            after = os.fstat(descriptor)
+            if not stat.S_ISREG(after.st_mode):
+                raise OSError("Artifact path is not a regular file")
+            if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
+                raise OSError("Artifact path changed during no-follow open")
+            with os.fdopen(descriptor, "rb", closefd=False) as stream:
+                return stream.read()
+        finally:
+            os.close(descriptor)
 
 
 def _path_exists_no_follow(path: Path) -> bool:
@@ -1126,11 +1232,76 @@ def _path_exists_no_follow(path: Path) -> bool:
     return True
 
 
+@contextmanager
+def _directory_identity_scope(paths: tuple[Path, ...]) -> Any:
+    identities: list[tuple[Path, int, int]] = []
+    try:
+        for path in paths:
+            details = os.lstat(path)
+            if not stat.S_ISDIR(details.st_mode) or stat.S_ISLNK(details.st_mode):
+                raise ArtifactWriteError("path", "Internal directory anchor is unsafe")
+            identities.append((path, details.st_dev, details.st_ino))
+    except OSError as error:
+        raise ArtifactWriteError("path", redact_exception(error)) from None
+    token = _ACTIVE_DIRECTORY_IDENTITIES.set(tuple(identities))
+    try:
+        yield
+    finally:
+        _ACTIVE_DIRECTORY_IDENTITIES.reset(token)
+
+
+def _register_directory_identity(path: Path) -> None:
+    active = _ACTIVE_DIRECTORY_IDENTITIES.get()
+    if not active or any(expected == path for expected, _device, _inode in active):
+        return
+    details = os.lstat(path)
+    _ACTIVE_DIRECTORY_IDENTITIES.set(active + ((path, details.st_dev, details.st_ino),))
+
+
+def _verify_active_directory_chain(path: Path) -> None:
+    for expected, device, inode in _ACTIVE_DIRECTORY_IDENTITIES.get():
+        if path != expected and not path.is_relative_to(expected):
+            continue
+        try:
+            current = os.lstat(expected)
+        except OSError:
+            raise ArtifactWriteError("path", "Internal directory anchor changed") from None
+        if (
+            not stat.S_ISDIR(current.st_mode)
+            or stat.S_ISLNK(current.st_mode)
+            or getattr(current, "st_file_attributes", 0) & _REPARSE_ATTRIBUTE
+            or (current.st_dev, current.st_ino) != (device, inode)
+        ):
+            raise ArtifactWriteError("path", "Internal directory anchor changed")
+
+
+@contextmanager
+def _cooperative_directory_lock(path: Path) -> Any:
+    with _secured_directory(path) as descriptor:
+        if descriptor is None:
+            yield
+            return
+        try:
+            _lock_descriptor(descriptor)
+        except OSError as error:
+            if error.errno in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}:
+                raise ArtifactCollisionError(
+                    "Another artifact writer is active for this output root"
+                ) from None
+            raise ArtifactWriteError("lock", redact_exception(error)) from None
+        try:
+            yield
+        finally:
+            with suppress(OSError):
+                _unlock_descriptor(descriptor)
+
+
 def _reject_reparse(
     path: Path,
     *,
     require_directory: bool,
 ) -> os.stat_result:
+    _verify_active_directory_chain(path)
     details = os.lstat(path)
     if stat.S_ISLNK(details.st_mode) or (
         getattr(details, "st_file_attributes", 0) & _REPARSE_ATTRIBUTE
@@ -1143,49 +1314,273 @@ def _reject_reparse(
     return details
 
 
-def _ensure_directory(parent: Path, name: str) -> Path:
-    _reject_reparse(parent, require_directory=True)
-    path = parent / name
+@contextmanager
+def _secured_directory(path: Path) -> Any:
+    """Retain a verified directory while a path-relative operation uses it."""
+    _verify_active_directory_chain(path)
+    before = _reject_reparse(path, require_directory=True)
+    if os.name == "nt":
+        handle, file_index = _open_windows_handle(path, require_directory=True)
+        try:
+            if before.st_ino and before.st_ino != file_index:
+                raise ArtifactWriteError("path", "Internal directory changed during secure open")
+            yield None
+        finally:
+            _close_windows_handle(handle)
+        return
+
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | _O_NOFOLLOW
+    descriptor = os.open(path, flags)
     try:
-        os.mkdir(path)
-    except FileExistsError:
-        pass
-    else:
-        _fsync_directory(parent)
-    _reject_reparse(path, require_directory=True)
+        after = os.fstat(descriptor)
+        if not stat.S_ISDIR(after.st_mode):
+            raise ArtifactWriteError("path", "Internal path component is not a directory")
+        if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
+            raise ArtifactWriteError("path", "Internal directory changed during secure open")
+        _verify_active_directory_chain(path)
+        yield descriptor
+    finally:
+        os.close(descriptor)
+
+
+def _open_windows_handle(
+    path: Path,
+    *,
+    require_directory: bool,
+    create: bool = False,
+    write: bool = False,
+) -> tuple[int, int]:
+    import ctypes
+    from ctypes import wintypes
+
+    class _ByHandleFileInformation(ctypes.Structure):
+        _fields_ = [
+            ("file_attributes", wintypes.DWORD),
+            ("creation_time", wintypes.FILETIME),
+            ("last_access_time", wintypes.FILETIME),
+            ("last_write_time", wintypes.FILETIME),
+            ("volume_serial_number", wintypes.DWORD),
+            ("file_size_high", wintypes.DWORD),
+            ("file_size_low", wintypes.DWORD),
+            ("number_of_links", wintypes.DWORD),
+            ("file_index_high", wintypes.DWORD),
+            ("file_index_low", wintypes.DWORD),
+        ]
+
+    win_dll = ctypes.WinDLL  # type: ignore[attr-defined]
+    win_error = ctypes.WinError  # type: ignore[attr-defined]
+    get_last_error = ctypes.get_last_error  # type: ignore[attr-defined]
+    kernel32 = win_dll("kernel32", use_last_error=True)
+    create_file = kernel32.CreateFileW
+    create_file.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    create_file.restype = wintypes.HANDLE
+    get_information = kernel32.GetFileInformationByHandle
+    get_information.argtypes = [wintypes.HANDLE, ctypes.POINTER(_ByHandleFileInformation)]
+    get_information.restype = wintypes.BOOL
+
+    generic_read = 0x80000000
+    generic_write = 0x40000000
+    share_read_write = 0x1 | 0x2
+    open_existing = 3
+    open_always = 4
+    open_reparse_point = 0x00200000
+    backup_semantics = 0x02000000 if require_directory else 0
+    handle = create_file(
+        str(path),
+        generic_read | (generic_write if write else 0),
+        share_read_write,
+        None,
+        open_always if create else open_existing,
+        open_reparse_point | backup_semantics,
+        None,
+    )
+    invalid_handle = ctypes.c_void_p(-1).value
+    if handle == invalid_handle:
+        raise win_error(get_last_error())
+
+    information = _ByHandleFileInformation()
+    if not get_information(handle, ctypes.byref(information)):
+        error = win_error(get_last_error())
+        _close_windows_handle(int(handle))
+        raise error
+    attributes = int(information.file_attributes)
+    is_directory = bool(attributes & getattr(stat, "FILE_ATTRIBUTE_DIRECTORY", 0x10))
+    if attributes & _REPARSE_ATTRIBUTE or is_directory != require_directory:
+        _close_windows_handle(int(handle))
+        message = (
+            "Internal symlink or reparse path is not allowed"
+            if attributes & _REPARSE_ATTRIBUTE
+            else "Internal path has an unexpected type"
+        )
+        raise ArtifactWriteError("path", message)
+    file_index = (int(information.file_index_high) << 32) | int(information.file_index_low)
+    return int(handle), file_index
+
+
+def _close_windows_handle(handle: int) -> None:
+    import ctypes
+    from ctypes import wintypes
+
+    win_dll = ctypes.WinDLL  # type: ignore[attr-defined]
+    win_error = ctypes.WinError  # type: ignore[attr-defined]
+    get_last_error = ctypes.get_last_error  # type: ignore[attr-defined]
+    close_handle = win_dll("kernel32", use_last_error=True).CloseHandle
+    close_handle.argtypes = [wintypes.HANDLE]
+    close_handle.restype = wintypes.BOOL
+    if not close_handle(handle):
+        raise win_error(get_last_error())
+
+
+def _open_windows_file_no_follow(path: Path) -> int:
+    import msvcrt
+
+    handle, _ = _open_windows_handle(path, require_directory=False)
+    try:
+        return msvcrt.open_osfhandle(handle, os.O_RDONLY)  # type: ignore[attr-defined]
+    except Exception:
+        _close_windows_handle(handle)
+        raise
+
+
+def _open_windows_lock_file(path: Path) -> int:
+    import msvcrt
+
+    handle, _ = _open_windows_handle(
+        path,
+        require_directory=False,
+        create=True,
+        write=True,
+    )
+    try:
+        return msvcrt.open_osfhandle(handle, os.O_RDWR)  # type: ignore[attr-defined]
+    except Exception:
+        _close_windows_handle(handle)
+        raise
+
+
+def _ensure_directory(parent: Path, name: str) -> Path:
+    path = parent / name
+    with _secured_directory(parent) as parent_descriptor:
+        try:
+            if parent_descriptor is None:
+                os.mkdir(path)
+            else:
+                os.mkdir(name, dir_fd=parent_descriptor)
+        except FileExistsError:
+            pass
+        else:
+            if parent_descriptor is None:
+                _fsync_directory(parent)
+            else:
+                os.fsync(parent_descriptor)
+        _reject_reparse(path, require_directory=True)
+        _register_directory_identity(path)
     return path
 
 
 def _safe_remove_tree(path: Path) -> None:
-    _reject_reparse(path, require_directory=True)
-    for entry in path.iterdir():
-        details = os.lstat(entry)
-        if stat.S_ISLNK(details.st_mode) or (
-            getattr(details, "st_file_attributes", 0) & _REPARSE_ATTRIBUTE
-        ):
-            raise OSError("Refusing to remove a symlink or reparse path")
-        if stat.S_ISDIR(details.st_mode):
-            _safe_remove_tree(entry)
-        elif stat.S_ISREG(details.st_mode):
-            entry.unlink()
-        else:
-            raise OSError("Refusing to remove an unexpected artifact path")
     parent = path.parent
+    with _secured_directory(parent) as parent_descriptor:
+        if parent_descriptor is None:
+            _safe_remove_tree_windows(path)
+            _fsync_directory(parent)
+            return
+        _safe_remove_tree_at(parent_descriptor, path.name)
+        os.fsync(parent_descriptor)
+
+
+def _safe_remove_tree_at(parent_descriptor: int, name: str) -> None:
+    details = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
+    if stat.S_ISLNK(details.st_mode):
+        raise OSError("Refusing to remove a symlink or reparse path")
+    if not stat.S_ISDIR(details.st_mode):
+        raise OSError("Refusing to remove an unexpected artifact path")
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | _O_NOFOLLOW
+    descriptor = os.open(name, flags, dir_fd=parent_descriptor)
+    try:
+        opened = os.fstat(descriptor)
+        if (details.st_dev, details.st_ino) != (opened.st_dev, opened.st_ino):
+            raise OSError("Artifact directory changed during secure open")
+        with os.scandir(descriptor) as entries:
+            for entry in entries:
+                entry_details = os.stat(entry.name, dir_fd=descriptor, follow_symlinks=False)
+                if stat.S_ISLNK(entry_details.st_mode):
+                    raise OSError("Refusing to remove a symlink or reparse path")
+                if stat.S_ISDIR(entry_details.st_mode):
+                    _safe_remove_tree_at(descriptor, entry.name)
+                elif stat.S_ISREG(entry_details.st_mode):
+                    os.unlink(entry.name, dir_fd=descriptor)
+                else:
+                    raise OSError("Refusing to remove an unexpected artifact path")
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    os.rmdir(name, dir_fd=parent_descriptor)
+
+
+def _safe_remove_tree_windows(path: Path) -> None:
+    with _secured_directory(path):
+        for entry in path.iterdir():
+            details = os.lstat(entry)
+            if stat.S_ISLNK(details.st_mode) or (
+                getattr(details, "st_file_attributes", 0) & _REPARSE_ATTRIBUTE
+            ):
+                raise OSError("Refusing to remove a symlink or reparse path")
+            if stat.S_ISDIR(details.st_mode):
+                _safe_remove_tree_windows(entry)
+            elif stat.S_ISREG(details.st_mode):
+                entry.unlink()
+            else:
+                raise OSError("Refusing to remove an unexpected artifact path")
     path.rmdir()
-    _fsync_directory(parent)
 
 
 def _remove_file_durable(path: Path) -> None:
-    if not _path_exists_no_follow(path):
-        return
-    _reject_reparse(path, require_directory=False)
-    path.unlink()
-    _fsync_directory(path.parent)
+    with _secured_directory(path.parent) as parent_descriptor:
+        if not _path_exists_no_follow(path):
+            return
+        _reject_reparse(path, require_directory=False)
+        if parent_descriptor is None:
+            path.unlink()
+            _fsync_directory(path.parent)
+        else:
+            os.unlink(path.name, dir_fd=parent_descriptor)
+            os.fsync(parent_descriptor)
 
 
 def _durable_replace(source: Path, destination: Path) -> None:
     if os.name != "nt":
-        os.replace(source, destination)
+        if source.parent == destination.parent:
+            with _secured_directory(source.parent) as parent_descriptor:
+                if parent_descriptor is None:  # pragma: no cover - guarded by os.name
+                    raise OSError("POSIX directory descriptor is unavailable")
+                os.replace(
+                    source.name,
+                    destination.name,
+                    src_dir_fd=parent_descriptor,
+                    dst_dir_fd=parent_descriptor,
+                )
+            return
+        with (
+            _secured_directory(source.parent) as source_descriptor,
+            _secured_directory(destination.parent) as destination_descriptor,
+        ):
+            if source_descriptor is None or destination_descriptor is None:  # pragma: no cover
+                raise OSError("POSIX directory descriptor is unavailable")
+            os.replace(
+                source.name,
+                destination.name,
+                src_dir_fd=source_descriptor,
+                dst_dir_fd=destination_descriptor,
+            )
         return
     import ctypes
     from ctypes import wintypes
@@ -1202,12 +1597,10 @@ def _durable_replace(source: Path, destination: Path) -> None:
 def _fsync_directory(path: Path) -> None:
     """Flush directory metadata and propagate every unsupported/error result."""
     if os.name != "nt":
-        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
-        descriptor = os.open(path, flags)
-        try:
+        with _secured_directory(path) as descriptor:
+            if descriptor is None:  # pragma: no cover - guarded by os.name
+                raise OSError("POSIX directory descriptor is unavailable")
             os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
         return
 
     import ctypes
@@ -1254,23 +1647,26 @@ def _fsync_directory(path: Path) -> None:
         close_handle(handle)
 
 
-def _questionnaire_text(output: Any) -> tuple[str, ...]:
-    values = output.model_dump(mode="python") if isinstance(output, BaseModel) else output
-    found: list[str] = []
-
-    def collect(value: Any) -> None:
-        if isinstance(value, dict):
-            for key, item in value.items():
-                if key == "question_text" and isinstance(item, str) and item:
-                    found.append(item)
-                else:
-                    collect(item)
-        elif isinstance(value, list | tuple):
-            for item in value:
-                collect(item)
-
-    collect(values)
-    return tuple(found)
+def _operational_sidecar(result: ExtractionResult[Any]) -> dict[str, Any]:
+    values = result.model_dump(mode="json", exclude={"output", "artifacts"})
+    values["diagnostics"] = [
+        {
+            "code": "OPERATIONAL_DIAGNOSTIC",
+            "message": "Diagnostic content omitted from artifact sidecar.",
+            "severity": diagnostic.severity.value,
+            "details": {},
+        }
+        for diagnostic in result.diagnostics
+    ]
+    values["failed_blocks"] = [
+        {
+            "block_id": f"failed-block-{index:06d}",
+            "message": "Source block content omitted from artifact sidecar.",
+            "source_order": failed.source_order,
+        }
+        for index, failed in enumerate(result.failed_blocks, start=1)
+    ]
+    return values
 
 
 def _source_derived_strings(output: Any) -> tuple[str, ...]:
