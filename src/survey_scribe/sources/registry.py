@@ -4,18 +4,51 @@ from __future__ import annotations
 
 import zipfile
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from survey_scribe.sources.base import (
     DEFAULT_SOURCE_LIMITS,
     LocalSource,
+    ResolvedSource,
     SourceAdapter,
     SourceBundle,
     SourceDocument,
     SourceFormatError,
     SourceLimits,
     resolve_local_source,
+    snapshot_resolved_source,
 )
+
+if TYPE_CHECKING:
+    from survey_scribe.models.routing import RoutingSourceBinding
+    from survey_scribe.models.svis import SurveySVIS
+    from survey_scribe.routing.native import NativeRoutingSemantics
+
+
+@dataclass(frozen=True, slots=True)
+class SourceConversionResult:
+    """Additive normalized source result with binding and optional native routing."""
+
+    document: SourceDocument
+    source_binding: RoutingSourceBinding
+    native: NativeRoutingSemantics | None
+
+
+@runtime_checkable
+class NativeSourceAdapter(SourceAdapter, Protocol):
+    """Optional adapter extension that emits typed native routing semantics."""
+
+    def convert_native(
+        self,
+        source: ResolvedSource,
+        document: SourceDocument,
+        *,
+        limits: SourceLimits,
+    ) -> NativeRoutingSemantics | None:
+        """Return native semantics from the active private source snapshot."""
+        ...
 
 
 class SourceRegistry:
@@ -44,13 +77,14 @@ class SourceRegistry:
             MarkdownAdapter,
             TextAdapter,
         )
-        from survey_scribe.sources.tabular import CsvAdapter, XlsxAdapter
+        from survey_scribe.sources.tabular import CsvAdapter
+        from survey_scribe.sources.xlsform import XlsFormAdapter
 
         return cls(
             {
                 ".pdf": DoclingPdfAdapter(),
                 ".docx": DocxAdapter(),
-                ".xlsx": XlsxAdapter(),
+                ".xlsx": XlsFormAdapter(),
                 ".csv": CsvAdapter(),
                 ".html": HtmlAdapter(),
                 ".htm": HtmlAdapter(),
@@ -90,8 +124,43 @@ class SourceRegistry:
         adapter = self._adapters.get(suffix)
         if adapter is None:
             raise SourceFormatError(f"Unsupported source format: {suffix or '<none>'}")
-        _verify_signature(resolved.primary, suffix)
-        return adapter.convert(resolved, limits=limits)
+        with snapshot_resolved_source(resolved, limits=limits) as snapshot:
+            _verify_signature(snapshot.primary, suffix)
+            document = adapter.convert(snapshot, limits=limits)
+            payload = document.model_dump(mode="python")
+            payload["snapshot_sha256"] = snapshot.primary_sha256
+            return SourceDocument.model_validate(payload)
+
+    def convert_with_native(
+        self,
+        source: LocalSource | SourceBundle,
+        svis: SurveySVIS,
+        *,
+        limits: SourceLimits = DEFAULT_SOURCE_LIMITS,
+    ) -> SourceConversionResult:
+        """Normalize one source and add its exact binding and native semantics."""
+        from survey_scribe.routing.identity import create_source_binding
+
+        resolved = resolve_local_source(source, limits=limits)
+        suffix = resolved.primary.suffix.lower()
+        adapter = self._adapters.get(suffix)
+        if adapter is None:
+            raise SourceFormatError(f"Unsupported source format: {suffix or '<none>'}")
+        with snapshot_resolved_source(resolved, limits=limits) as snapshot:
+            _verify_signature(snapshot.primary, suffix)
+            converted = adapter.convert(snapshot, limits=limits)
+            payload = converted.model_dump(mode="python")
+            payload["snapshot_sha256"] = snapshot.primary_sha256
+            document = SourceDocument.model_validate(payload)
+            source_binding = create_source_binding(document, svis)
+            native: NativeRoutingSemantics | None = None
+            if isinstance(adapter, NativeSourceAdapter):
+                native = adapter.convert_native(snapshot, document, limits=limits)
+            return SourceConversionResult(
+                document=document,
+                source_binding=source_binding,
+                native=native,
+            )
 
 
 def _verify_signature(path: Path, suffix: str) -> None:
