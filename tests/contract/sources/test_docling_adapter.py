@@ -8,6 +8,7 @@ import time
 import zipfile
 from dataclasses import replace
 from pathlib import Path
+from queue import Empty
 from types import SimpleNamespace
 from typing import Any
 
@@ -17,7 +18,9 @@ from survey_scribe.sources import docling as docling_source
 from survey_scribe.sources.base import (
     DEFAULT_SOURCE_LIMITS,
     SourceConversionError,
+    SourceCoverage,
     SourceDependencyError,
+    SourceDiagnostic,
     SourceFormatError,
     SourceLimitError,
     SourceSecurityError,
@@ -101,6 +104,48 @@ def out_of_range_block_conversion(path: str, artifacts_path: str | None) -> PdfC
     )
 
 
+def partial_pdf_conversion(path: str, artifacts_path: str | None) -> PdfConversion:
+    """Represent one failed page without making the converted pages look complete."""
+    del path, artifacts_path
+    return PdfConversion(
+        page_count=3,
+        blocks=(
+            PdfConversionBlock(text="Page one", page=1),
+            PdfConversionBlock(text="Page three", page=3),
+        ),
+        coverage=SourceCoverage(
+            unit="page",
+            total_units=3,
+            converted_units=(1, 3),
+            failed_units=(2,),
+        ),
+        diagnostics=(
+            SourceDiagnostic(
+                code="PDF_PAGE_CONVERSION_FAILED",
+                message="PDF page conversion failed",
+                unit="page",
+                unit_index=2,
+            ),
+        ),
+    )
+
+
+def multi_page_table_conversion(path: str, artifacts_path: str | None) -> PdfConversion:
+    """Return one table whose physical source spans two pages."""
+    del path, artifacts_path
+    return PdfConversion(
+        page_count=2,
+        blocks=(
+            PdfConversionBlock(
+                text="code | label",
+                page=1,
+                pages=(1, 2),
+                table_rows=(("code", "label"),),
+            ),
+        ),
+    )
+
+
 def _write_pdf(path: Path, body: bytes = b"1 0 obj <</Type /Page>> endobj") -> None:
     path.write_bytes(b"%PDF-1.7\n" + body + b"\n%%EOF")
 
@@ -119,6 +164,36 @@ def test_pdf_fake_preserves_preamble_scanned_content_and_page_provenance(tmp_pat
         "Scanned OCR question",
     ]
     assert [block.provenance.page for block in document.blocks] == [1, 2, 3]
+
+
+def test_pdf_partial_conversion_preserves_failed_page_coverage(tmp_path: Path) -> None:
+    path = tmp_path / "partial.pdf"
+    _write_pdf(path)
+
+    document = DoclingPdfAdapter(converter=partial_pdf_conversion).convert(
+        resolve_local_source(path), limits=replace(DEFAULT_SOURCE_LIMITS, deadline_seconds=10)
+    )
+
+    assert document.coverage.unit == "page"
+    assert document.coverage.converted_units == (1, 3)
+    assert document.coverage.failed_units == (2,)
+    assert document.coverage.complete is False
+    assert document.diagnostics[0].unit_index == 2
+    with pytest.raises(Exception, match="frozen"):
+        document.coverage.failed_units = ()
+
+
+def test_pdf_block_and_table_keep_complete_multi_page_provenance(tmp_path: Path) -> None:
+    path = tmp_path / "multi-page.pdf"
+    _write_pdf(path)
+
+    document = DoclingPdfAdapter(converter=multi_page_table_conversion).convert(
+        resolve_local_source(path), limits=replace(DEFAULT_SOURCE_LIMITS, deadline_seconds=10)
+    )
+
+    assert document.blocks[0].provenance.page == 1
+    assert document.blocks[0].provenance.pages == (1, 2)
+    assert document.tables[0].provenance.pages == (1, 2)
 
 
 def test_pdf_rejects_encryption_and_page_limit_before_worker(tmp_path: Path) -> None:
@@ -278,7 +353,7 @@ def test_docling_converter_normalizes_tables_and_skips_empty_items(
 
     class TableItem:
         label = "table"
-        prov = [SimpleNamespace(page_no=2)]
+        prov = [SimpleNamespace(page_no=1), SimpleNamespace(page_no=2)]
 
         def export_to_markdown(self, *, doc: object) -> str:
             del doc
@@ -332,7 +407,8 @@ def test_docling_converter_normalizes_tables_and_skips_empty_items(
     assert conversion.blocks == (
         PdfConversionBlock(
             text="code | label\nQ1 | Age",
-            page=2,
+            page=1,
+            pages=(1, 2),
             table_rows=(("code", "label"), ("Q1", "Age")),
         ),
     )
@@ -560,6 +636,17 @@ def test_docling_helper_fallbacks_are_deterministic() -> None:
 
     assert docling_source._docling_page(SimpleNamespace(prov=[])) is None
     assert docling_source._docling_page(SimpleNamespace(prov=[SimpleNamespace(page_no=0)])) is None
+    assert docling_source._docling_pages(
+        SimpleNamespace(prov=[SimpleNamespace(page_no=1), SimpleNamespace(page_no=2)])
+    ) == (1, 2)
+    assert (
+        docling_source._docling_page_count(
+            SimpleNamespace(input=SimpleNamespace(page_count=3)),
+            SimpleNamespace(pages={1: object(), 3: object()}),
+            [PdfConversionBlock(text="Page three", page=3)],
+        )
+        == 3
+    )
     assert docling_source._docling_table_markdown(object(), object()) == ""
     assert docling_source._docling_table_markdown(PositionalExporter(), object()) == "fallback"
     assert docling_source._parse_markdown_table(["| --- | --- |", "| | |"]) == ()
@@ -608,7 +695,8 @@ def test_pdf_worker_terminates_lingering_process_and_handles_interrupts(
             return None
 
     class FakeProcess:
-        def __init__(self) -> None:
+        def __init__(self, *, alive: bool = True) -> None:
+            self.alive = alive
             self.terminated = False
             self.joined = False
 
@@ -616,7 +704,7 @@ def test_pdf_worker_terminates_lingering_process_and_handles_interrupts(
             return None
 
         def is_alive(self) -> bool:
-            return not self.terminated
+            return self.alive and not self.terminated
 
         def terminate(self) -> None:
             self.terminated = True
@@ -626,9 +714,9 @@ def test_pdf_worker_terminates_lingering_process_and_handles_interrupts(
             self.joined = True
 
     class FakeContext:
-        def __init__(self, payload: object) -> None:
+        def __init__(self, payload: object, *, process_alive: bool = True) -> None:
             self.queue = FakeQueue(payload)
-            self.process = FakeProcess()
+            self.process = FakeProcess(alive=process_alive)
 
         def Queue(self, *, maxsize: int) -> FakeQueue:
             assert maxsize == 1
@@ -664,3 +752,250 @@ def test_pdf_worker_terminates_lingering_process_and_handles_interrupts(
         )
     assert interrupted.process.terminated is True
     assert interrupted.process.joined is True
+
+    finished_without_output = FakeContext(Empty(), process_alive=False)
+    monkeypatch.setattr(docling_source, "get_context", lambda _method: finished_without_output)
+    with pytest.raises(SourceTimeoutError):
+        docling_source._run_pdf_worker(
+            fake_pdf_conversion,
+            tmp_path / "questionnaire.pdf",
+            artifacts_path=None,
+            timeout=1,
+        )
+    assert finished_without_output.process.terminated is False
+    assert finished_without_output.process.joined is True
+
+    finished_before_interrupt = FakeContext(KeyboardInterrupt(), process_alive=False)
+    monkeypatch.setattr(docling_source, "get_context", lambda _method: finished_before_interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        docling_source._run_pdf_worker(
+            fake_pdf_conversion,
+            tmp_path / "questionnaire.pdf",
+            artifacts_path=None,
+            timeout=1,
+        )
+    assert finished_before_interrupt.process.terminated is False
+    assert finished_before_interrupt.process.joined is True
+
+
+@pytest.mark.parametrize(
+    ("page", "pages", "message"),
+    [
+        (True, (), "positive integers"),
+        (None, (True,), "positive integers"),
+        (None, (0,), "positive integers"),
+        (None, (2, 1), "unique and ordered"),
+        (None, (1, 1), "unique and ordered"),
+        (2, (1, 2), "first provenance page"),
+    ],
+)
+def test_pdf_conversion_block_rejects_invalid_page_states(
+    page: int | None, pages: tuple[int, ...], message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        PdfConversionBlock(text="Question", page=page, pages=pages)
+
+
+def test_pdf_conversion_block_synchronizes_page_and_pages() -> None:
+    from_page = PdfConversionBlock(text="Question", page=2)
+    from_pages = PdfConversionBlock(text="Question", pages=(3, 4))
+
+    assert (from_page.page, from_page.pages) == (2, (2,))
+    assert (from_pages.page, from_pages.pages) == (3, (3, 4))
+
+
+def _install_docling_result(
+    monkeypatch: pytest.MonkeyPatch,
+    result: object,
+) -> None:
+    class FakePipelineOptions:
+        pass
+
+    class FakeDocumentConverter:
+        def __init__(self, **_kwargs: object) -> None:
+            return None
+
+        def convert(self, _path: str) -> object:
+            return result
+
+    modules = {
+        "docling.backend.pypdfium2_backend": SimpleNamespace(PyPdfiumDocumentBackend=object()),
+        "docling.datamodel.base_models": SimpleNamespace(InputFormat=SimpleNamespace(PDF="pdf")),
+        "docling.datamodel.pipeline_options": SimpleNamespace(
+            EasyOcrOptions=lambda **_kwargs: object(),
+            PdfPipelineOptions=FakePipelineOptions,
+        ),
+        "docling.document_converter": SimpleNamespace(
+            DocumentConverter=FakeDocumentConverter,
+            PdfFormatOption=lambda **_kwargs: object(),
+        ),
+    }
+    monkeypatch.setattr(docling_source, "import_module", modules.__getitem__)
+
+
+class EmptyDoclingDocument:
+    def __init__(self, page_count: int) -> None:
+        self.pages = {page: object() for page in range(1, page_count + 1)}
+
+    def iterate_items(self) -> tuple[tuple[object, int], ...]:
+        return ()
+
+
+@pytest.mark.parametrize(
+    ("errors", "status", "message"),
+    [
+        ((SimpleNamespace(page_no=2),), "partial", "invalid failed-page metadata"),
+        ((), SimpleNamespace(value="partial_success"), "incomplete without page coverage"),
+    ],
+)
+def test_docling_converter_rejects_invalid_partial_states(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    errors: tuple[object, ...],
+    status: object,
+    message: str,
+) -> None:
+    result = SimpleNamespace(
+        document=EmptyDoclingDocument(1),
+        input=SimpleNamespace(page_count=1),
+        errors=errors,
+        status=status,
+    )
+    _install_docling_result(monkeypatch, result)
+    artifacts = tmp_path / "ocr"
+    artifacts.mkdir()
+
+    with pytest.raises(SourceConversionError, match=message):
+        DoclingConverter()(str(tmp_path / "questionnaire.pdf"), str(artifacts))
+
+
+def test_docling_converter_builds_partial_coverage_from_all_error_page_forms(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    errors = (
+        SimpleNamespace(page_no=None, page=2, prov=()),
+        SimpleNamespace(page_no=None, page=None, prov=(SimpleNamespace(page_no=3),)),
+    )
+    result = SimpleNamespace(
+        document=EmptyDoclingDocument(3),
+        input=SimpleNamespace(page_count=3),
+        errors=errors,
+        status="partial",
+    )
+    _install_docling_result(monkeypatch, result)
+    artifacts = tmp_path / "ocr"
+    artifacts.mkdir()
+
+    conversion = DoclingConverter()(str(tmp_path / "questionnaire.pdf"), str(artifacts))
+
+    assert conversion.coverage == SourceCoverage(
+        unit="page",
+        total_units=3,
+        converted_units=(1,),
+        failed_units=(2, 3),
+    )
+    assert tuple(diagnostic.unit_index for diagnostic in conversion.diagnostics) == (2, 3)
+
+
+def test_docling_converter_preserves_a_zero_page_conversion_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    result = SimpleNamespace(
+        document=EmptyDoclingDocument(0),
+        input=SimpleNamespace(page_count=0),
+        errors=(),
+        status="success",
+    )
+    _install_docling_result(monkeypatch, result)
+    artifacts = tmp_path / "ocr"
+    artifacts.mkdir()
+
+    conversion = DoclingConverter()(str(tmp_path / "questionnaire.pdf"), str(artifacts))
+
+    assert conversion.page_count == 0
+    assert conversion.blocks == ()
+    assert conversion.coverage is None
+    assert conversion.diagnostics == ()
+
+
+@pytest.mark.parametrize(
+    ("result", "expected"),
+    [
+        (SimpleNamespace(errors=(object(),), status="success"), True),
+        (SimpleNamespace(errors=(), status=None), False),
+        (SimpleNamespace(errors=(), status=SimpleNamespace(value="failure")), True),
+        (SimpleNamespace(errors=(), status="success"), False),
+    ],
+)
+def test_docling_incomplete_status_detection(result: object, expected: bool) -> None:
+    assert docling_source._docling_conversion_incomplete(result) is expected
+
+
+def test_docling_page_count_accepts_sequence_pages_and_ignores_boolean_report() -> None:
+    result = SimpleNamespace(input=SimpleNamespace(page_count=True))
+    document = SimpleNamespace(pages=[object(), object()])
+
+    assert docling_source._docling_page_count(result, document, []) == 2
+
+
+@pytest.mark.parametrize(
+    ("conversion", "message"),
+    [
+        (
+            PdfConversion(
+                page_count=1,
+                blocks=(PdfConversionBlock(text="Question", page=2),),
+            ),
+            "provenance exceeds",
+        ),
+        (
+            PdfConversion(
+                page_count=1,
+                blocks=(),
+                coverage=SourceCoverage(),
+            ),
+            "coverage does not match",
+        ),
+        (
+            PdfConversion(
+                page_count=1,
+                blocks=(),
+                coverage=SourceCoverage(
+                    unit="page",
+                    total_units=2,
+                    converted_units=(1, 2),
+                ),
+            ),
+            "coverage does not match",
+        ),
+    ],
+)
+def test_pdf_adapter_rejects_inconsistent_conversion_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    conversion: PdfConversion,
+    message: str,
+) -> None:
+    path = tmp_path / "questionnaire.pdf"
+    _write_pdf(path)
+    monkeypatch.setattr(docling_source, "_run_pdf_worker", lambda *_args, **_kwargs: conversion)
+
+    with pytest.raises(SourceConversionError, match=message):
+        DoclingPdfAdapter(converter=fake_pdf_conversion).convert(
+            resolve_local_source(path), limits=DEFAULT_SOURCE_LIMITS
+        )
+
+
+def test_pdf_adapter_uses_document_coverage_when_no_pages_are_detected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "empty.pdf"
+    _write_pdf(path, b"1 0 obj <<>> endobj")
+    conversion = PdfConversion(page_count=0, blocks=())
+    monkeypatch.setattr(docling_source, "_run_pdf_worker", lambda *_args, **_kwargs: conversion)
+
+    document = DoclingPdfAdapter(converter=fake_pdf_conversion).convert(
+        resolve_local_source(path), limits=DEFAULT_SOURCE_LIMITS
+    )
+
+    assert document.coverage == SourceCoverage()

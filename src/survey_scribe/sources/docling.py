@@ -22,7 +22,9 @@ from survey_scribe.sources.base import (
     ResolvedSource,
     SourceBlock,
     SourceConversionError,
+    SourceCoverage,
     SourceDependencyError,
+    SourceDiagnostic,
     SourceDocument,
     SourceError,
     SourceFormatError,
@@ -47,8 +49,23 @@ class PdfConversionBlock:
     """Serializable local Docling output returned through the worker boundary."""
 
     text: str
-    page: int | None
+    page: int | None = None
+    pages: tuple[int, ...] = ()
     table_rows: tuple[tuple[str, ...], ...] = ()
+
+    def __post_init__(self) -> None:
+        pages = self.pages
+        if self.page is not None and not pages:
+            pages = (self.page,)
+            object.__setattr__(self, "pages", pages)
+        elif self.page is None and pages:
+            object.__setattr__(self, "page", pages[0])
+        if any(isinstance(page, bool) or page < 1 for page in pages):
+            raise ValueError("PDF block pages must be positive integers")
+        if tuple(sorted(set(pages))) != pages:
+            raise ValueError("PDF block pages must be unique and ordered")
+        if pages and self.page != pages[0]:
+            raise ValueError("PDF block page must be its first provenance page")
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,6 +74,8 @@ class PdfConversion:
 
     page_count: int
     blocks: tuple[PdfConversionBlock, ...]
+    coverage: SourceCoverage | None = None
+    diagnostics: tuple[SourceDiagnostic, ...] = ()
 
 
 class PdfConverter(Protocol):
@@ -105,22 +124,58 @@ class DoclingConverter:
         document = result.document
         blocks: list[PdfConversionBlock] = []
         for item, _level in document.iterate_items():
-            page = _docling_page(item)
+            pages = _docling_pages(item)
+            page = pages[0] if pages else None
             label = str(getattr(item, "label", "")).lower()
             if "table" in label:
                 table_text = _docling_table_markdown(item, document)
                 rows = _parse_markdown_table(table_text.splitlines())
                 if rows:
                     blocks.append(
-                        PdfConversionBlock(text=render_table(rows), page=page, table_rows=rows)
+                        PdfConversionBlock(
+                            text=render_table(rows),
+                            page=page,
+                            pages=pages,
+                            table_rows=rows,
+                        )
                     )
                 continue
             text = _normalize_text(str(getattr(item, "text", "")))
             if text:
-                blocks.append(PdfConversionBlock(text=text, page=page))
-        pages = getattr(document, "pages", ())
-        page_count = len(pages) if pages else max((block.page or 0 for block in blocks), default=0)
-        return PdfConversion(page_count=page_count, blocks=tuple(blocks))
+                blocks.append(PdfConversionBlock(text=text, page=page, pages=pages))
+        page_count = _docling_page_count(result, document, blocks)
+        failed_pages = _docling_failed_pages(result)
+        if failed_pages and (page_count == 0 or failed_pages[-1] > page_count):
+            raise SourceConversionError("PDF conversion returned invalid failed-page metadata")
+        if _docling_conversion_incomplete(result) and not failed_pages:
+            raise SourceConversionError("PDF conversion was incomplete without page coverage")
+        coverage = None
+        diagnostics: tuple[SourceDiagnostic, ...] = ()
+        if page_count:
+            failed = set(failed_pages)
+            coverage = SourceCoverage(
+                unit="page",
+                total_units=page_count,
+                converted_units=tuple(
+                    page for page in range(1, page_count + 1) if page not in failed
+                ),
+                failed_units=failed_pages,
+            )
+            diagnostics = tuple(
+                SourceDiagnostic(
+                    code="PDF_PAGE_CONVERSION_FAILED",
+                    message="PDF page conversion failed",
+                    unit="page",
+                    unit_index=page,
+                )
+                for page in failed_pages
+            )
+        return PdfConversion(
+            page_count=page_count,
+            blocks=tuple(blocks),
+            coverage=coverage,
+            diagnostics=diagnostics,
+        )
 
 
 class DoclingPdfAdapter:
@@ -154,9 +209,15 @@ class DoclingPdfAdapter:
         blocks: list[SourceBlock] = []
         table_index = 0
         for converted in conversion.blocks:
-            if converted.page is not None and converted.page > limits.max_pages:
+            if converted.pages and converted.pages[-1] > limits.max_pages:
                 raise SourceLimitError("max_pages", "PDF block exceeds the configured page limit")
-            provenance = SourceProvenance(source_name=source.primary.name, page=converted.page)
+            if converted.pages and converted.pages[-1] > effective_page_count:
+                raise SourceConversionError("PDF block provenance exceeds the converted page count")
+            provenance = SourceProvenance(
+                source_name=source.primary.name,
+                page=converted.page,
+                pages=converted.pages,
+            )
             table: SourceTable | None = None
             kind = "text"
             if converted.table_rows:
@@ -167,7 +228,11 @@ class DoclingPdfAdapter:
                     provenance=provenance,
                 )
                 kind = "table"
-            text = converted.text.strip()
+            text = (
+                render_table(converted.table_rows)
+                if converted.table_rows
+                else converted.text.strip()
+            )
             if not text:
                 continue
             blocks.append(
@@ -180,10 +245,24 @@ class DoclingPdfAdapter:
                     table=table,
                 )
             )
+        coverage = conversion.coverage
+        if coverage is not None:
+            if coverage.unit != "page" or coverage.total_units != effective_page_count:
+                raise SourceConversionError("PDF conversion coverage does not match its page count")
+        elif effective_page_count:
+            coverage = SourceCoverage(
+                unit="page",
+                total_units=effective_page_count,
+                converted_units=tuple(range(1, effective_page_count + 1)),
+            )
+        else:
+            coverage = SourceCoverage()
         return SourceDocument(
             source_name=source.primary.name,
             media_type="application/pdf",
             blocks=tuple(blocks),
+            coverage=coverage,
+            diagnostics=conversion.diagnostics,
         )
 
 
@@ -633,11 +712,74 @@ def _parse_markdown_table(lines: list[str]) -> tuple[tuple[str, ...], ...]:
 
 
 def _docling_page(item: object) -> int | None:
+    pages = _docling_pages(item)
+    return pages[0] if pages else None
+
+
+def _docling_pages(item: object) -> tuple[int, ...]:
     provenance = getattr(item, "prov", ()) or ()
-    if not provenance:
-        return None
-    page = getattr(provenance[0], "page_no", None)
-    return page if isinstance(page, int) and page >= 1 else None
+    pages = {
+        page
+        for origin in provenance
+        if isinstance((page := getattr(origin, "page_no", None)), int)
+        and not isinstance(page, bool)
+        and page >= 1
+    }
+    return tuple(sorted(pages))
+
+
+def _docling_failed_pages(result: object) -> tuple[int, ...]:
+    failed: set[int] = set()
+    for error in getattr(result, "errors", ()) or ():
+        page = getattr(error, "page_no", None)
+        if page is None:
+            page = getattr(error, "page", None)
+        if isinstance(page, int) and not isinstance(page, bool) and page >= 1:
+            failed.add(page)
+            continue
+        failed.update(_docling_pages(error))
+    return tuple(sorted(failed))
+
+
+def _docling_page_count(
+    result: object,
+    document: object,
+    blocks: list[PdfConversionBlock],
+) -> int:
+    candidates = [max((page for block in blocks for page in block.pages), default=0)]
+    pages = getattr(document, "pages", ()) or ()
+    keys = getattr(pages, "keys", None)
+    if callable(keys):
+        page_keys: Any = keys()
+        candidates.append(
+            max(
+                (
+                    page
+                    for page in page_keys
+                    if isinstance(page, int) and not isinstance(page, bool) and page >= 1
+                ),
+                default=0,
+            )
+        )
+    else:
+        candidates.append(len(pages))
+    source_input = getattr(result, "input", None)
+    reported = getattr(source_input, "page_count", 0)
+    if isinstance(reported, int) and not isinstance(reported, bool) and reported >= 0:
+        candidates.append(reported)
+    return max(candidates)
+
+
+def _docling_conversion_incomplete(result: object) -> bool:
+    errors = getattr(result, "errors", ()) or ()
+    if errors:
+        return True
+    status = getattr(result, "status", None)
+    if status is None:
+        return False
+    value = getattr(status, "value", status)
+    normalized = str(value).lower()
+    return any(marker in normalized for marker in ("partial", "failure", "failed", "error"))
 
 
 def _docling_table_markdown(item: object, document: object) -> str:

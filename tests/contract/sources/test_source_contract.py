@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import zipfile
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
-from typing import IO
+from typing import IO, Any
 
 import pytest
 
@@ -14,9 +15,12 @@ from survey_scribe.sources import base as source_base
 from survey_scribe.sources import registry as source_registry
 from survey_scribe.sources.base import (
     DEFAULT_SOURCE_LIMITS,
+    ResolvedSource,
     SourceBlock,
     SourceBundle,
     SourceConversionError,
+    SourceCoverage,
+    SourceDiagnostic,
     SourceDocument,
     SourceFormatError,
     SourceInputError,
@@ -29,6 +33,7 @@ from survey_scribe.sources.base import (
     inspect_zip_archive,
     read_utf8_text,
     resolve_local_source,
+    snapshot_resolved_source,
 )
 from survey_scribe.sources.registry import SourceRegistry
 
@@ -486,3 +491,216 @@ def test_registry_rejects_non_zip_mismatch_zip_errors_and_wrong_container(
         archive.writestr("xl/workbook.xml", "<workbook/>")
     with pytest.raises(SourceFormatError, match="does not match"):
         source_registry._verify_signature(workbook, ".docx")
+
+
+@pytest.mark.parametrize(
+    ("values", "message"),
+    [
+        ({"converted_units": (0,)}, "positive integers"),
+        ({"converted_units": (True,)}, "positive integers"),
+        ({"total_units": 2, "converted_units": (2, 1)}, "unique and ordered"),
+        ({"total_units": 2, "converted_units": (1, 1)}, "unique and ordered"),
+        ({"converted_units": (1,), "failed_units": (1,)}, "must not overlap"),
+        ({"total_units": 2, "converted_units": (1,)}, "every source unit"),
+    ],
+)
+def test_source_coverage_rejects_invalid_accounting_states(
+    values: dict[str, object], message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        SourceCoverage.model_validate(values)
+
+
+@pytest.mark.parametrize(
+    ("values", "message"),
+    [
+        ({"pages": (True,)}, "positive integers"),
+        ({"pages": (0,)}, "positive integers"),
+        ({"pages": (2, 1)}, "unique and ordered"),
+        ({"pages": (1, 1)}, "unique and ordered"),
+        ({"page": 2, "pages": (1, 2)}, "first provenance page"),
+    ],
+)
+def test_source_provenance_rejects_invalid_page_states(
+    values: dict[str, object], message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        SourceProvenance.model_validate({"source_name": "questionnaire.pdf", **values})
+
+
+def test_source_provenance_synchronizes_legacy_page_and_complete_pages() -> None:
+    from_page = SourceProvenance(source_name="questionnaire.pdf", page=2)
+    from_pages = SourceProvenance(source_name="questionnaire.pdf", pages=(3, 4))
+
+    assert (from_page.page, from_page.pages) == (2, (2,))
+    assert (from_pages.page, from_pages.pages) == (3, (3, 4))
+
+
+@pytest.mark.parametrize(
+    ("values", "message"),
+    [
+        ({"unit": "page"}, "provided together"),
+        ({"unit_index": 1}, "provided together"),
+    ],
+)
+def test_source_diagnostic_rejects_partial_unit_references(
+    values: dict[str, object], message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        SourceDiagnostic.model_validate({"code": "FAILED", "message": "failed", **values})
+
+
+def test_failed_coverage_requires_a_matching_error_diagnostic() -> None:
+    coverage = SourceCoverage(
+        unit="page",
+        total_units=2,
+        converted_units=(1,),
+        failed_units=(2,),
+    )
+
+    with pytest.raises(ValueError, match="failed source unit"):
+        SourceDocument(
+            source_name="questionnaire.pdf",
+            media_type="application/pdf",
+            blocks=(),
+            coverage=coverage,
+            diagnostics=(
+                SourceDiagnostic(
+                    code="WARNING",
+                    message="not an error",
+                    severity="warning",
+                    unit="page",
+                    unit_index=2,
+                ),
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    "digest",
+    ["", "0" * 63, "0" * 65, "g" * 64, "A" * 64],
+)
+def test_source_document_rejects_invalid_snapshot_digests(digest: str) -> None:
+    with pytest.raises(ValueError, match="snapshot_sha256"):
+        SourceDocument(
+            source_name="questionnaire.txt",
+            media_type="text/plain",
+            blocks=(),
+            snapshot_sha256=digest,
+        )
+
+
+def test_private_snapshot_hashes_primary_and_companions(tmp_path: Path) -> None:
+    primary = tmp_path / "questionnaire.txt"
+    companion = tmp_path / "labels.txt"
+    primary.write_text("Question", encoding="utf-8")
+    companion.write_text("Labels", encoding="utf-8")
+    resolved = resolve_local_source(
+        SourceBundle(root=tmp_path, primary=primary, companions=(companion,))
+    )
+
+    with snapshot_resolved_source(resolved) as snapshot:
+        snapshot_primary = snapshot.primary
+        snapshot_companion = snapshot.companions[0]
+        assert snapshot_primary.read_text(encoding="utf-8") == "Question"
+        assert snapshot_companion.read_text(encoding="utf-8") == "Labels"
+        assert snapshot.primary_sha256 == hashlib.sha256(b"Question").hexdigest()
+        assert snapshot.companion_sha256 == (hashlib.sha256(b"Labels").hexdigest(),)
+
+    assert snapshot_primary.exists() is False
+    assert snapshot_companion.exists() is False
+
+
+def test_snapshot_uses_filename_for_a_source_outside_declared_root(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    primary = tmp_path / "questionnaire.txt"
+    primary.write_text("Question", encoding="utf-8")
+    resolved = ResolvedSource(root=root.resolve(), primary=primary.resolve())
+
+    with snapshot_resolved_source(resolved) as snapshot:
+        assert snapshot.primary.name == primary.name
+        assert snapshot.primary.parent == snapshot.root
+
+
+def test_snapshot_rechecks_size_and_detects_source_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    primary = tmp_path / "questionnaire.txt"
+    primary.write_text("Question", encoding="utf-8")
+    resolved = resolve_local_source(primary)
+
+    with (
+        pytest.raises(SourceLimitError, match="byte limit"),
+        snapshot_resolved_source(
+            resolved,
+            limits=replace(DEFAULT_SOURCE_LIMITS, max_source_bytes=7),
+        ),
+    ):
+        pytest.fail("an oversized snapshot must not be yielded")
+
+    original_fstat = source_base.os.fstat
+    calls = 0
+
+    def changed_fstat(file_descriptor: int) -> object:
+        nonlocal calls
+        result = original_fstat(file_descriptor)
+        calls += 1
+        if calls == 2:
+            return SimpleNamespace(
+                st_size=result.st_size,
+                st_mtime_ns=result.st_mtime_ns + 1,
+            )
+        return result
+
+    monkeypatch.setattr(source_base.os, "fstat", changed_fstat)
+    with (
+        pytest.raises(SourceInputError, match="changed"),
+        snapshot_resolved_source(resolved),
+    ):
+        pytest.fail("a changed snapshot must not be yielded")
+
+
+def test_snapshot_copy_io_errors_are_typed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    primary = tmp_path / "questionnaire.txt"
+    primary.write_text("Question", encoding="utf-8")
+    resolved = resolve_local_source(primary)
+    original_open = Path.open
+
+    def fail_source_open(
+        path: Path,
+        mode: str = "r",
+        buffering: int = -1,
+        encoding: str | None = None,
+        errors: str | None = None,
+        newline: str | None = None,
+    ) -> IO[Any]:
+        if path == primary.resolve():
+            raise OSError("unreadable")
+        return original_open(path, mode, buffering, encoding, errors, newline)
+
+    monkeypatch.setattr(Path, "open", fail_source_open)
+
+    with (
+        pytest.raises(SourceInputError, match="copied"),
+        snapshot_resolved_source(resolved),
+    ):
+        pytest.fail("an unreadable snapshot must not be yielded")
+
+
+def test_registry_signature_edges_include_xlsx_and_non_container_formats(tmp_path: Path) -> None:
+    pdf = tmp_path / "questionnaire.pdf"
+    pdf.write_bytes(b"%PDF-")
+    workbook = tmp_path / "questionnaire.xlsx"
+    with zipfile.ZipFile(workbook, "w") as archive:
+        archive.writestr("XL\\WORKBOOK.XML", "<workbook/>")
+
+    source_registry._verify_signature(pdf, ".pdf")
+    source_registry._verify_signature(workbook, ".xlsx")
+    source_registry._verify_signature(tmp_path / "not-opened.txt", ".txt")
+
+    word_package = tmp_path / "questionnaire.xlsx"
+    with zipfile.ZipFile(word_package, "w") as archive:
+        archive.writestr("word/document.xml", "<document/>")
+    with pytest.raises(SourceFormatError, match="does not match"):
+        source_registry._verify_signature(word_package, ".xlsx")
