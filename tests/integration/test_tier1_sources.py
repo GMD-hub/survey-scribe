@@ -107,11 +107,16 @@ def test_textual_tier1_formats_are_deterministic(
 
 
 def test_docx_pdf_and_xlsx_integrate_through_normalized_models(tmp_path: Path) -> None:
+    import pypdfium2 as pdfium
+
     docx = tmp_path / "questionnaire.docx"
     pdf = tmp_path / "questionnaire.pdf"
     xlsx = tmp_path / "questionnaire.xlsx"
     _write_docx(docx)
-    pdf.write_bytes(b"%PDF-1.7\n1 0 obj <</Type /Page>> endobj\n%%EOF")
+    pdf_document = pdfium.PdfDocument.new()
+    pdf_document.new_page(612, 792)
+    pdf_document.save(pdf)
+    pdf_document.close()
     _write_xlsx(xlsx)
 
     docx_document = SourceRegistry.default().convert(docx)

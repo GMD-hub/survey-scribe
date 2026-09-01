@@ -253,6 +253,8 @@ def _native_items(
         if name in names:
             raise SourceFormatError("XLSForm survey item names must be unique")
         names.add(name)
+        if normalized_type == "calculate":
+            continue
         local_id = f"xlsform:item:{len(items):06d}"
         parent = stack[-1] if stack else None
         kind = (

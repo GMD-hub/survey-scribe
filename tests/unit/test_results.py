@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from math import inf, nan
 from pathlib import Path
 from typing import Any, cast
 
@@ -67,6 +68,37 @@ def test_caller_owned_output_can_remain_mutable_and_snapshot_is_detached() -> No
     assert result.output is output
     assert output.values == [1, 2]
     assert snapshot["output"]["values"] == [1]
+
+
+def test_diagnostic_details_are_detached_finite_json_and_recursively_immutable() -> None:
+    source: dict[str, Any] = {"nested": {"values": [1, 2.5, True, None, "text"]}}
+
+    diagnostic = Diagnostic(code="TEST", message="safe", details=source)
+    source["nested"]["values"].append("changed")
+
+    assert diagnostic.details == {"nested": {"values": (1, 2.5, True, None, "text")}}
+    assert diagnostic.model_dump(mode="json")["details"] == {
+        "nested": {"values": [1, 2.5, True, None, "text"]}
+    }
+    with pytest.raises(TypeError, match="immutable"):
+        diagnostic.details["new"] = "value"
+    with pytest.raises(TypeError, match="immutable"):
+        diagnostic.details["nested"]["values"] += (3,)
+
+
+@pytest.mark.parametrize(
+    "details",
+    [
+        {1: "non-string key"},
+        {"value": nan},
+        {"value": inf},
+        {"value": {"not", "json"}},
+        {"value": object()},
+    ],
+)
+def test_diagnostic_details_reject_non_json_or_nonfinite_values(details: object) -> None:
+    with pytest.raises(ValidationError):
+        Diagnostic.model_validate({"code": "TEST", "message": "safe", "details": details})
 
 
 @pytest.mark.parametrize(

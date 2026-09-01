@@ -68,6 +68,12 @@ def test_source_limit_defaults_match_the_normative_contract() -> None:
         max_pages=2_000,
         max_archive_expanded_bytes=1024 * 1024 * 1024,
         max_archive_ratio=100.0,
+        max_archive_entries=10_000,
+        max_archive_filename_chars=512,
+        max_archive_path_depth=20,
+        max_xml_part_bytes=64 * 1024 * 1024,
+        max_xml_elements=2_000_000,
+        max_xml_depth=256,
         max_cells=2_000_000,
         max_companions=100,
         deadline_seconds=30 * 60.0,
@@ -424,7 +430,8 @@ def test_archive_inspection_rejects_invalid_and_encrypted_zip(
         inspect_zip_archive(invalid, DEFAULT_SOURCE_LIMITS)
 
     archive_path = tmp_path / "encrypted.docx"
-    archive_path.write_bytes(b"archive")
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("safe.xml", "<x/>")
 
     class FakeArchive:
         def __enter__(self) -> FakeArchive:
@@ -438,6 +445,103 @@ def test_archive_inspection_rejects_invalid_and_encrypted_zip(
 
     monkeypatch.setattr(source_base.zipfile, "ZipFile", lambda _path: FakeArchive())
     with pytest.raises(SourceSecurityError, match="Encrypted"):
+        inspect_zip_archive(archive_path, DEFAULT_SOURCE_LIMITS)
+
+
+@pytest.mark.parametrize(
+    ("entry_name", "limit_changes", "expected_limit"),
+    [
+        ("a/b/c/file.xml", {"max_archive_path_depth": 3}, "max_archive_path_depth"),
+        ("very-long-name.xml", {"max_archive_filename_chars": 8}, "max_archive_filename_chars"),
+    ],
+)
+def test_archive_inspection_enforces_name_and_depth_limits(
+    tmp_path: Path,
+    entry_name: str,
+    limit_changes: dict[str, int],
+    expected_limit: str,
+) -> None:
+    archive_path = tmp_path / "bounded.docx"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr(entry_name, "<x/>")
+
+    with pytest.raises(SourceLimitError) as raised:
+        inspect_zip_archive(
+            archive_path,
+            replace(DEFAULT_SOURCE_LIMITS, **limit_changes),
+        )
+
+    assert raised.value.limit == expected_limit
+
+
+def test_archive_inspection_enforces_entry_count_limit(tmp_path: Path) -> None:
+    archive_path = tmp_path / "many-entries.docx"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        for index in range(3):
+            archive.writestr(f"entry-{index}.xml", "<x/>")
+
+    with pytest.raises(SourceLimitError) as raised:
+        inspect_zip_archive(
+            archive_path,
+            replace(DEFAULT_SOURCE_LIMITS, max_archive_entries=2),
+        )
+
+    assert raised.value.limit == "max_archive_entries"
+
+
+def test_archive_preflight_rejects_zip64_missing_and_central_directory_mismatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    zip64 = tmp_path / "zip64.docx"
+    end_record = bytearray(22)
+    end_record[:4] = b"PK\x05\x06"
+    end_record[10:12] = b"\xff\xff"
+    zip64.write_bytes(end_record)
+    with pytest.raises(SourceLimitError) as zip64_error:
+        inspect_zip_archive(zip64, DEFAULT_SOURCE_LIMITS)
+    assert zip64_error.value.limit == "max_archive_entries"
+
+    with pytest.raises(SourceFormatError, match="valid ZIP"):
+        inspect_zip_archive(tmp_path / "missing.docx", DEFAULT_SOURCE_LIMITS)
+
+    archive_path = tmp_path / "mismatch.docx"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("one.xml", "<x/>")
+
+    class MismatchedArchive:
+        def __enter__(self) -> MismatchedArchive:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def infolist(self) -> list[object]:
+            return [
+                SimpleNamespace(filename="one.xml", flag_bits=0, file_size=4),
+                SimpleNamespace(filename="two.xml", flag_bits=0, file_size=4),
+            ]
+
+    monkeypatch.setattr(source_base.zipfile, "ZipFile", lambda _path: MismatchedArchive())
+    with pytest.raises(SourceLimitError) as mismatch:
+        inspect_zip_archive(archive_path, DEFAULT_SOURCE_LIMITS)
+    assert mismatch.value.limit == "max_archive_entries"
+
+
+def test_archive_wraps_zipfile_failure_after_valid_eocd(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    archive_path = tmp_path / "broken-central.docx"
+    with zipfile.ZipFile(archive_path, "w"):
+        pass
+    monkeypatch.setattr(
+        source_base.zipfile,
+        "ZipFile",
+        lambda _path: (_ for _ in ()).throw(zipfile.BadZipFile()),
+    )
+
+    with pytest.raises(SourceFormatError, match="valid ZIP"):
         inspect_zip_archive(archive_path, DEFAULT_SOURCE_LIMITS)
 
 

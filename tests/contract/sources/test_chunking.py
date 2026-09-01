@@ -140,14 +140,17 @@ def test_repeated_row_inventory_tracks_each_actual_row_origin() -> None:
 
 @pytest.mark.parametrize(
     ("max_tokens", "overlap_tokens"),
-    [(0, 0), (5, -1), (5, 5)],
+    [(0, 0), (5, -1), (5, 5), (True, 0), (5, False), (1.5, 0), (5, 1.5)],
 )
-def test_chunking_rejects_invalid_token_budgets(max_tokens: int, overlap_tokens: int) -> None:
+def test_chunking_rejects_invalid_token_budgets(
+    max_tokens: object,
+    overlap_tokens: object,
+) -> None:
     with pytest.raises(ValueError):
         chunk_document(
             _document(),
-            max_tokens=max_tokens,
-            overlap_tokens=overlap_tokens,
+            max_tokens=max_tokens,  # type: ignore[arg-type]
+            overlap_tokens=overlap_tokens,  # type: ignore[arg-type]
             estimator=WordEstimator(),
         )
 

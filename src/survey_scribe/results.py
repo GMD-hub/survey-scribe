@@ -2,14 +2,24 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from copy import deepcopy
 from enum import StrEnum
+from math import isfinite
 from os import PathLike
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Generic, Literal, TypeVar
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, StrictStr, computed_field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictStr,
+    computed_field,
+    field_validator,
+    model_validator,
+)
 
 T = TypeVar("T")
 
@@ -50,6 +60,43 @@ class DiagnosticCode(StrEnum):
     block_failed = "BLOCK_FAILED"
 
 
+class _FrozenJsonDict(dict[str, Any]):
+    """JSON-serializable mapping that rejects mutation after construction."""
+
+    @staticmethod
+    def _immutable(*_args: object, **_kwargs: object) -> None:
+        raise TypeError("diagnostic details are immutable")
+
+    __setitem__ = _immutable  # type: ignore[assignment]
+    __delitem__ = _immutable  # type: ignore[assignment]
+    __ior__ = _immutable  # type: ignore[assignment]
+    clear = _immutable  # type: ignore[assignment]
+    pop = _immutable  # type: ignore[assignment]
+    popitem = _immutable  # type: ignore[assignment]
+    setdefault = _immutable  # type: ignore[assignment]
+    update = _immutable  # type: ignore[assignment]
+
+
+def _freeze_json_mapping(value: Mapping[str, Any]) -> dict[str, Any]:
+    if any(not isinstance(key, str) for key in value):
+        raise ValueError("diagnostic detail keys must be strings")
+    return _FrozenJsonDict({key: _freeze_json_value(item) for key, item in value.items()})
+
+
+def _freeze_json_value(value: Any) -> Any:
+    if value is None or isinstance(value, str | bool | int):
+        return value
+    if isinstance(value, float):
+        if not isfinite(value):
+            raise ValueError("diagnostic detail numbers must be finite")
+        return value
+    if isinstance(value, Mapping):
+        return _freeze_json_mapping(value)
+    if isinstance(value, list | tuple):
+        return tuple(_freeze_json_value(item) for item in value)
+    raise ValueError("diagnostic details must contain only JSON-compatible values")
+
+
 class Diagnostic(BaseModel):
     """One stable diagnostic without raw provider response data."""
 
@@ -58,7 +105,13 @@ class Diagnostic(BaseModel):
     code: DiagnosticCode | str
     message: str
     severity: DiagnosticSeverity = DiagnosticSeverity.warning
-    details: dict[str, Any] = Field(default_factory=dict)
+    details: dict[StrictStr, Any] = Field(default_factory=dict)
+
+    @field_validator("details", mode="after")
+    @classmethod
+    def freeze_json_details(cls, value: dict[str, Any]) -> dict[str, Any]:
+        """Detach and recursively freeze finite JSON-compatible details."""
+        return _freeze_json_mapping(value)
 
 
 class FailedBlock(BaseModel):

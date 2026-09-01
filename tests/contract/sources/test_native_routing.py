@@ -30,6 +30,7 @@ from survey_scribe.routing.native import (
 from survey_scribe.sources.base import (
     ResolvedSource,
     SourceBlock,
+    SourceBundle,
     SourceDocument,
     SourceLimits,
     SourceProvenance,
@@ -167,6 +168,42 @@ def test_non_native_adapter_returns_the_same_document_and_no_native_semantics(
 
     assert converted.native is None
     assert converted.document.snapshot_sha256 == converted.source_binding.snapshot_sha256
+
+
+def test_routed_source_binding_frames_ordered_primary_and_companion_digests(
+    tmp_path: Path,
+) -> None:
+    primary = tmp_path / "questionnaire.native"
+    first = tmp_path / "first.csv"
+    renamed = tmp_path / "renamed.csv"
+    second = tmp_path / "second.csv"
+    primary.write_text("Q1 age", encoding="utf-8")
+    first.write_text("first", encoding="utf-8")
+    renamed.write_text("first", encoding="utf-8")
+    second.write_text("second", encoding="utf-8")
+    registry = SourceRegistry({".native": SyntheticNativeAdapter()})
+
+    def digest(*companions: Path) -> str:
+        converted = registry.convert_with_native(
+            SourceBundle(
+                root=tmp_path,
+                primary=Path(primary.name),
+                companions=tuple(Path(item.name) for item in companions),
+            ),
+            _svis(primary.name),
+        )
+        assert converted.document.snapshot_sha256 == converted.source_binding.snapshot_sha256
+        return converted.source_binding.snapshot_sha256
+
+    no_companion = digest()
+    first_only = digest(first)
+    renamed_only = digest(renamed)
+    both = digest(first, second)
+    reordered = digest(second, first)
+    first.write_text("first changed", encoding="utf-8")
+    mutated = digest(first, second)
+
+    assert len({no_companion, first_only, renamed_only, both, reordered, mutated}) == 6
 
 
 def _reference(name: str = "Q1") -> ItemReference:

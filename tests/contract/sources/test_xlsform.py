@@ -10,7 +10,7 @@ import pytest
 
 from survey_scribe.models.svis import DataType, SurveySVIS, SurveyVariable
 from survey_scribe.routing.contracts import ConditionOperator, NodeKind
-from survey_scribe.routing.native import NativeRoutingItem
+from survey_scribe.routing.native import NativeRoutingItem, prepare_native_routing
 from survey_scribe.sources.base import (
     DEFAULT_SOURCE_LIMITS,
     SourceBundle,
@@ -134,10 +134,8 @@ def test_real_xlsform_preserves_sheets_groups_repeat_and_typed_relevance(
         ],
     )
 
-    converted = SourceRegistry.default().convert_with_native(
-        path,
-        _svis(path, "consent", "age", "adult"),
-    )
+    svis = _svis(path, "consent", "age", "adult")
+    converted = SourceRegistry.default().convert_with_native(path, svis)
 
     assert converted.native is not None
     native = converted.native
@@ -173,6 +171,14 @@ def test_real_xlsform_preserves_sheets_groups_repeat_and_typed_relevance(
         if record.collection == "survey" and dict(record.values).get("name") == "adult"
     )
     assert dict(calculation.values)["calculation"] == "if(${age} >= 18, 1, 0)"
+    assert all(item.raw_reference != "adult" for item in native.items)
+    local_ids = {item.local_id for item in native.items}
+    assert all(
+        transition.source_local_id in local_ids and transition.target_local_id in local_ids
+        for transition in native.transitions
+    )
+    prepared = prepare_native_routing(native, converted.document, svis)
+    assert prepared.inventory.variable_node_ids[-1] is None
 
 
 def test_unsupported_function_and_arithmetic_stay_typed_and_opaque(tmp_path: Path) -> None:

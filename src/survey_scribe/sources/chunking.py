@@ -130,6 +130,10 @@ def chunk_document(
         ValueError: ``max_tokens`` is below one, or ``overlap_tokens`` is negative
             or not smaller than ``max_tokens``.
     """
+    if isinstance(max_tokens, bool) or not isinstance(max_tokens, int):
+        raise ValueError("max_tokens must be an integer")
+    if isinstance(overlap_tokens, bool) or not isinstance(overlap_tokens, int):
+        raise ValueError("overlap_tokens must be an integer")
     if max_tokens < 1:
         raise ValueError("max_tokens must be at least 1")
     if overlap_tokens < 0 or overlap_tokens >= max_tokens:

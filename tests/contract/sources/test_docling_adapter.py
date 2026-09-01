@@ -6,11 +6,12 @@ import os
 import socket
 import time
 import zipfile
+from contextlib import nullcontext
 from dataclasses import replace
 from pathlib import Path
 from queue import Empty
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -56,6 +57,12 @@ def slow_pdf_conversion(path: str, artifacts_path: str | None) -> PdfConversion:
     del path, artifacts_path
     time.sleep(30)
     return PdfConversion(page_count=1, blocks=())
+
+
+def crash_pdf_conversion(path: str, artifacts_path: str | None) -> PdfConversion:
+    """Exit without queue output so parent sentinel handling is exercised."""
+    del path, artifacts_path
+    os._exit(87)
 
 
 def network_pdf_conversion(path: str, artifacts_path: str | None) -> PdfConversion:
@@ -146,8 +153,16 @@ def multi_page_table_conversion(path: str, artifacts_path: str | None) -> PdfCon
     )
 
 
-def _write_pdf(path: Path, body: bytes = b"1 0 obj <</Type /Page>> endobj") -> None:
-    path.write_bytes(b"%PDF-1.7\n" + body + b"\n%%EOF")
+def _write_pdf(path: Path, page_count: int = 1) -> None:
+    import pypdfium2 as pdfium
+
+    document = pdfium.PdfDocument.new()
+    try:
+        for _ in range(page_count):
+            document.new_page(612, 792)
+        document.save(path)
+    finally:
+        document.close()
 
 
 def test_pdf_fake_preserves_preamble_scanned_content_and_page_provenance(tmp_path: Path) -> None:
@@ -197,15 +212,26 @@ def test_pdf_block_and_table_keep_complete_multi_page_provenance(tmp_path: Path)
 
 
 def test_pdf_rejects_encryption_and_page_limit_before_worker(tmp_path: Path) -> None:
+    import fitz
+
+    fitz_api = cast(Any, fitz)
     encrypted = tmp_path / "encrypted.pdf"
-    _write_pdf(encrypted, b"/Encrypt 1 0 R")
+    encrypted_document = fitz_api.open()
+    encrypted_document.new_page()
+    encrypted_document.save(
+        encrypted,
+        encryption=fitz_api.PDF_ENCRYPT_AES_256,
+        owner_pw="owner-secret",
+        user_pw="user-secret",
+    )
+    encrypted_document.close()
     with pytest.raises(SourceSecurityError, match="encrypted"):
         DoclingPdfAdapter(converter=fake_pdf_conversion).convert(
             resolve_local_source(encrypted), limits=DEFAULT_SOURCE_LIMITS
         )
 
     too_many = tmp_path / "many-pages.pdf"
-    _write_pdf(too_many, b"\n".join(b"<</Type /Page>>" for _ in range(3)))
+    _write_pdf(too_many, 3)
     with pytest.raises(SourceLimitError) as raised:
         DoclingPdfAdapter(converter=fake_pdf_conversion).convert(
             resolve_local_source(too_many),
@@ -213,10 +239,25 @@ def test_pdf_rejects_encryption_and_page_limit_before_worker(tmp_path: Path) -> 
         )
     assert raised.value.limit == "max_pages"
 
+    token_only = tmp_path / "token-only.pdf"
+    token_document = fitz_api.open()
+    page = token_document.new_page()
+    page.insert_text((72, 72), "/Encrypt is questionnaire text, not PDF security metadata")
+    token_document.save(token_only)
+    token_document.close()
+    converted = DoclingPdfAdapter(converter=fake_pdf_conversion).convert(
+        resolve_local_source(token_only), limits=DEFAULT_SOURCE_LIMITS
+    )
+    assert converted.blocks
 
-def test_pdf_deadline_yields_stable_typed_error_and_worker_is_recreated(tmp_path: Path) -> None:
+
+def test_pdf_deadline_yields_stable_typed_error_and_worker_is_recreated(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     path = tmp_path / "questionnaire.pdf"
     _write_pdf(path)
+    monkeypatch.setattr(docling_source, "_run_pdf_preflight", lambda *_args, **_kwargs: 1)
     adapter = DoclingPdfAdapter(converter=slow_pdf_conversion)
     limits = replace(DEFAULT_SOURCE_LIMITS, deadline_seconds=0.05)
 
@@ -232,6 +273,21 @@ def test_pdf_deadline_yields_stable_typed_error_and_worker_is_recreated(tmp_path
     )
 
 
+def test_crashed_pdf_worker_fails_before_the_configured_deadline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "questionnaire.pdf"
+    _write_pdf(path)
+    monkeypatch.setattr(docling_source, "_run_pdf_preflight", lambda *_args, **_kwargs: 1)
+
+    with pytest.raises(SourceConversionError, match="exited before returning"):
+        DoclingPdfAdapter(converter=crash_pdf_conversion).convert(
+            resolve_local_source(path),
+            limits=replace(DEFAULT_SOURCE_LIMITS, deadline_seconds=20),
+        )
+
+
 def test_pdf_worker_blocks_network_even_for_an_injected_converter(tmp_path: Path) -> None:
     path = tmp_path / "questionnaire.pdf"
     _write_pdf(path)
@@ -241,6 +297,24 @@ def test_pdf_worker_blocks_network_even_for_an_injected_converter(tmp_path: Path
             resolve_local_source(path),
             limits=replace(DEFAULT_SOURCE_LIMITS, deadline_seconds=10),
         )
+
+
+@pytest.mark.skipif(
+    not os.environ.get("DOCLING_ARTIFACTS_PATH"),
+    reason="approved local OCR cache is not configured",
+)
+def test_real_docling_smoke_uses_validated_cache_with_worker_network_blocked(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "questionnaire.pdf"
+    _write_pdf(path)
+
+    document = DoclingPdfAdapter().convert(
+        resolve_local_source(path),
+        limits=replace(DEFAULT_SOURCE_LIMITS, deadline_seconds=30),
+    )
+
+    assert document.media_type == "application/pdf"
 
 
 def test_docling_configuration_forces_local_pdfium_ocr_and_disables_remote_services(
@@ -300,6 +374,14 @@ def test_docling_configuration_forces_local_pdfium_ocr_and_disables_remote_servi
     monkeypatch.setattr("survey_scribe.sources.docling.import_module", fake_import)
     artifacts = tmp_path / "ocr"
     artifacts.mkdir()
+    monkeypatch.setattr(docling_source, "resolve_ocr_cache", lambda path: path.resolve())
+    model_root = artifacts / "validated-models"
+    model_root.mkdir()
+    monkeypatch.setattr(
+        docling_source,
+        "validated_ocr_model_snapshot",
+        lambda _path: nullcontext(model_root),
+    )
     conversion = DoclingConverter()(str(tmp_path / "questionnaire.pdf"), str(artifacts))
 
     format_kwargs = captured["format_kwargs"]
@@ -309,7 +391,12 @@ def test_docling_configuration_forces_local_pdfium_ocr_and_disables_remote_servi
     assert pipeline.do_table_structure is True
     assert pipeline.enable_remote_services is False
     assert pipeline.artifacts_path == artifacts
-    assert captured["ocr_kwargs"] == {"force_full_page_ocr": True}
+    assert captured["ocr_kwargs"] == {
+        "lang": ["en"],
+        "force_full_page_ocr": True,
+        "model_storage_directory": str(model_root),
+        "download_enabled": False,
+    }
     assert format_kwargs["backend"] is FakePdfiumBackend
     assert conversion.blocks[0].text == "Short questionnaire"
     assert conversion.blocks[0].page == 1
@@ -328,6 +415,12 @@ def test_docling_converter_requires_local_artifacts_and_installed_dependencies(
 
     artifacts = tmp_path / "ocr"
     artifacts.mkdir()
+    monkeypatch.setattr(docling_source, "resolve_ocr_cache", lambda path: path.resolve())
+    monkeypatch.setattr(
+        docling_source,
+        "validated_ocr_model_snapshot",
+        lambda path: nullcontext(path),
+    )
 
     def missing_module(_name: str) -> object:
         raise ModuleNotFoundError
@@ -400,6 +493,12 @@ def test_docling_converter_normalizes_tables_and_skips_empty_items(
     monkeypatch.setattr(docling_source, "import_module", modules.__getitem__)
     artifacts = tmp_path / "ocr"
     artifacts.mkdir()
+    monkeypatch.setattr(docling_source, "resolve_ocr_cache", lambda path: path.resolve())
+    monkeypatch.setattr(
+        docling_source,
+        "validated_ocr_model_snapshot",
+        lambda path: nullcontext(path),
+    )
 
     conversion = DoclingConverter()(str(tmp_path / "questionnaire.pdf"), str(artifacts))
 
@@ -411,6 +510,46 @@ def test_docling_converter_normalizes_tables_and_skips_empty_items(
             pages=(1, 2),
             table_rows=(("code", "label"), ("Q1", "Age")),
         ),
+    )
+
+
+def test_docling_converter_prefers_structured_rows_with_embedded_newlines(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Frame:
+        columns = ("code", "label")
+
+        def itertuples(self, *, index: bool, name: object) -> tuple[tuple[str, str], ...]:
+            assert index is False
+            assert name is None
+            return (("Q1", "first\nsecond"),)
+
+    class StructuredTable:
+        label = "table"
+        prov = [SimpleNamespace(page_no=1)]
+
+        def export_to_dataframe(self, *, doc: object) -> Frame:
+            del doc
+            return Frame()
+
+        def export_to_markdown(self, **_kwargs: object) -> str:
+            pytest.fail("structured table unexpectedly used Markdown fallback")
+
+    document = SimpleNamespace(
+        pages={1: object()},
+        iterate_items=lambda: ((StructuredTable(), 0),),
+    )
+    result = SimpleNamespace(document=document, errors=(), status="success")
+    _install_docling_result(monkeypatch, result)
+    artifacts = tmp_path / "ocr"
+    artifacts.mkdir()
+
+    conversion = DoclingConverter()(str(tmp_path / "questionnaire.pdf"), str(artifacts))
+
+    assert conversion.blocks[0].table_rows == (
+        ("code", "label"),
+        ("Q1", "first\nsecond"),
     )
 
 
@@ -547,6 +686,75 @@ def test_docx_ignores_empty_paragraphs_and_tables(tmp_path: Path) -> None:
     assert converted.blocks == ()
 
 
+def test_docx_traverses_supported_nested_containers_in_document_order(tmp_path: Path) -> None:
+    path = tmp_path / "nested-containers.docx"
+    document = f"""<w:document xmlns:w="{docling_source._WORD_NAMESPACE}"><w:body>
+<w:sdt><w:sdtPr/><w:sdtContent>
+<w:p><w:r><w:t>Nested first</w:t></w:r></w:p>
+<w:tbl><w:tr><w:tc><w:p><w:r><w:t>Q1</w:t></w:r></w:p></w:tc></w:tr></w:tbl>
+</w:sdtContent></w:sdt>
+<w:customXml><w:p><w:r><w:t>Nested after</w:t></w:r></w:p></w:customXml>
+</w:body></w:document>"""
+    _write_docx_parts(path, document=document)
+
+    converted = DocxAdapter().convert(resolve_local_source(path), limits=DEFAULT_SOURCE_LIMITS)
+
+    assert [block.text for block in converted.blocks] == ["Nested first", "Q1", "Nested after"]
+    assert converted.tables[0].rows == (("Q1",),)
+    assert converted.coverage.complete is True
+    assert converted.diagnostics == ()
+
+
+def test_docx_accounts_for_every_unsupported_nonempty_container(tmp_path: Path) -> None:
+    path = tmp_path / "unsupported-containers.docx"
+    document = f"""<w:document xmlns:w="{docling_source._WORD_NAMESPACE}"><w:body>
+<w:p><w:r><w:t>Visible</w:t></w:r></w:p>
+<w:altChunk w:val="part-1"/>
+<w:unsupported><w:t>Hidden</w:t></w:unsupported>
+</w:body></w:document>"""
+    _write_docx_parts(path, document=document)
+
+    converted = DocxAdapter().convert(resolve_local_source(path), limits=DEFAULT_SOURCE_LIMITS)
+
+    assert [block.text for block in converted.blocks] == ["Visible"]
+    assert converted.coverage.converted_units == ()
+    assert converted.coverage.failed_units == (1,)
+    assert [diagnostic.code for diagnostic in converted.diagnostics] == [
+        "DOCX_CONTAINER_UNSUPPORTED",
+        "DOCX_CONTAINER_UNSUPPORTED",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("limit_changes", "expected_limit"),
+    [
+        ({"max_xml_part_bytes": 100}, "max_xml_part_bytes"),
+        ({"max_xml_elements": 10}, "max_xml_elements"),
+        ({"max_xml_depth": 4}, "max_xml_depth"),
+    ],
+)
+def test_docx_enforces_relevant_part_byte_and_element_limits(
+    tmp_path: Path,
+    limit_changes: dict[str, int],
+    expected_limit: str,
+) -> None:
+    path = tmp_path / "bounded-document.docx"
+    paragraphs = "".join(f"<w:p><w:r><w:t>Question {index}</w:t></w:r></w:p>" for index in range(8))
+    document = (
+        f'<w:document xmlns:w="{docling_source._WORD_NAMESPACE}"><w:body>'
+        f"{paragraphs}</w:body></w:document>"
+    )
+    _write_docx_parts(path, document=document)
+
+    with pytest.raises(SourceLimitError) as raised:
+        DocxAdapter().convert(
+            resolve_local_source(path),
+            limits=replace(DEFAULT_SOURCE_LIMITS, **limit_changes),
+        )
+
+    assert raised.value.limit == expected_limit
+
+
 def test_docx_accepts_local_relationships(
     tmp_path: Path,
 ) -> None:
@@ -570,7 +778,11 @@ def test_docx_archive_read_errors_are_typed(
     path = tmp_path / "questionnaire.docx"
     _write_docx_parts(path, document="<document/>")
     source = resolve_local_source(path)
-    monkeypatch.setattr(docling_source, "inspect_zip_archive", lambda _path, _limits: ())
+    monkeypatch.setattr(
+        docling_source,
+        "inspect_zip_archive",
+        lambda _path, _limits, **_kwargs: (),
+    )
 
     class BrokenArchive:
         def __init__(self, _path: Path) -> None:
@@ -602,6 +814,9 @@ def test_html_parser_errors_are_typed(tmp_path: Path, monkeypatch: pytest.Monkey
     class BrokenParser:
         events: list[tuple[str, object]] = []
 
+        def __init__(self, **_kwargs: object) -> None:
+            return None
+
         def feed(self, _text: str) -> None:
             raise ValueError("broken")
 
@@ -625,6 +840,78 @@ def test_markdown_tables_and_non_tables_preserve_content(tmp_path: Path) -> None
 
     assert [block.kind for block in document.blocks] == ["text", "table", "table"]
     assert document.tables[0].rows == (("code", "label"), ("Q1", "Age"))
+
+
+def test_markdown_table_parser_preserves_escaped_cell_content() -> None:
+    rows = docling_source._parse_markdown_table(
+        [
+            "| code | expression | path | note |",
+            "| --- | --- | --- | --- |",
+            r"| Q\|1 | `left|right` | C:\survey\forms | first" + "\n" + "second |",
+        ]
+    )
+
+    assert rows == (
+        ("code", "expression", "path", "note"),
+        ("Q|1", "`left|right`", r"C:\survey\forms", "first\nsecond"),
+    )
+    rendered = docling_source._events_to_blocks("questionnaire.md", [("table", rows)])[0]
+    assert rendered.table is not None
+    assert rendered.table.rows == rows
+    assert r"Q\|1" in rendered.text
+    assert r"C:\\survey\\forms" in rendered.text
+    assert r"first\nsecond" in rendered.text
+
+
+@pytest.mark.parametrize("source_kind", ["docx", "html", "markdown"])
+def test_document_tables_enforce_one_cumulative_cell_limit(
+    tmp_path: Path,
+    source_kind: str,
+) -> None:
+    if source_kind == "docx":
+        path = tmp_path / "tables.docx"
+        document = f"""<w:document xmlns:w="{docling_source._WORD_NAMESPACE}"><w:body>
+<w:tbl><w:tr><w:tc><w:p><w:r><w:t>A</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>B</w:t></w:r></w:p></w:tc></w:tr></w:tbl>
+<w:tbl><w:tr><w:tc><w:p><w:r><w:t>C</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>D</w:t></w:r></w:p></w:tc></w:tr></w:tbl>
+</w:body></w:document>"""
+        _write_docx_parts(path, document=document)
+        adapter = DocxAdapter()
+    elif source_kind == "html":
+        path = tmp_path / "tables.html"
+        path.write_text(
+            "<table><tr><td>A</td><td>B</td></tr></table>"
+            "<table><tr><td>C</td><td>D</td></tr></table>",
+            encoding="utf-8",
+        )
+        adapter = HtmlAdapter()
+    else:
+        path = tmp_path / "tables.md"
+        path.write_text(
+            "| A | B |\n| --- | --- |\n\n| C | D |\n| --- | --- |",
+            encoding="utf-8",
+        )
+        adapter = MarkdownAdapter()
+
+    with pytest.raises(SourceLimitError, match="cell limit") as raised:
+        adapter.convert(
+            resolve_local_source(path),
+            limits=replace(DEFAULT_SOURCE_LIMITS, max_cells=3),
+        )
+
+    assert raised.value.limit == "max_cells"
+
+
+def test_pdf_table_cell_limit_is_checked_before_worker_transfer(tmp_path: Path) -> None:
+    path = tmp_path / "questionnaire.pdf"
+    _write_pdf(path)
+
+    with pytest.raises(SourceLimitError, match="cell limit") as raised:
+        DoclingPdfAdapter(converter=table_pdf_conversion).convert(
+            resolve_local_source(path),
+            limits=replace(DEFAULT_SOURCE_LIMITS, max_cells=1, deadline_seconds=10),
+        )
+
+    assert raised.value.limit == "max_cells"
 
 
 def test_docling_helper_fallbacks_are_deterministic() -> None:
@@ -695,28 +982,46 @@ def test_pdf_worker_terminates_lingering_process_and_handles_interrupts(
             return None
 
     class FakeProcess:
-        def __init__(self, *, alive: bool = True) -> None:
+        def __init__(self, *, alive: bool = True, terminate_effective: bool = True) -> None:
             self.alive = alive
+            self.terminate_effective = terminate_effective
             self.terminated = False
+            self.killed = False
             self.joined = False
 
         def start(self) -> None:
             return None
 
         def is_alive(self) -> bool:
-            return self.alive and not self.terminated
+            return (
+                self.alive
+                and not self.killed
+                and not (self.terminated and self.terminate_effective)
+            )
 
         def terminate(self) -> None:
             self.terminated = True
+
+        def kill(self) -> None:
+            self.killed = True
 
         def join(self, timeout: float | None = None) -> None:
             del timeout
             self.joined = True
 
     class FakeContext:
-        def __init__(self, payload: object, *, process_alive: bool = True) -> None:
+        def __init__(
+            self,
+            payload: object,
+            *,
+            process_alive: bool = True,
+            terminate_effective: bool = True,
+        ) -> None:
             self.queue = FakeQueue(payload)
-            self.process = FakeProcess(alive=process_alive)
+            self.process = FakeProcess(
+                alive=process_alive,
+                terminate_effective=terminate_effective,
+            )
 
         def Queue(self, *, maxsize: int) -> FakeQueue:
             assert maxsize == 1
@@ -753,9 +1058,20 @@ def test_pdf_worker_terminates_lingering_process_and_handles_interrupts(
     assert interrupted.process.terminated is True
     assert interrupted.process.joined is True
 
+    preflight_interrupted = FakeContext(KeyboardInterrupt())
+    monkeypatch.setattr(docling_source, "get_context", lambda _method: preflight_interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        docling_source._run_pdf_preflight(
+            tmp_path / "questionnaire.pdf",
+            max_pages=1,
+            timeout=1,
+        )
+    assert preflight_interrupted.process.terminated is True
+    assert preflight_interrupted.process.joined is True
+
     finished_without_output = FakeContext(Empty(), process_alive=False)
     monkeypatch.setattr(docling_source, "get_context", lambda _method: finished_without_output)
-    with pytest.raises(SourceTimeoutError):
+    with pytest.raises(SourceConversionError, match="exited before returning"):
         docling_source._run_pdf_worker(
             fake_pdf_conversion,
             tmp_path / "questionnaire.pdf",
@@ -776,6 +1092,20 @@ def test_pdf_worker_terminates_lingering_process_and_handles_interrupts(
         )
     assert finished_before_interrupt.process.terminated is False
     assert finished_before_interrupt.process.joined is True
+
+    stubborn = FakeContext(("ok", "", conversion), terminate_effective=False)
+    monkeypatch.setattr(docling_source, "get_context", lambda _method: stubborn)
+    assert (
+        docling_source._run_pdf_worker(
+            fake_pdf_conversion,
+            tmp_path / "questionnaire.pdf",
+            artifacts_path=None,
+            timeout=1,
+        )
+        == conversion
+    )
+    assert stubborn.process.terminated is True
+    assert stubborn.process.killed is True
 
 
 @pytest.mark.parametrize(
@@ -831,6 +1161,12 @@ def _install_docling_result(
         ),
     }
     monkeypatch.setattr(docling_source, "import_module", modules.__getitem__)
+    monkeypatch.setattr(docling_source, "resolve_ocr_cache", lambda path: path.resolve())
+    monkeypatch.setattr(
+        docling_source,
+        "validated_ocr_model_snapshot",
+        lambda path: nullcontext(path),
+    )
 
 
 class EmptyDoclingDocument:
@@ -990,8 +1326,9 @@ def test_pdf_adapter_uses_document_coverage_when_no_pages_are_detected(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     path = tmp_path / "empty.pdf"
-    _write_pdf(path, b"1 0 obj <<>> endobj")
+    _write_pdf(path)
     conversion = PdfConversion(page_count=0, blocks=())
+    monkeypatch.setattr(docling_source, "_run_pdf_preflight", lambda *_args, **_kwargs: 0)
     monkeypatch.setattr(docling_source, "_run_pdf_worker", lambda *_args, **_kwargs: conversion)
 
     document = DoclingPdfAdapter(converter=fake_pdf_conversion).convert(

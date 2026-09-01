@@ -6,6 +6,7 @@ import hashlib
 import os
 import re
 import tempfile
+import time
 import zipfile
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -27,6 +28,12 @@ class SourceLimits:
     max_pages: int = 2_000
     max_archive_expanded_bytes: int = 1024 * 1024 * 1024
     max_archive_ratio: float = 100.0
+    max_archive_entries: int = 10_000
+    max_archive_filename_chars: int = 512
+    max_archive_path_depth: int = 20
+    max_xml_part_bytes: int = 64 * 1024 * 1024
+    max_xml_elements: int = 2_000_000
+    max_xml_depth: int = 256
     max_cells: int = 2_000_000
     max_companions: int = 100
     deadline_seconds: float = 30 * 60.0
@@ -36,6 +43,12 @@ class SourceLimits:
             "max_source_bytes",
             "max_pages",
             "max_archive_expanded_bytes",
+            "max_archive_entries",
+            "max_archive_filename_chars",
+            "max_archive_path_depth",
+            "max_xml_part_bytes",
+            "max_xml_elements",
+            "max_xml_depth",
             "max_cells",
             "max_companions",
         ):
@@ -413,17 +426,35 @@ def snapshot_resolved_source(
         )
 
 
-def inspect_zip_archive(path: Path, limits: SourceLimits) -> tuple[zipfile.ZipInfo, ...]:
+def inspect_zip_archive(
+    path: Path,
+    limits: SourceLimits,
+    *,
+    deadline: float | None = None,
+) -> tuple[zipfile.ZipInfo, ...]:
     """Inspect ZIP metadata without extraction and enforce archive ceilings."""
+    entry_count = _zip_entry_count(path)
+    if entry_count > limits.max_archive_entries:
+        raise SourceLimitError(
+            "max_archive_entries",
+            "Archive exceeds the configured entry-count limit",
+        )
     try:
         with zipfile.ZipFile(path) as archive:
-            entries = tuple(archive.infolist())
+            entries = archive.infolist()
     except (OSError, zipfile.BadZipFile, zipfile.LargeZipFile) as error:
         raise SourceFormatError("Source is not a valid ZIP-based document") from error
 
+    if len(entries) != entry_count or len(entries) > limits.max_archive_entries:
+        raise SourceLimitError(
+            "max_archive_entries",
+            "Archive exceeds the configured entry-count limit",
+        )
     expanded = 0
     for entry in entries:
-        _validate_archive_name(entry.filename)
+        if deadline is not None and time.monotonic() >= deadline:
+            raise SourceTimeoutError("Source conversion exceeded the configured deadline")
+        _validate_archive_name(entry.filename, limits)
         if entry.flag_bits & 0x1:
             raise SourceSecurityError("Encrypted archive entries are not supported")
         expanded += entry.file_size
@@ -438,7 +469,28 @@ def inspect_zip_archive(path: Path, limits: SourceLimits) -> tuple[zipfile.ZipIn
             "max_archive_ratio",
             "Archive exceeds the configured expansion-ratio limit",
         )
-    return entries
+    return tuple(entries)
+
+
+def _zip_entry_count(path: Path) -> int:
+    """Read the bounded EOCD record before ZipFile loads the central directory."""
+    try:
+        size = path.stat().st_size
+        with path.open("rb") as stream:
+            stream.seek(max(0, size - (65_535 + 22)))
+            trailer = stream.read(65_535 + 22)
+    except OSError as error:
+        raise SourceFormatError("Source is not a valid ZIP-based document") from error
+    offset = trailer.rfind(b"PK\x05\x06")
+    if offset < 0 or offset + 22 > len(trailer):
+        raise SourceFormatError("Source is not a valid ZIP-based document")
+    entry_count = int.from_bytes(trailer[offset + 10 : offset + 12], "little")
+    if entry_count == 0xFFFF:
+        raise SourceLimitError(
+            "max_archive_entries",
+            "ZIP64 archive entry count exceeds the configured limit",
+        )
+    return entry_count
 
 
 def read_utf8_text(path: Path) -> str:
@@ -554,8 +606,18 @@ def _snapshot_file(source: Path, target: Path, limits: SourceLimits) -> tuple[Pa
     return target, digest.hexdigest()
 
 
-def _validate_archive_name(name: str) -> None:
+def _validate_archive_name(name: str, limits: SourceLimits) -> None:
     normalized = name.replace("\\", "/")
     path = PurePosixPath(normalized)
     if normalized.startswith("/") or re.match(r"^[a-zA-Z]:", normalized) or ".." in path.parts:
         raise SourceSecurityError("Archive contains a path traversal entry")
+    if len(normalized) > limits.max_archive_filename_chars:
+        raise SourceLimitError(
+            "max_archive_filename_chars",
+            "Archive entry name exceeds the configured length limit",
+        )
+    if len(path.parts) > limits.max_archive_path_depth:
+        raise SourceLimitError(
+            "max_archive_path_depth",
+            "Archive entry path exceeds the configured depth limit",
+        )

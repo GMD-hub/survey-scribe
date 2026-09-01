@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import zipfile
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -150,7 +151,7 @@ class SourceRegistry:
             _verify_signature(snapshot.primary, suffix)
             converted = adapter.convert(snapshot, limits=limits)
             payload = converted.model_dump(mode="python")
-            payload["snapshot_sha256"] = snapshot.primary_sha256
+            payload["snapshot_sha256"] = _routed_snapshot_sha256(snapshot)
             document = SourceDocument.model_validate(payload)
             source_binding = create_source_binding(document, svis)
             native: NativeRoutingSemantics | None = None
@@ -161,6 +162,40 @@ class SourceRegistry:
                 source_binding=source_binding,
                 native=native,
             )
+
+
+def _routed_snapshot_sha256(snapshot: ResolvedSource) -> str:
+    if snapshot.primary_sha256 is None or len(snapshot.companion_sha256) != len(
+        snapshot.companions
+    ):
+        raise SourceFormatError("Validated source snapshot digests are incomplete")
+    records = [
+        (
+            "primary",
+            snapshot.primary.relative_to(snapshot.root).as_posix(),
+            snapshot.primary_sha256,
+        )
+    ]
+    records.extend(
+        (
+            f"companion-{index:06d}",
+            companion.relative_to(snapshot.root).as_posix(),
+            digest,
+        )
+        for index, (companion, digest) in enumerate(
+            zip(snapshot.companions, snapshot.companion_sha256, strict=True),
+            start=1,
+        )
+    )
+    digest = hashlib.sha256()
+    for value in ("survey-scribe-source-snapshot-v1", *records):
+        fields = value if isinstance(value, tuple) else (value,)
+        digest.update(len(fields).to_bytes(4, "big"))
+        for field in fields:
+            encoded = field.encode("utf-8")
+            digest.update(len(encoded).to_bytes(8, "big"))
+            digest.update(encoded)
+    return digest.hexdigest()
 
 
 def _verify_signature(path: Path, suffix: str) -> None:
