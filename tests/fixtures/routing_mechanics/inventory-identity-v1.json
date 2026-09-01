@@ -1,0 +1,105 @@
+{
+  "diagnostics": [
+    {
+      "code": "UNLINKED_VARIABLE",
+      "message": "A legacy variable has no exact logical question link.",
+      "node_ids": [],
+      "variable_index": 3
+    }
+  ],
+  "group_entries": [
+    [
+      "section:fallback:62d1d53d8a9d7ce8333a15b389e467cf54f9daf9d3c8e1fd7558ef49828805e0",
+      "repeat_group:fallback:478eaaed7f89a668e8a4a75f4e67ab12f48b21efaabd789a1df1b6ce5acd1836"
+    ],
+    [
+      "repeat_group:fallback:478eaaed7f89a668e8a4a75f4e67ab12f48b21efaabd789a1df1b6ce5acd1836",
+      "question:roster:q1"
+    ]
+  ],
+  "items": [
+    {
+      "block_ids": [
+        "block-0"
+      ],
+      "kind": "section",
+      "linked_variable_indices": [],
+      "node_id": "section:fallback:62d1d53d8a9d7ce8333a15b389e467cf54f9daf9d3c8e1fd7558ef49828805e0",
+      "parent_node_id": null,
+      "raw_reference": "Roster",
+      "repeat_group_node_id": null,
+      "section_path": [
+        "Roster"
+      ],
+      "source_item_id": null,
+      "source_order": 0
+    },
+    {
+      "block_ids": [
+        "block-1"
+      ],
+      "kind": "repeat_group",
+      "linked_variable_indices": [],
+      "node_id": "repeat_group:fallback:478eaaed7f89a668e8a4a75f4e67ab12f48b21efaabd789a1df1b6ce5acd1836",
+      "parent_node_id": "section:fallback:62d1d53d8a9d7ce8333a15b389e467cf54f9daf9d3c8e1fd7558ef49828805e0",
+      "raw_reference": "Household members",
+      "repeat_group_node_id": null,
+      "section_path": [
+        "Roster"
+      ],
+      "source_item_id": null,
+      "source_order": 1
+    },
+    {
+      "block_ids": [
+        "block-2"
+      ],
+      "kind": "question",
+      "linked_variable_indices": [
+        0,
+        1
+      ],
+      "node_id": "question:roster:q1",
+      "parent_node_id": "repeat_group:fallback:478eaaed7f89a668e8a4a75f4e67ab12f48b21efaabd789a1df1b6ce5acd1836",
+      "raw_reference": "Q1",
+      "repeat_group_node_id": "repeat_group:fallback:478eaaed7f89a668e8a4a75f4e67ab12f48b21efaabd789a1df1b6ce5acd1836",
+      "section_path": [
+        "Roster"
+      ],
+      "source_item_id": "Q1",
+      "source_order": 2
+    },
+    {
+      "block_ids": [
+        "block-3"
+      ],
+      "kind": "question",
+      "linked_variable_indices": [
+        2
+      ],
+      "node_id": "question:roster:q2",
+      "parent_node_id": "repeat_group:fallback:478eaaed7f89a668e8a4a75f4e67ab12f48b21efaabd789a1df1b6ce5acd1836",
+      "raw_reference": "Q2",
+      "repeat_group_node_id": "repeat_group:fallback:478eaaed7f89a668e8a4a75f4e67ab12f48b21efaabd789a1df1b6ce5acd1836",
+      "section_path": [
+        "Roster"
+      ],
+      "source_item_id": "Q2",
+      "source_order": 3
+    }
+  ],
+  "partial": true,
+  "source_binding": {
+    "media_type": "text/plain",
+    "snapshot_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "source_conversion_schema_version": "1.0",
+    "source_name": "questionnaire.txt",
+    "survey_id": "TST_2024_SYNTH"
+  },
+  "variable_node_ids": [
+    "question:roster:q1",
+    "question:roster:q1",
+    "question:roster:q2",
+    null
+  ]
+}

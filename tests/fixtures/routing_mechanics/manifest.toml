@@ -1,0 +1,12 @@
+schema_version = 1
+artifact_kind = "deterministic-routing-mechanics"
+benchmark_eligible = false
+identity_schema = "routing-node-fallback-v1"
+source_conversion_schema_version = "1.0"
+purpose = "Freeze deterministic inventory, identity, containment, variable-link, and partial-output mechanics."
+provenance = "Generated only from repository-authored synthetic normalized blocks and fixed SVIS records; no model response was used."
+restrictions = "Mechanics regression testing only; not approved for model-quality benchmarking."
+
+[output]
+path = "tests/fixtures/routing_mechanics/inventory-identity-v1.json"
+sha256 = "f9b2aaeea7dbc85b6cceebf92d06199e6085eb94e1a68bba8608cc0940a462c3"

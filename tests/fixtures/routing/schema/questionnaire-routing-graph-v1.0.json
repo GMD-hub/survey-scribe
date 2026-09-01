@@ -1,0 +1,1820 @@
+{
+  "$defs": {
+    "ActivationEvidence": {
+      "additionalProperties": false,
+      "description": "One provider-facing observation of item or group applicability.",
+      "properties": {
+        "ambiguity_note": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Ambiguity Note"
+        },
+        "condition": {
+          "$ref": "#/$defs/ExtractedRoutingCondition"
+        },
+        "confidence": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "evidence_type": {
+          "const": "activation",
+          "title": "Evidence Type",
+          "type": "string"
+        },
+        "explicitly_stated": {
+          "title": "Explicitly Stated",
+          "type": "boolean"
+        },
+        "item": {
+          "$ref": "#/$defs/ItemReference"
+        },
+        "local_id": {
+          "minLength": 1,
+          "title": "Local Id",
+          "type": "string"
+        },
+        "native_expression": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NativeExpression"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "origin": {
+          "$ref": "#/$defs/EvidenceOrigin"
+        },
+        "source_span": {
+          "$ref": "#/$defs/SourceSpan"
+        }
+      },
+      "required": [
+        "evidence_type",
+        "local_id",
+        "origin",
+        "item",
+        "condition",
+        "source_span",
+        "native_expression",
+        "explicitly_stated",
+        "confidence",
+        "ambiguity_note"
+      ],
+      "title": "ActivationEvidence",
+      "type": "object"
+    },
+    "CandidateEdge": {
+      "additionalProperties": false,
+      "description": "Non-authoritative edge candidate that can preserve an unresolved target.",
+      "properties": {
+        "candidate_id": {
+          "minLength": 1,
+          "title": "Candidate Id",
+          "type": "string"
+        },
+        "condition": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExtractedRoutingCondition"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "confidence": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "evidence_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Evidence Ids",
+          "type": "array"
+        },
+        "kind": {
+          "$ref": "#/$defs/EdgeKind"
+        },
+        "priority": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Priority"
+        },
+        "source_node_id": {
+          "minLength": 1,
+          "title": "Source Node Id",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/CandidateStatus"
+        },
+        "target_node_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Target Node Id"
+        },
+        "target_reference": {
+          "$ref": "#/$defs/ItemReference"
+        }
+      },
+      "required": [
+        "candidate_id",
+        "source_node_id",
+        "target_node_id",
+        "target_reference",
+        "kind",
+        "condition",
+        "priority",
+        "evidence_ids",
+        "confidence",
+        "status"
+      ],
+      "title": "CandidateEdge",
+      "type": "object"
+    },
+    "CandidateStatus": {
+      "description": "Current audit state of a non-authoritative edge candidate.",
+      "enum": [
+        "proposed",
+        "needs_agent_review",
+        "needs_human_review",
+        "accepted",
+        "rejected"
+      ],
+      "title": "CandidateStatus",
+      "type": "string"
+    },
+    "CanonicalRoutingCondition": {
+      "additionalProperties": false,
+      "description": "Condition whose controlling questions are canonical graph nodes.",
+      "properties": {
+        "children": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/CanonicalRoutingCondition"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Children"
+        },
+        "operator": {
+          "$ref": "#/$defs/ConditionOperator"
+        },
+        "question_node_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Question Node Id"
+        },
+        "raw_text": {
+          "title": "Raw Text",
+          "type": "string"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Value"
+        },
+        "values": {
+          "anyOf": [
+            {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "boolean"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Values"
+        }
+      },
+      "required": [
+        "operator",
+        "question_node_id",
+        "value",
+        "values",
+        "children",
+        "raw_text"
+      ],
+      "title": "CanonicalRoutingCondition",
+      "type": "object"
+    },
+    "ConditionOperator": {
+      "description": "Supported routing-condition operations.",
+      "enum": [
+        "always",
+        "equals",
+        "not_equals",
+        "in_set",
+        "not_in_set",
+        "greater_than",
+        "greater_than_or_equal",
+        "less_than",
+        "less_than_or_equal",
+        "between",
+        "answered",
+        "not_answered",
+        "selected",
+        "not_selected",
+        "all",
+        "any",
+        "not",
+        "opaque"
+      ],
+      "title": "ConditionOperator",
+      "type": "string"
+    },
+    "Containment": {
+      "additionalProperties": false,
+      "description": "Parent relation plus derived stable children and explicit group entry.",
+      "properties": {
+        "child_node_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Child Node Ids",
+          "type": "array"
+        },
+        "entry_child_node_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Entry Child Node Id"
+        },
+        "parent_node_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Parent Node Id"
+        }
+      },
+      "required": [
+        "parent_node_id",
+        "child_node_ids",
+        "entry_child_node_id"
+      ],
+      "title": "Containment",
+      "type": "object"
+    },
+    "DiagnosticSeverity": {
+      "description": "Stable routing diagnostic severity.",
+      "enum": [
+        "info",
+        "warning",
+        "error"
+      ],
+      "title": "DiagnosticSeverity",
+      "type": "string"
+    },
+    "DiscrepancyKind": {
+      "description": "Bounded discrepancy categories available to review.",
+      "enum": [
+        "conflicting_target",
+        "conflicting_condition",
+        "ambiguous_target",
+        "unresolved_target",
+        "multiple_defaults",
+        "incoming_mismatch",
+        "opaque_condition",
+        "unsupported_cycle",
+        "activation_routing_conflict",
+        "other"
+      ],
+      "title": "DiscrepancyKind",
+      "type": "string"
+    },
+    "EdgeKind": {
+      "description": "Accepted questionnaire flow semantics.",
+      "enum": [
+        "conditional",
+        "default",
+        "unconditional",
+        "sequential"
+      ],
+      "title": "EdgeKind",
+      "type": "string"
+    },
+    "EvidenceOrigin": {
+      "description": "Producer of one source-grounded observation.",
+      "enum": [
+        "forward_extraction",
+        "incoming_extraction",
+        "native_parser"
+      ],
+      "title": "EvidenceOrigin",
+      "type": "string"
+    },
+    "EvidencePerspective": {
+      "description": "Direction from which a transition was independently examined.",
+      "enum": [
+        "outgoing",
+        "incoming"
+      ],
+      "title": "EvidencePerspective",
+      "type": "string"
+    },
+    "EvidenceRecord": {
+      "additionalProperties": false,
+      "description": "Python-assigned stable identifier around one immutable observation.",
+      "properties": {
+        "evidence_id": {
+          "minLength": 1,
+          "title": "Evidence Id",
+          "type": "string"
+        },
+        "observation": {
+          "discriminator": {
+            "mapping": {
+              "activation": "#/$defs/ActivationEvidence",
+              "transition": "#/$defs/TransitionEvidence"
+            },
+            "propertyName": "evidence_type"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/TransitionEvidence"
+            },
+            {
+              "$ref": "#/$defs/ActivationEvidence"
+            }
+          ],
+          "title": "Observation"
+        }
+      },
+      "required": [
+        "evidence_id",
+        "observation"
+      ],
+      "title": "EvidenceRecord",
+      "type": "object"
+    },
+    "ExtractedRoutingCondition": {
+      "additionalProperties": false,
+      "description": "Condition that preserves an unresolved source item reference.",
+      "properties": {
+        "children": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/ExtractedRoutingCondition"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Children"
+        },
+        "item_reference": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ItemReference"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "operator": {
+          "$ref": "#/$defs/ConditionOperator"
+        },
+        "raw_text": {
+          "title": "Raw Text",
+          "type": "string"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Value"
+        },
+        "values": {
+          "anyOf": [
+            {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "boolean"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Values"
+        }
+      },
+      "required": [
+        "operator",
+        "item_reference",
+        "value",
+        "values",
+        "children",
+        "raw_text"
+      ],
+      "title": "ExtractedRoutingCondition",
+      "type": "object"
+    },
+    "InventoryItem": {
+      "additionalProperties": false,
+      "description": "One complete logical questionnaire item before reconciliation.",
+      "properties": {
+        "block_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Block Ids",
+          "type": "array"
+        },
+        "kind": {
+          "$ref": "#/$defs/NodeKind"
+        },
+        "linked_variable_indices": {
+          "items": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "title": "Linked Variable Indices",
+          "type": "array"
+        },
+        "node_id": {
+          "minLength": 1,
+          "title": "Node Id",
+          "type": "string"
+        },
+        "parent_node_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Parent Node Id"
+        },
+        "raw_reference": {
+          "minLength": 1,
+          "title": "Raw Reference",
+          "type": "string"
+        },
+        "repeat_group_node_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Repeat Group Node Id"
+        },
+        "section_path": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Section Path",
+          "type": "array"
+        },
+        "source_item_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Source Item Id"
+        },
+        "source_order": {
+          "minimum": 0,
+          "title": "Source Order",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "node_id",
+        "source_item_id",
+        "raw_reference",
+        "section_path",
+        "source_order",
+        "block_ids",
+        "kind",
+        "repeat_group_node_id",
+        "parent_node_id",
+        "linked_variable_indices"
+      ],
+      "title": "InventoryItem",
+      "type": "object"
+    },
+    "ItemReference": {
+      "additionalProperties": false,
+      "description": "Preserved printed or unresolved questionnaire item reference.",
+      "properties": {
+        "canonical_hint": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Canonical Hint"
+        },
+        "node_kind": {
+          "$ref": "#/$defs/NodeKind"
+        },
+        "raw_reference": {
+          "minLength": 1,
+          "title": "Raw Reference",
+          "type": "string"
+        },
+        "section_path": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Section Path",
+          "type": "array"
+        },
+        "source_item_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Source Item Id"
+        }
+      },
+      "required": [
+        "raw_reference",
+        "source_item_id",
+        "canonical_hint",
+        "section_path",
+        "node_kind"
+      ],
+      "title": "ItemReference",
+      "type": "object"
+    },
+    "LoopDefinition": {
+      "additionalProperties": false,
+      "description": "Bounded metadata for one declared or source-supported loop region.",
+      "properties": {
+        "entry_edge_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Entry Edge Ids",
+          "type": "array"
+        },
+        "evidence_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Evidence Ids",
+          "type": "array"
+        },
+        "exit_edge_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Exit Edge Ids",
+          "type": "array"
+        },
+        "kind": {
+          "$ref": "#/$defs/LoopKind"
+        },
+        "loop_id": {
+          "minLength": 1,
+          "title": "Loop Id",
+          "type": "string"
+        },
+        "member_edge_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Member Edge Ids",
+          "type": "array"
+        },
+        "member_node_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Member Node Ids",
+          "type": "array"
+        },
+        "repeat_group_node_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Repeat Group Node Id"
+        },
+        "return_edge_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Return Edge Ids",
+          "type": "array"
+        },
+        "source_supported": {
+          "const": true,
+          "title": "Source Supported",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "loop_id",
+        "kind",
+        "repeat_group_node_id",
+        "member_node_ids",
+        "entry_edge_ids",
+        "member_edge_ids",
+        "return_edge_ids",
+        "exit_edge_ids",
+        "source_supported",
+        "evidence_ids"
+      ],
+      "title": "LoopDefinition",
+      "type": "object"
+    },
+    "LoopKind": {
+      "description": "Supported topological or declared loop classification.",
+      "enum": [
+        "repeat_group",
+        "correction_return",
+        "repeat_until",
+        "other"
+      ],
+      "title": "LoopKind",
+      "type": "string"
+    },
+    "NativeExpression": {
+      "additionalProperties": false,
+      "description": "Exact native syntax plus its bounded canonical projection.",
+      "properties": {
+        "canonical_projection": {
+          "$ref": "#/$defs/CanonicalRoutingCondition"
+        },
+        "exact_expression": {
+          "minLength": 1,
+          "title": "Exact Expression",
+          "type": "string"
+        },
+        "language": {
+          "minLength": 1,
+          "title": "Language",
+          "type": "string"
+        },
+        "parsed_references": {
+          "items": {
+            "$ref": "#/$defs/ItemReference"
+          },
+          "title": "Parsed References",
+          "type": "array"
+        },
+        "version": {
+          "minLength": 1,
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "language",
+        "version",
+        "exact_expression",
+        "parsed_references",
+        "canonical_projection"
+      ],
+      "title": "NativeExpression",
+      "type": "object"
+    },
+    "NodeKind": {
+      "description": "Logical role of a canonical questionnaire node.",
+      "enum": [
+        "entry",
+        "question",
+        "section",
+        "repeat_group",
+        "terminal"
+      ],
+      "title": "NodeKind",
+      "type": "string"
+    },
+    "RepeatKind": {
+      "description": "Logical template represented by a repeat group.",
+      "enum": [
+        "household_member",
+        "consumption_item",
+        "visit",
+        "plot",
+        "enterprise",
+        "until_condition",
+        "other"
+      ],
+      "title": "RepeatKind",
+      "type": "string"
+    },
+    "RepeatSpec": {
+      "additionalProperties": false,
+      "description": "Logical repeat template without runtime unrolling.",
+      "properties": {
+        "collection_source": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Collection Source"
+        },
+        "continuation_condition": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CanonicalRoutingCondition"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "iterator_label": {
+          "minLength": 1,
+          "title": "Iterator Label",
+          "type": "string"
+        },
+        "maximum_iterations": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Maximum Iterations"
+        },
+        "repeat_kind": {
+          "$ref": "#/$defs/RepeatKind"
+        }
+      },
+      "required": [
+        "repeat_kind",
+        "iterator_label",
+        "collection_source",
+        "continuation_condition",
+        "maximum_iterations"
+      ],
+      "title": "RepeatSpec",
+      "type": "object"
+    },
+    "ReplacementEdge": {
+      "additionalProperties": false,
+      "description": "Typed reviewer replacement content before canonical edge assignment.",
+      "properties": {
+        "condition": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExtractedRoutingCondition"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "evidence_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Evidence Ids",
+          "type": "array"
+        },
+        "kind": {
+          "$ref": "#/$defs/EdgeKind"
+        },
+        "priority": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Priority"
+        },
+        "source_node_id": {
+          "minLength": 1,
+          "title": "Source Node Id",
+          "type": "string"
+        },
+        "target_node_id": {
+          "minLength": 1,
+          "title": "Target Node Id",
+          "type": "string"
+        },
+        "target_reference": {
+          "$ref": "#/$defs/ItemReference"
+        }
+      },
+      "required": [
+        "source_node_id",
+        "target_node_id",
+        "target_reference",
+        "kind",
+        "condition",
+        "priority",
+        "evidence_ids"
+      ],
+      "title": "ReplacementEdge",
+      "type": "object"
+    },
+    "ReviewAction": {
+      "description": "Append-only reviewer action.",
+      "enum": [
+        "confirm_candidate",
+        "replace_candidate",
+        "reject_candidate",
+        "unresolved"
+      ],
+      "title": "ReviewAction",
+      "type": "string"
+    },
+    "ReviewDecision": {
+      "additionalProperties": false,
+      "description": "One append-only source-cited reviewer decision.",
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/ReviewAction"
+        },
+        "candidate_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Candidate Ids",
+          "type": "array"
+        },
+        "cited_span_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Cited Span Ids",
+          "type": "array"
+        },
+        "confidence": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "decision_id": {
+          "minLength": 1,
+          "title": "Decision Id",
+          "type": "string"
+        },
+        "discrepancy_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Discrepancy Ids",
+          "type": "array"
+        },
+        "evidence_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Evidence Ids",
+          "type": "array"
+        },
+        "needs_human_review": {
+          "title": "Needs Human Review",
+          "type": "boolean"
+        },
+        "prompt_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Prompt Sha256",
+          "type": "string"
+        },
+        "prompt_version": {
+          "minLength": 1,
+          "title": "Prompt Version",
+          "type": "string"
+        },
+        "provider_response_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Provider Response Sha256",
+          "type": "string"
+        },
+        "rationale": {
+          "minLength": 1,
+          "title": "Rationale",
+          "type": "string"
+        },
+        "replacement": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReplacementEdge"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "supersedes_decision_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Supersedes Decision Id"
+        }
+      },
+      "required": [
+        "decision_id",
+        "discrepancy_ids",
+        "candidate_ids",
+        "evidence_ids",
+        "cited_span_ids",
+        "action",
+        "replacement",
+        "rationale",
+        "confidence",
+        "needs_human_review",
+        "prompt_version",
+        "prompt_sha256",
+        "provider_response_sha256",
+        "supersedes_decision_id"
+      ],
+      "title": "ReviewDecision",
+      "type": "object"
+    },
+    "RoutingAudit": {
+      "additionalProperties": false,
+      "description": "Evidence-first append-only audit layer outside the accepted graph facts.",
+      "properties": {
+        "candidate_edges": {
+          "items": {
+            "$ref": "#/$defs/CandidateEdge"
+          },
+          "title": "Candidate Edges",
+          "type": "array"
+        },
+        "discrepancies": {
+          "items": {
+            "$ref": "#/$defs/RoutingDiscrepancy"
+          },
+          "title": "Discrepancies",
+          "type": "array"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/EvidenceRecord"
+          },
+          "title": "Evidence",
+          "type": "array"
+        },
+        "inventory": {
+          "items": {
+            "$ref": "#/$defs/InventoryItem"
+          },
+          "title": "Inventory",
+          "type": "array"
+        },
+        "review_decisions": {
+          "items": {
+            "$ref": "#/$defs/ReviewDecision"
+          },
+          "title": "Review Decisions",
+          "type": "array"
+        },
+        "source_binding": {
+          "$ref": "#/$defs/RoutingSourceBinding"
+        },
+        "source_spans": {
+          "items": {
+            "$ref": "#/$defs/SourceSpan"
+          },
+          "title": "Source Spans",
+          "type": "array"
+        }
+      },
+      "required": [
+        "source_binding",
+        "inventory",
+        "source_spans",
+        "evidence",
+        "candidate_edges",
+        "discrepancies",
+        "review_decisions"
+      ],
+      "title": "RoutingAudit",
+      "type": "object"
+    },
+    "RoutingDiagnostic": {
+      "additionalProperties": false,
+      "description": "Stable safe graph diagnostic without source-derived prose fields.",
+      "properties": {
+        "candidate_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Candidate Ids",
+          "type": "array"
+        },
+        "code": {
+          "minLength": 1,
+          "title": "Code",
+          "type": "string"
+        },
+        "diagnostic_id": {
+          "minLength": 1,
+          "title": "Diagnostic Id",
+          "type": "string"
+        },
+        "edge_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Edge Ids",
+          "type": "array"
+        },
+        "evidence_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Evidence Ids",
+          "type": "array"
+        },
+        "message": {
+          "minLength": 1,
+          "title": "Message",
+          "type": "string"
+        },
+        "node_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Node Ids",
+          "type": "array"
+        },
+        "severity": {
+          "$ref": "#/$defs/DiagnosticSeverity"
+        }
+      },
+      "required": [
+        "diagnostic_id",
+        "code",
+        "severity",
+        "message",
+        "node_ids",
+        "edge_ids",
+        "evidence_ids",
+        "candidate_ids"
+      ],
+      "title": "RoutingDiagnostic",
+      "type": "object"
+    },
+    "RoutingDiscrepancy": {
+      "additionalProperties": false,
+      "description": "Bounded discrepancy packet retained in the primary routed artifact.",
+      "properties": {
+        "candidate_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Candidate Ids",
+          "type": "array"
+        },
+        "discrepancy_id": {
+          "minLength": 1,
+          "title": "Discrepancy Id",
+          "type": "string"
+        },
+        "evidence_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Evidence Ids",
+          "type": "array"
+        },
+        "kind": {
+          "$ref": "#/$defs/DiscrepancyKind"
+        },
+        "needs_human_review": {
+          "title": "Needs Human Review",
+          "type": "boolean"
+        },
+        "resolved_by_decision_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Resolved By Decision Id"
+        },
+        "source_span_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Source Span Ids",
+          "type": "array"
+        },
+        "summary": {
+          "minLength": 1,
+          "title": "Summary",
+          "type": "string"
+        }
+      },
+      "required": [
+        "discrepancy_id",
+        "kind",
+        "candidate_ids",
+        "evidence_ids",
+        "source_span_ids",
+        "summary",
+        "needs_human_review",
+        "resolved_by_decision_id"
+      ],
+      "title": "RoutingDiscrepancy",
+      "type": "object"
+    },
+    "RoutingEdge": {
+      "additionalProperties": false,
+      "description": "One authoritative accepted edge in the canonical multigraph.",
+      "properties": {
+        "condition": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CanonicalRoutingCondition"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "confidence": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "edge_id": {
+          "minLength": 1,
+          "title": "Edge Id",
+          "type": "string"
+        },
+        "evidence_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Evidence Ids",
+          "type": "array"
+        },
+        "kind": {
+          "$ref": "#/$defs/EdgeKind"
+        },
+        "priority": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Priority"
+        },
+        "review_decision_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Review Decision Id"
+        },
+        "source_node_id": {
+          "minLength": 1,
+          "title": "Source Node Id",
+          "type": "string"
+        },
+        "target_node_id": {
+          "minLength": 1,
+          "title": "Target Node Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "edge_id",
+        "source_node_id",
+        "target_node_id",
+        "kind",
+        "condition",
+        "priority",
+        "evidence_ids",
+        "confidence",
+        "review_decision_id"
+      ],
+      "title": "RoutingEdge",
+      "type": "object"
+    },
+    "RoutingNode": {
+      "additionalProperties": false,
+      "description": "One canonical logical node with accepted-edge adjacency projections.",
+      "properties": {
+        "activation_condition": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CanonicalRoutingCondition"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "containment": {
+          "$ref": "#/$defs/Containment"
+        },
+        "incoming_edge_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Incoming Edge Ids",
+          "type": "array"
+        },
+        "kind": {
+          "$ref": "#/$defs/NodeKind"
+        },
+        "label": {
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "next_node_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Next Node Ids",
+          "type": "array"
+        },
+        "node_id": {
+          "minLength": 1,
+          "title": "Node Id",
+          "type": "string"
+        },
+        "outgoing_edge_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Outgoing Edge Ids",
+          "type": "array"
+        },
+        "previous_node_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Previous Node Ids",
+          "type": "array"
+        },
+        "raw_name": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Raw Name"
+        },
+        "repeat_spec": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RepeatSpec"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source_item_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Source Item Id"
+        },
+        "terminal_kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TerminalKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "node_id",
+        "kind",
+        "source_item_id",
+        "raw_name",
+        "label",
+        "terminal_kind",
+        "activation_condition",
+        "repeat_spec",
+        "containment",
+        "next_node_ids",
+        "previous_node_ids",
+        "outgoing_edge_ids",
+        "incoming_edge_ids"
+      ],
+      "title": "RoutingNode",
+      "type": "object"
+    },
+    "RoutingSourceBinding": {
+      "additionalProperties": false,
+      "description": "Identity of the validated private source snapshot used for routing.",
+      "properties": {
+        "media_type": {
+          "minLength": 1,
+          "title": "Media Type",
+          "type": "string"
+        },
+        "snapshot_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Snapshot Sha256",
+          "type": "string"
+        },
+        "source_conversion_schema_version": {
+          "minLength": 1,
+          "title": "Source Conversion Schema Version",
+          "type": "string"
+        },
+        "source_name": {
+          "minLength": 1,
+          "title": "Source Name",
+          "type": "string"
+        },
+        "survey_id": {
+          "minLength": 1,
+          "title": "Survey Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "survey_id",
+        "source_name",
+        "media_type",
+        "snapshot_sha256",
+        "source_conversion_schema_version"
+      ],
+      "title": "RoutingSourceBinding",
+      "type": "object"
+    },
+    "SourceSpan": {
+      "additionalProperties": false,
+      "description": "Bounded quote and physical provenance in one normalized source block.",
+      "properties": {
+        "block_id": {
+          "minLength": 1,
+          "title": "Block Id",
+          "type": "string"
+        },
+        "pages": {
+          "items": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "title": "Pages",
+          "type": "array"
+        },
+        "row_end": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Row End"
+        },
+        "row_start": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Row Start"
+        },
+        "sheet": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Sheet"
+        },
+        "source_name": {
+          "minLength": 1,
+          "title": "Source Name",
+          "type": "string"
+        },
+        "source_quote": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Source Quote",
+          "type": "string"
+        },
+        "span_id": {
+          "minLength": 1,
+          "title": "Span Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "span_id",
+        "block_id",
+        "source_name",
+        "pages",
+        "sheet",
+        "row_start",
+        "row_end",
+        "source_quote"
+      ],
+      "title": "SourceSpan",
+      "type": "object"
+    },
+    "TerminalKind": {
+      "description": "Meaning of a terminal flow state.",
+      "enum": [
+        "survey_complete",
+        "screened_out",
+        "interview_terminated",
+        "unknown_terminal"
+      ],
+      "title": "TerminalKind",
+      "type": "string"
+    },
+    "TransitionEvidence": {
+      "additionalProperties": false,
+      "description": "One provider-facing observation of movement through the questionnaire.",
+      "properties": {
+        "ambiguity_note": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Ambiguity Note"
+        },
+        "condition": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExtractedRoutingCondition"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "confidence": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "evidence_type": {
+          "const": "transition",
+          "title": "Evidence Type",
+          "type": "string"
+        },
+        "explicitly_stated": {
+          "title": "Explicitly Stated",
+          "type": "boolean"
+        },
+        "local_id": {
+          "minLength": 1,
+          "title": "Local Id",
+          "type": "string"
+        },
+        "native_expression": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NativeExpression"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "origin": {
+          "$ref": "#/$defs/EvidenceOrigin"
+        },
+        "perspective": {
+          "$ref": "#/$defs/EvidencePerspective"
+        },
+        "source": {
+          "$ref": "#/$defs/ItemReference"
+        },
+        "source_span": {
+          "$ref": "#/$defs/SourceSpan"
+        },
+        "target": {
+          "$ref": "#/$defs/ItemReference"
+        },
+        "transition_kind": {
+          "$ref": "#/$defs/TransitionKind"
+        }
+      },
+      "required": [
+        "evidence_type",
+        "local_id",
+        "perspective",
+        "origin",
+        "source",
+        "target",
+        "transition_kind",
+        "condition",
+        "source_span",
+        "native_expression",
+        "explicitly_stated",
+        "confidence",
+        "ambiguity_note"
+      ],
+      "title": "TransitionEvidence",
+      "type": "object"
+    },
+    "TransitionKind": {
+      "description": "Flow semantics available to extraction and canonical edges.",
+      "enum": [
+        "conditional",
+        "default",
+        "unconditional",
+        "sequential"
+      ],
+      "title": "TransitionKind",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Canonical directed multigraph plus its separate append-only audit.",
+  "properties": {
+    "diagnostics": {
+      "items": {
+        "$ref": "#/$defs/RoutingDiagnostic"
+      },
+      "title": "Diagnostics",
+      "type": "array"
+    },
+    "edges": {
+      "items": {
+        "$ref": "#/$defs/RoutingEdge"
+      },
+      "title": "Edges",
+      "type": "array"
+    },
+    "entry_node_ids": {
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Entry Node Ids",
+      "type": "array"
+    },
+    "loops": {
+      "items": {
+        "$ref": "#/$defs/LoopDefinition"
+      },
+      "title": "Loops",
+      "type": "array"
+    },
+    "nodes": {
+      "items": {
+        "$ref": "#/$defs/RoutingNode"
+      },
+      "minItems": 1,
+      "title": "Nodes",
+      "type": "array"
+    },
+    "routing_audit": {
+      "$ref": "#/$defs/RoutingAudit"
+    },
+    "schema_version": {
+      "const": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "entry_node_ids",
+    "nodes",
+    "edges",
+    "loops",
+    "diagnostics",
+    "routing_audit"
+  ],
+  "title": "QuestionnaireRoutingGraph",
+  "type": "object"
+}
