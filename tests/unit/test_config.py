@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from survey_scribe.config import SurveyScribeConfig
+from survey_scribe.config import GenerationConfig, SurveyScribeConfig
 from survey_scribe.errors import AmbiguousCredentialError, ConfigurationError
 
 
@@ -259,3 +259,101 @@ def test_nested_toml_secret_is_rejected_without_exposure(tmp_path: Path) -> None
 def test_control_values_are_strict_and_finite(field: str, value: object) -> None:
     with pytest.raises(ValidationError):
         SurveyScribeConfig(**{field: value})
+
+
+@pytest.mark.parametrize(
+    ("values", "message"),
+    [
+        ({"retry": {"initial_delay_seconds": 2.0, "max_delay_seconds": 1.0}}, "at least"),
+        ({"provider": "   "}, "must not be empty"),
+        ({"model": "   "}, "must not be empty"),
+        ({"api_version": "\t"}, "must not be empty"),
+    ],
+)
+def test_config_rejects_invalid_relational_and_empty_values(
+    values: dict[str, object], message: str
+) -> None:
+    with pytest.raises(ValidationError, match=message):
+        SurveyScribeConfig(**values)
+
+
+def test_config_normalizes_safe_routing_values() -> None:
+    config = SurveyScribeConfig(
+        provider=" Azure-OpenAI ",
+        model=" deployment ",
+        api_version=" 2026-01-01 ",
+        base_url="https://example.test/openai?region=eastus",
+    )
+
+    assert config.provider == "azure_openai"
+    assert config.model == "deployment"
+    assert config.api_version == "2026-01-01"
+    assert str(config.base_url) == "https://example.test/openai?region=eastus"
+
+
+@pytest.mark.parametrize("entrypoint", ["from_config", "resolve_cli"])
+def test_explicit_missing_config_paths_are_rejected(tmp_path: Path, entrypoint: str) -> None:
+    missing = tmp_path / "missing.toml"
+
+    with pytest.raises(ConfigurationError, match="does not exist"):
+        if entrypoint == "from_config":
+            SurveyScribeConfig.from_config(missing, environ={})
+        else:
+            SurveyScribeConfig.resolve_cli(config_path=missing, environ={})
+
+
+def test_malformed_toml_is_reported_as_configuration_error(tmp_path: Path) -> None:
+    path = tmp_path / "malformed.toml"
+    path.write_text('config_version = 1\nmodel = "unterminated\n', encoding="utf-8")
+
+    with pytest.raises(ConfigurationError, match="TOMLDecodeError"):
+        SurveyScribeConfig.from_config(path, environ={})
+
+
+@pytest.mark.parametrize(
+    ("constructor", "error_type"),
+    [
+        ({"provider": "   "}, ConfigurationError),
+        ({"api_key": "key", "bearer_token": "token"}, AmbiguousCredentialError),
+    ],
+)
+def test_resolved_values_preserve_public_configuration_error_types(
+    constructor: dict[str, object], error_type: type[Exception]
+) -> None:
+    with pytest.raises(error_type):
+        SurveyScribeConfig.resolve(constructor=constructor)
+
+
+def test_nested_explicit_config_and_constructor_values_merge_by_field() -> None:
+    explicit = SurveyScribeConfig(generation=GenerationConfig(max_output_tokens=99))
+
+    resolved = SurveyScribeConfig.resolve(
+        config=explicit,
+        constructor={"generation": {"seed": 7}},
+    )
+
+    assert resolved.generation.temperature == 0.0
+    assert resolved.generation.max_output_tokens == 99
+    assert resolved.generation.seed == 7
+
+
+def test_model_validator_defends_against_preconstructed_ambiguous_credentials() -> None:
+    invalid = SurveyScribeConfig.model_construct(
+        api_key=SecretStr("key"),
+        bearer_token=SecretStr("token"),
+    )
+
+    with pytest.raises(AmbiguousCredentialError, match="credential"):
+        invalid.reject_ambiguous_credentials()  # type: ignore[operator]
+
+
+def test_validation_boundary_does_not_wrap_ambiguity_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def raise_ambiguity(_cls: type[SurveyScribeConfig], _values: object) -> SurveyScribeConfig:
+        raise AmbiguousCredentialError("ambiguous callback credentials")
+
+    monkeypatch.setattr(SurveyScribeConfig, "model_validate", classmethod(raise_ambiguity))
+
+    with pytest.raises(AmbiguousCredentialError, match="callback"):
+        SurveyScribeConfig._validate_resolved({})

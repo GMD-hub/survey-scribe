@@ -1,0 +1,588 @@
+{
+  "schema_version": "1.0",
+  "fixture_status": "repository-synthetic-recorded-structured-responses",
+  "sensitivity": "non-sensitive",
+  "rights_basis": "repository-synthetic",
+  "benchmark_eligible": false,
+  "provenance": "Hand-authored from the repository synthetic routing sources; no provider response or external questionnaire was used.",
+  "routing_evidence_batches": {
+    "forward_no_route": {
+      "chunk_id": "chunk:prompt-injection",
+      "pass_kind": "forward",
+      "examined_item_ids": [
+        "P1",
+        "P2"
+      ],
+      "evidence": [],
+      "unresolved_references": [],
+      "notes": [
+        "No routing instruction is present in the supplied synthetic items."
+      ]
+    },
+    "forward_multiple_branches_default": {
+      "chunk_id": "chunk:answer-code-branches-default",
+      "pass_kind": "forward",
+      "examined_item_ids": [
+        "A1",
+        "A2",
+        "A3",
+        "A4"
+      ],
+      "evidence": [
+        {
+          "evidence_type": "transition",
+          "local_id": "local:a1-code-1",
+          "perspective": "outgoing",
+          "origin": "forward_extraction",
+          "source": {
+            "raw_reference": "A1",
+            "source_item_id": "A1",
+            "canonical_hint": null,
+            "section_path": [
+              "Main activity"
+            ],
+            "node_kind": "question"
+          },
+          "target": {
+            "raw_reference": "A2",
+            "source_item_id": "A2",
+            "canonical_hint": null,
+            "section_path": [
+              "Main activity"
+            ],
+            "node_kind": "question"
+          },
+          "transition_kind": "conditional",
+          "condition": {
+            "operator": "equals",
+            "item_reference": {
+              "raw_reference": "A1",
+              "source_item_id": "A1",
+              "canonical_hint": null,
+              "section_path": [
+                "Main activity"
+              ],
+              "node_kind": "question"
+            },
+            "value": 1,
+            "values": null,
+            "children": null,
+            "raw_text": "Code 1 goes to A2."
+          },
+          "source_span": {
+            "span_id": "span:a1-routes",
+            "block_id": "block:a1-routes",
+            "source_name": "answer-code-branches-default.txt",
+            "pages": [
+              1
+            ],
+            "sheet": null,
+            "row_start": null,
+            "row_end": null,
+            "source_quote": "Routing instruction: Code 1 goes to A2. Code 2 goes to A3. All other codes go to A4."
+          },
+          "native_expression": null,
+          "explicitly_stated": true,
+          "confidence": 1.0,
+          "ambiguity_note": null
+        },
+        {
+          "evidence_type": "transition",
+          "local_id": "local:a1-code-2",
+          "perspective": "outgoing",
+          "origin": "forward_extraction",
+          "source": {
+            "raw_reference": "A1",
+            "source_item_id": "A1",
+            "canonical_hint": null,
+            "section_path": [
+              "Main activity"
+            ],
+            "node_kind": "question"
+          },
+          "target": {
+            "raw_reference": "A3",
+            "source_item_id": "A3",
+            "canonical_hint": null,
+            "section_path": [
+              "Main activity"
+            ],
+            "node_kind": "question"
+          },
+          "transition_kind": "conditional",
+          "condition": {
+            "operator": "equals",
+            "item_reference": {
+              "raw_reference": "A1",
+              "source_item_id": "A1",
+              "canonical_hint": null,
+              "section_path": [
+                "Main activity"
+              ],
+              "node_kind": "question"
+            },
+            "value": 2,
+            "values": null,
+            "children": null,
+            "raw_text": "Code 2 goes to A3."
+          },
+          "source_span": {
+            "span_id": "span:a1-routes",
+            "block_id": "block:a1-routes",
+            "source_name": "answer-code-branches-default.txt",
+            "pages": [
+              1
+            ],
+            "sheet": null,
+            "row_start": null,
+            "row_end": null,
+            "source_quote": "Routing instruction: Code 1 goes to A2. Code 2 goes to A3. All other codes go to A4."
+          },
+          "native_expression": null,
+          "explicitly_stated": true,
+          "confidence": 1.0,
+          "ambiguity_note": null
+        },
+        {
+          "evidence_type": "transition",
+          "local_id": "local:a1-default",
+          "perspective": "outgoing",
+          "origin": "forward_extraction",
+          "source": {
+            "raw_reference": "A1",
+            "source_item_id": "A1",
+            "canonical_hint": null,
+            "section_path": [
+              "Main activity"
+            ],
+            "node_kind": "question"
+          },
+          "target": {
+            "raw_reference": "A4",
+            "source_item_id": "A4",
+            "canonical_hint": null,
+            "section_path": [
+              "Main activity"
+            ],
+            "node_kind": "question"
+          },
+          "transition_kind": "default",
+          "condition": null,
+          "source_span": {
+            "span_id": "span:a1-routes",
+            "block_id": "block:a1-routes",
+            "source_name": "answer-code-branches-default.txt",
+            "pages": [
+              1
+            ],
+            "sheet": null,
+            "row_start": null,
+            "row_end": null,
+            "source_quote": "Routing instruction: Code 1 goes to A2. Code 2 goes to A3. All other codes go to A4."
+          },
+          "native_expression": null,
+          "explicitly_stated": true,
+          "confidence": 1.0,
+          "ambiguity_note": null
+        }
+      ],
+      "unresolved_references": [],
+      "notes": []
+    },
+    "forward_cross_section": {
+      "chunk_id": "chunk:section-target",
+      "pass_kind": "forward",
+      "examined_item_ids": [
+        "S1",
+        "Employment details",
+        "E1",
+        "E2",
+        "E3"
+      ],
+      "evidence": [
+        {
+          "evidence_type": "transition",
+          "local_id": "local:s1-employment-section",
+          "perspective": "outgoing",
+          "origin": "forward_extraction",
+          "source": {
+            "raw_reference": "S1",
+            "source_item_id": "S1",
+            "canonical_hint": null,
+            "section_path": [
+              "Screening"
+            ],
+            "node_kind": "question"
+          },
+          "target": {
+            "raw_reference": "SECTION Employment details",
+            "source_item_id": null,
+            "canonical_hint": null,
+            "section_path": [
+              "Employment details"
+            ],
+            "node_kind": "section"
+          },
+          "transition_kind": "conditional",
+          "condition": {
+            "operator": "equals",
+            "item_reference": {
+              "raw_reference": "S1",
+              "source_item_id": "S1",
+              "canonical_hint": null,
+              "section_path": [
+                "Screening"
+              ],
+              "node_kind": "question"
+            },
+            "value": 1,
+            "values": null,
+            "children": null,
+            "raw_text": "If response is 1"
+          },
+          "source_span": {
+            "span_id": "span:s1-section-route",
+            "block_id": "block:s1-section-route",
+            "source_name": "section-target.txt",
+            "pages": [
+              1
+            ],
+            "sheet": null,
+            "row_start": null,
+            "row_end": null,
+            "source_quote": "Routing instruction: If response is 1, go to SECTION Employment details. If response is 2, end this module."
+          },
+          "native_expression": null,
+          "explicitly_stated": true,
+          "confidence": 1.0,
+          "ambiguity_note": null
+        }
+      ],
+      "unresolved_references": [],
+      "notes": []
+    },
+    "forward_loop": {
+      "chunk_id": "chunk:roster-loop",
+      "pass_kind": "forward",
+      "examined_item_ids": [
+        "Household roster",
+        "R1",
+        "R2",
+        "R3",
+        "H1"
+      ],
+      "evidence": [
+        {
+          "evidence_type": "transition",
+          "local_id": "local:r3-return-r1",
+          "perspective": "outgoing",
+          "origin": "forward_extraction",
+          "source": {
+            "raw_reference": "R3",
+            "source_item_id": "R3",
+            "canonical_hint": null,
+            "section_path": [
+              "Household roster"
+            ],
+            "node_kind": "question"
+          },
+          "target": {
+            "raw_reference": "R1",
+            "source_item_id": "R1",
+            "canonical_hint": null,
+            "section_path": [
+              "Household roster"
+            ],
+            "node_kind": "question"
+          },
+          "transition_kind": "conditional",
+          "condition": {
+            "operator": "opaque",
+            "item_reference": null,
+            "value": null,
+            "values": null,
+            "children": null,
+            "raw_text": "If another member remains"
+          },
+          "source_span": {
+            "span_id": "span:roster-return",
+            "block_id": "block:roster-return",
+            "source_name": "roster-loop-with-exit.txt",
+            "pages": [
+              1
+            ],
+            "sheet": null,
+            "row_start": null,
+            "row_end": null,
+            "source_quote": "Repeat routing: If another member remains, return to R1 for the next member. Otherwise exit the repeat and go to H1."
+          },
+          "native_expression": null,
+          "explicitly_stated": true,
+          "confidence": 0.95,
+          "ambiguity_note": null
+        }
+      ],
+      "unresolved_references": [],
+      "notes": []
+    },
+    "forward_unresolved_reference": {
+      "chunk_id": "chunk:garbled-target",
+      "pass_kind": "forward",
+      "examined_item_ids": [
+        "G1",
+        "G2"
+      ],
+      "evidence": [
+        {
+          "evidence_type": "transition",
+          "local_id": "local:g1-garbled",
+          "perspective": "outgoing",
+          "origin": "forward_extraction",
+          "source": {
+            "raw_reference": "G1",
+            "source_item_id": "G1",
+            "canonical_hint": null,
+            "section_path": [
+              "Assets"
+            ],
+            "node_kind": "question"
+          },
+          "target": {
+            "raw_reference": "Q??",
+            "source_item_id": null,
+            "canonical_hint": null,
+            "section_path": [
+              "Assets"
+            ],
+            "node_kind": "question"
+          },
+          "transition_kind": "conditional",
+          "condition": {
+            "operator": "equals",
+            "item_reference": {
+              "raw_reference": "G1",
+              "source_item_id": "G1",
+              "canonical_hint": null,
+              "section_path": [
+                "Assets"
+              ],
+              "node_kind": "question"
+            },
+            "value": 2,
+            "values": null,
+            "children": null,
+            "raw_text": "If response is 2"
+          },
+          "source_span": {
+            "span_id": "span:g1-garbled",
+            "block_id": "block:g1-garbled",
+            "source_name": "garbled-target.txt",
+            "pages": [
+              1
+            ],
+            "sheet": null,
+            "row_start": null,
+            "row_end": null,
+            "source_quote": "Routing instruction: If response is 2, go to Q?? [target unreadable in synthetic scan]."
+          },
+          "native_expression": null,
+          "explicitly_stated": true,
+          "confidence": 0.3,
+          "ambiguity_note": "The printed target is not a resolvable item identifier."
+        }
+      ],
+      "unresolved_references": [
+        {
+          "raw_reference": "Q??",
+          "source_item_id": null,
+          "canonical_hint": null,
+          "section_path": [
+            "Assets"
+          ],
+          "node_kind": "question"
+        }
+      ],
+      "notes": []
+    },
+    "incoming_multiple_paths": {
+      "chunk_id": "chunk:incoming-m4",
+      "pass_kind": "incoming_activation",
+      "examined_item_ids": [
+        "M4"
+      ],
+      "evidence": [
+        {
+          "evidence_type": "transition",
+          "local_id": "local:m2-m4",
+          "perspective": "incoming",
+          "origin": "incoming_extraction",
+          "source": {
+            "raw_reference": "M2",
+            "source_item_id": "M2",
+            "canonical_hint": null,
+            "section_path": [
+              "Education"
+            ],
+            "node_kind": "question"
+          },
+          "target": {
+            "raw_reference": "M4",
+            "source_item_id": "M4",
+            "canonical_hint": null,
+            "section_path": [
+              "Education"
+            ],
+            "node_kind": "question"
+          },
+          "transition_kind": "unconditional",
+          "condition": null,
+          "source_span": {
+            "span_id": "span:m2-m4",
+            "block_id": "block:m2-m4",
+            "source_name": "multiple-incoming-paths.txt",
+            "pages": [
+              1
+            ],
+            "sheet": null,
+            "row_start": null,
+            "row_end": null,
+            "source_quote": "Routing instruction: Go to M4."
+          },
+          "native_expression": null,
+          "explicitly_stated": true,
+          "confidence": 1.0,
+          "ambiguity_note": null
+        },
+        {
+          "evidence_type": "transition",
+          "local_id": "local:m3-m4",
+          "perspective": "incoming",
+          "origin": "incoming_extraction",
+          "source": {
+            "raw_reference": "M3",
+            "source_item_id": "M3",
+            "canonical_hint": null,
+            "section_path": [
+              "Education"
+            ],
+            "node_kind": "question"
+          },
+          "target": {
+            "raw_reference": "M4",
+            "source_item_id": "M4",
+            "canonical_hint": null,
+            "section_path": [
+              "Education"
+            ],
+            "node_kind": "question"
+          },
+          "transition_kind": "unconditional",
+          "condition": null,
+          "source_span": {
+            "span_id": "span:m3-m4",
+            "block_id": "block:m3-m4",
+            "source_name": "multiple-incoming-paths.txt",
+            "pages": [
+              1
+            ],
+            "sheet": null,
+            "row_start": null,
+            "row_end": null,
+            "source_quote": "Routing instruction: Go to M4."
+          },
+          "native_expression": null,
+          "explicitly_stated": true,
+          "confidence": 1.0,
+          "ambiguity_note": null
+        }
+      ],
+      "unresolved_references": [],
+      "notes": []
+    },
+    "incoming_activation_only": {
+      "chunk_id": "chunk:activation-v2",
+      "pass_kind": "incoming_activation",
+      "examined_item_ids": [
+        "V2"
+      ],
+      "evidence": [
+        {
+          "evidence_type": "activation",
+          "local_id": "local:v2-activation",
+          "origin": "incoming_extraction",
+          "item": {
+            "raw_reference": "V2",
+            "source_item_id": "V2",
+            "canonical_hint": null,
+            "section_path": [
+              "Livestock"
+            ],
+            "node_kind": "question"
+          },
+          "condition": {
+            "operator": "equals",
+            "item_reference": {
+              "raw_reference": "V1",
+              "source_item_id": "V1",
+              "canonical_hint": null,
+              "section_path": [
+                "Livestock"
+              ],
+              "node_kind": "question"
+            },
+            "value": 1,
+            "values": null,
+            "children": null,
+            "raw_text": "Ask V2 only when V1 is code 1."
+          },
+          "source_span": {
+            "span_id": "span:v2-activation",
+            "block_id": "block:v2-activation",
+            "source_name": "activation-without-transition.txt",
+            "pages": [
+              1
+            ],
+            "sheet": null,
+            "row_start": null,
+            "row_end": null,
+            "source_quote": "Applicability: Ask V2 only when V1 is code 1."
+          },
+          "native_expression": null,
+          "explicitly_stated": true,
+          "confidence": 1.0,
+          "ambiguity_note": null
+        }
+      ],
+      "unresolved_references": [],
+      "notes": [
+        "The source explicitly states that applicability does not direct interview flow."
+      ]
+    }
+  },
+  "reviewer_unresolved": {
+    "reviewed_discrepancy_ids": [
+      "discrepancy:garbled-target"
+    ],
+    "decisions": [
+      {
+        "discrepancy_ids": [
+          "discrepancy:garbled-target"
+        ],
+        "candidate_ids": [
+          "candidate:garbled-target"
+        ],
+        "evidence_ids": [
+          "evidence:garbled-target"
+        ],
+        "cited_span_ids": [
+          "span:garbled-target"
+        ],
+        "action": "unresolved",
+        "replacement": null,
+        "rationale": "The exact bounded quote does not identify one inventory target.",
+        "confidence": 0.2,
+        "needs_human_review": true
+      }
+    ]
+  }
+}
