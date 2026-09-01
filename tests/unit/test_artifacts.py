@@ -54,7 +54,14 @@ def _result(
 
 
 def _active_pointer(output_dir: Path, survey_id: str = "TST_2024_SYNTH") -> Path:
-    return output_dir / ".survey-scribe" / survey_id / "active.json"
+    matches = list((output_dir / ".survey-scribe" / "surveys").glob("*/active.json"))
+    matching = [
+        path
+        for path in matches
+        if json.loads(path.read_text(encoding="utf-8"))["survey_id"] == survey_id
+    ]
+    assert len(matching) == 1
+    return matching[0]
 
 
 def test_write_creates_valid_generation_projection_and_new_frozen_result(tmp_path: Path) -> None:
@@ -67,9 +74,7 @@ def test_write_creates_valid_generation_projection_and_new_frozen_result(tmp_pat
     assert written.status is ResultStatus.success
     assert written.artifacts
     pointer = json.loads(_active_pointer(tmp_path).read_text(encoding="utf-8"))
-    generation = (
-        tmp_path / ".survey-scribe" / "TST_2024_SYNTH" / "generations" / pointer["generation_id"]
-    )
+    generation = _active_pointer(tmp_path).parent / pointer["path"]
     main_path = generation / "TST_2024_SYNTH_svis.json"
     sidecar_path = generation / "TST_2024_SYNTH_sidecar.json"
     manifest_path = generation / "manifest.json"
@@ -91,7 +96,7 @@ def test_default_collision_and_overwrite_create_a_new_generation(tmp_path: Path)
 
     second = _result(run_id="run-2").write(tmp_path, overwrite=True)
     second_pointer = json.loads(_active_pointer(tmp_path).read_text(encoding="utf-8"))
-    generations = tmp_path / ".survey-scribe" / "TST_2024_SYNTH" / "generations"
+    generations = _active_pointer(tmp_path).parent / "generations"
 
     assert first.artifacts != second.artifacts
     assert first_pointer["generation_id"] != second_pointer["generation_id"]
@@ -250,3 +255,45 @@ def test_failed_result_cannot_write_artifacts(tmp_path: Path) -> None:
         failed.write(tmp_path)
 
     assert list(tmp_path.iterdir()) == []
+
+
+def test_required_directory_sync_failure_aborts_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail_directory_sync(path: Path) -> None:
+        raise OSError(f"directory sync failed for {path.name}")
+
+    monkeypatch.setattr(artifacts, "_fsync_directory", fail_directory_sync)
+
+    with pytest.raises(ArtifactWriteError, match="directory sync failed"):
+        _result().write(tmp_path)
+
+    assert not (tmp_path / "TST_2024_SYNTH_svis.json").exists()
+
+
+def test_projection_directory_sync_failure_rolls_back_prior_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _result(run_id="prior").write(tmp_path)
+    pointer_path = _active_pointer(tmp_path)
+    projection_path = tmp_path / "TST_2024_SYNTH_svis.json"
+    prior_pointer = pointer_path.read_bytes()
+    prior_projection = projection_path.read_bytes()
+    original_sync = artifacts._fsync_directory
+    failed = False
+
+    def fail_first_projection_sync(path: Path) -> None:
+        nonlocal failed
+        if path == tmp_path and not failed:
+            failed = True
+            raise OSError("required projection directory sync failed")
+        original_sync(path)
+
+    monkeypatch.setattr(artifacts, "_fsync_directory", fail_first_projection_sync)
+
+    with pytest.raises(ArtifactWriteError, match="required projection directory sync failed"):
+        _result(run_id="replacement").write(tmp_path, overwrite=True)
+
+    assert failed is True
+    assert pointer_path.read_bytes() == prior_pointer
+    assert projection_path.read_bytes() == prior_projection

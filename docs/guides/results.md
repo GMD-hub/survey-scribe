@@ -93,17 +93,30 @@ The output layout is:
 output/
 |-- <survey_id>_svis.json
 `-- .survey-scribe/
-    `-- <survey_id>/
-        |-- active.json
-        `-- generations/
-            `-- <generation_id>/
-                |-- <survey_id>_svis.json
-                |-- <survey_id>_sidecar.json
-                `-- manifest.json
+    |-- aliases/
+    `-- surveys/
+        `-- <exact_identity_key>/
+            |-- active.json
+            `-- generations/
+                `-- <generation_id>/
+                    |-- <survey_id>_svis.json
+                    |-- <survey_id>_sidecar.json
+                    `-- manifest.json
 ```
 
-The main path is a legacy-compatible projection. Generation directories preserve
-immutable historical output, and `active.json` identifies the current generation.
+An exact `SurveySVIS` uses the legacy-compatible `_svis.json` projection. Other
+output types use `_result.json` by default. Supply a typed serializer to select a
+different safe filename and artifact plan:
+
+```python
+from survey_scribe.serialization import JsonArtifactSerializer
+
+serializer = JsonArtifactSerializer(MyResult, filename_suffix="_analysis.json")
+written = result.write(Path("output"), serializer=serializer)
+```
+
+Generation directories preserve immutable historical output, and `active.json`
+identifies the current generation.
 
 ## Collision and overwrite behavior
 
@@ -114,18 +127,16 @@ To publish a new generation while preserving the old one:
 updated = result.write(Path("output"), overwrite=True)
 ```
 
-The writer restricts `survey_id` to letters, numbers, dots, underscores, and
-hyphens, and uses a lock to reject concurrent writers for the same survey.
+The writer restricts `survey_id` to portable, non-reserved filename characters.
+It rejects case and trailing-dot aliases. A process-owned OS lock covers both
+recovery and publication and is released by the operating system after a crash.
 
-The output directory and its existing `.survey-scribe` tree must be trusted and
-free of symlinks. The writer resolves the output root but follows pre-existing
-internal path components.
-
-Each file replacement is atomic. Publication is not one crash-atomic operation
-across the legacy projection and `active.json`. An interrupted process can leave
-those paths on different generations. Readers that need generation consistency
-must resolve `active.json` and verify its manifest. After an unclean shutdown,
-compare the projection with the active generation and republish if required.
+Internal symlinks and Windows reparse points are rejected. Generation files are
+written and flushed in a staging directory before one durable rename. A typed
+journal makes the new generation authoritative before stable projection writes.
+After an unclean shutdown, the next writer repairs the projection and pointer
+idempotently while it holds the same process lock. Required file and directory
+flush errors abort publication instead of being ignored.
 
 ## Sensitive content
 

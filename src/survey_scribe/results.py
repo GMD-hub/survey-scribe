@@ -6,12 +6,15 @@ from copy import deepcopy
 from enum import StrEnum
 from os import PathLike
 from pathlib import Path
-from typing import Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Annotated, Any, Generic, Literal, TypeVar
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictStr, computed_field, model_validator
 
 T = TypeVar("T")
+
+if TYPE_CHECKING:
+    from survey_scribe.serialization.artifacts import ArtifactSerializer
 
 
 class ResultStatus(StrEnum):
@@ -75,6 +78,7 @@ class ArtifactKind(StrEnum):
     sidecar = "sidecar"
     manifest = "manifest"
     legacy = "legacy"
+    projection = "projection"
     active_pointer = "active_pointer"
 
 
@@ -89,6 +93,53 @@ class ArtifactReference(BaseModel):
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
+Sha256 = Annotated[StrictStr, Field(pattern=r"^[0-9a-f]{64}$")]
+SemanticVersion = Annotated[
+    StrictStr,
+    Field(
+        pattern=(
+            r"^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
+            r"(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
+            r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
+        )
+    ),
+]
+
+
+class PromptArtifactProvenance(BaseModel):
+    """One routing prompt identity without prompt or questionnaire content."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
+
+    pass_kind: Literal["forward", "incoming_activation", "reviewer"]
+    version: SemanticVersion
+    prompt_sha256: Sha256
+
+
+class ArtifactProvenance(BaseModel):
+    """Digest-only provenance supplied to an artifact serializer."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
+
+    source_sha256: tuple[Sha256, ...]
+    model_response_sha256: tuple[Sha256, ...]
+    prompt_versions: tuple[PromptArtifactProvenance, ...]
+
+    @model_validator(mode="after")
+    def require_stable_unique_records(self) -> ArtifactProvenance:
+        """Reject duplicate digests and duplicate prompt identities."""
+        if len(set(self.source_sha256)) != len(self.source_sha256):
+            raise ValueError("source digests must be unique")
+        if len(set(self.model_response_sha256)) != len(self.model_response_sha256):
+            raise ValueError("model response digests must be unique")
+        prompt_keys = tuple(
+            (item.pass_kind, item.version, item.prompt_sha256) for item in self.prompt_versions
+        )
+        if len(set(prompt_keys)) != len(prompt_keys):
+            raise ValueError("prompt provenance records must be unique")
+        return self
+
+
 class ExtractionResult(BaseModel, Generic[T]):
     """Frozen result envelope; caller-owned output ``T`` can remain mutable."""
 
@@ -100,6 +151,11 @@ class ExtractionResult(BaseModel, Generic[T]):
     diagnostics: tuple[Diagnostic, ...] = ()
     failed_blocks: tuple[FailedBlock, ...] = ()
     artifacts: tuple[ArtifactReference, ...] = ()
+    artifact_provenance: ArtifactProvenance | None = Field(
+        default=None,
+        exclude=True,
+        repr=False,
+    )
 
     @model_validator(mode="after")
     def derive_survey_id(self) -> ExtractionResult[T]:
@@ -153,6 +209,7 @@ class ExtractionResult(BaseModel, Generic[T]):
         *,
         sidecar: bool = True,
         overwrite: bool = False,
+        serializer: ArtifactSerializer[T] | None = None,
     ) -> ExtractionResult[T]:
         """Publish one versioned generation and return its artifact references.
 
@@ -161,6 +218,8 @@ class ExtractionResult(BaseModel, Generic[T]):
             sidecar: Whether to include the diagnostic sidecar.
             overwrite: Whether to publish a new generation when stable artifacts
                 already exist.
+            serializer: Optional typed serializer. Exact ``SurveySVIS`` uses the
+                legacy v1 serializer; other output uses generic JSON by default.
 
         Returns:
             A new frozen result containing references and SHA-256 digests for the
@@ -173,9 +232,15 @@ class ExtractionResult(BaseModel, Generic[T]):
                 filesystem publication fails.
 
         Note:
-            Each file replacement is atomic, but publication is not crash-atomic
-            across the legacy projection and active pointer.
+            The process-owned survey lock covers recovery and publication. A
+            durable journal repairs a hard exit before another write proceeds.
         """
         from survey_scribe.serialization.artifacts import write_result
 
-        return write_result(self, Path(output_dir), sidecar=sidecar, overwrite=overwrite)
+        return write_result(
+            self,
+            Path(output_dir),
+            sidecar=sidecar,
+            overwrite=overwrite,
+            serializer=serializer,
+        )
