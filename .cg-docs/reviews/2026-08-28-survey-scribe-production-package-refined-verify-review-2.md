@@ -4,38 +4,38 @@ depth: light
 parent-review: .cg-docs/reviews/2026-08-28-survey-scribe-production-package-refined-review.md
 type: verification
 findings:
-  P0.1: open
-  P0.2: open
-  P0.3: open
-  P0.4: open
-  P0.5: open
-  P0.6: open
-  P0.7: open
-  P0.8: open
-  P0.9: open
-  P0.10: open
-  P1.1: open
-  P1.2: open
-  P1.3: open
-  P1.4: open
-  P1.5: open
-  P1.6: open
-  P1.7: open
-  P1.8: open
-  P1.9: open
-  P1.10: open
-  P1.11: open
-  P1.12: open
-  P1.13: open
-  P1.14: open
-  P1.15: open
-  P1.16: open
-  P2.1: open
-  P2.2: open
-  P2.3: open
-  P2.4: open
-  P2.5: open
-  P2.6: open
+  P0.1: fixed
+  P0.2: fixed
+  P0.3: fixed
+  P0.4: fixed
+  P0.5: fixed
+  P0.6: fixed
+  P0.7: fixed
+  P0.8: fixed
+  P0.9: fixed
+  P0.10: fixed
+  P1.1: fixed
+  P1.2: fixed
+  P1.3: fixed
+  P1.4: fixed
+  P1.5: fixed
+  P1.6: fixed
+  P1.7: fixed
+  P1.8: fixed
+  P1.9: fixed
+  P1.10: fixed
+  P1.11: fixed
+  P1.12: fixed
+  P1.13: fixed
+  P1.14: fixed
+  P1.15: fixed
+  P1.16: fixed
+  P2.1: fixed
+  P2.2: fixed
+  P2.3: fixed
+  P2.4: fixed
+  P2.5: fixed
+  P2.6: fixed
 ---
 
 # Verification Review: Questionnaire Routing Graph
@@ -195,3 +195,15 @@ Add `scripts/validate_routing_fixtures.py` to the normal Pyright include list so
 - Duplicate findings from both agents were merged at their highest reported severity.
 - P2/P3 suppression was applied only to exact prior fixed-finding scope.
 - Phase 5 remains blocked by G6, but the new P0/P1 findings also block merge readiness.
+
+## Fix-Triage Evidence: 2026-09-01
+
+- Package-excluded branch coverage: 902 passed, 5 expected skips, 95.12%.
+- Exact current-tree wheel and distribution tests: 4 passed.
+- Project Pyright: 0 errors, 0 warnings.
+- Ruff lint and formatting: passed.
+- POSIX artifact process, recovery, lock, symlink, serializer, and routed artifact gate: passed locally.
+- CI setup now installs the locked `tabular` extra; routing mechanics fixtures are forced to LF.
+- `scripts/cg_pr_preflight.py` selection and native-runner contracts: 7 unit tests passed and CLI selection smoke returned no error.
+- No provider inference call was made. Protected live provider and approved-cache OCR smokes remain environment-gated.
+- Follow-up verification findings and final-tree Windows evidence gaps are tracked in `2026-08-28-survey-scribe-production-package-refined-verify-review-3.md`.

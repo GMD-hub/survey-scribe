@@ -16,7 +16,7 @@ test completed without recursion failure and uses no graph dependency.
 
 ## Hardware
 
-- Host: `wbgmsddg001`
+- Host: generic Windows CI VM
 - Platform: `Windows-10-10.0.20348-SP0`
 - System: VMware Virtual Platform, AMD64
 - CPU: Intel Xeon Platinum 8462Y+, 16 logical processors exposed to the VM
@@ -40,7 +40,7 @@ iterative completion are the assertions.
 Command:
 
 ```text
-uv run pytest tests/unit/test_routing_validation.py::test_scale_1000_nodes_3000_edges_is_iterative_deterministic_and_measured -q -o junit_family=legacy --junitxml="C:\Users\wb384996\AppData\Local\Temp\2\kilo\routing-scale.xml"
+uv run pytest tests/unit/test_routing_validation.py::test_scale_1000_nodes_3000_edges_is_iterative_deterministic_and_measured -q -o junit_family=legacy --junitxml="<external-temp>/routing-scale.xml"
 ```
 
 Command result: `1 passed in 1.13s`.
