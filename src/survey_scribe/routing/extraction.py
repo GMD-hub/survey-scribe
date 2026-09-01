@@ -40,10 +40,11 @@ from survey_scribe.routing.contracts import (
     TransitionEvidence,
 )
 from survey_scribe.routing.identity import (
+    IdentityError,
+    IdentityResolver,
     SourceEvidenceError,
     VerifiedEvidence,
     build_evidence_records,
-    normalized_alias,
 )
 from survey_scribe.routing.prompts import (
     REVIEWER_PROMPT_VERSION,
@@ -64,6 +65,7 @@ from survey_scribe.routing.review import (
     build_review_decisions,
     build_reviewer_packets,
 )
+from survey_scribe.routing.validate import KnownCategoryCodes
 from survey_scribe.sources.base import SourceDocument
 
 T = TypeVar("T", bound=BaseModel)
@@ -232,6 +234,7 @@ async def extract_routing(
     config: RoutingConfig | None = None,
     initial_verified_evidence: VerifiedEvidence | None = None,
     source_priorities: Mapping[str, int] | None = None,
+    known_category_codes: KnownCategoryCodes | None = None,
 ) -> RoutingExtractionResult:
     """Run forward extraction, adaptive Pass B, and bounded discrepancy review."""
     policy = config or RoutingConfig()
@@ -282,6 +285,7 @@ async def extract_routing(
                 records=(),
             ),
             source_priorities=source_priorities,
+            known_category_codes=known_category_codes,
         )
     finally:
         cache.close()
@@ -308,6 +312,7 @@ async def _extract_routing_run(
     cache: ParsedModelCache,
     initial_verified_evidence: VerifiedEvidence,
     source_priorities: Mapping[str, int] | None,
+    known_category_codes: KnownCategoryCodes | None,
 ) -> RoutingExtractionResult:
     system = render_system_prompt()
     forward_chunks = _stable_chunks(inventory, config.max_inventory_items_per_call)
@@ -341,6 +346,7 @@ async def _extract_routing_run(
                     source_binding=source_binding,
                     verified_evidence=initial_verified_evidence,
                     source_priorities=source_priorities,
+                    known_category_codes=known_category_codes,
                 )
             except ReconciliationError:
                 failures.append(_graph_failure())
@@ -396,6 +402,7 @@ async def _extract_routing_run(
             source_binding=source_binding,
             verified_evidence=verified_forward,
             source_priorities=source_priorities,
+            known_category_codes=known_category_codes,
         )
     except ReconciliationError:
         failures.append(_graph_failure())
@@ -457,6 +464,7 @@ async def _extract_routing_run(
             source_binding=source_binding,
             verified_evidence=verified,
             source_priorities=source_priorities,
+            known_category_codes=known_category_codes,
         )
     except ReconciliationError:
         failures.append(_graph_failure())
@@ -501,8 +509,13 @@ async def _extract_routing_run(
                     prompt_version=REVIEWER_PROMPT_VERSION,
                     prompt_sha256=outcome.prompt.sha256,
                     max_source_spans_per_decision=config.max_source_spans_per_decision,
+                    existing_decisions=graph.routing_audit.review_decisions,
                 )
-                graph = append_review_decisions(graph, decisions)
+                graph = append_review_decisions(
+                    graph,
+                    decisions,
+                    known_category_codes=known_category_codes,
+                )
             except (ReviewValidationError, ReconciliationError):
                 failures.append(
                     RoutingRegionFailure(
@@ -795,6 +808,7 @@ def select_pass_b_targets(
     """Apply every fixed risk predicate without using Pass A output in Pass B prompts."""
     ordered = tuple(sorted(inventory, key=lambda item: item.source_order))
     by_node = {item.node_id: item for item in ordered}
+    resolver = IdentityResolver(ordered)
     reasons: dict[str, set[RiskPredicate]] = {}
     transitions = tuple(
         observation
@@ -809,10 +823,11 @@ def select_pass_b_targets(
             reasons.setdefault(item.node_id, set()).add(reason)
 
     for observation in transitions:
-        source_resolution = _resolve_reference(ordered, observation.source)
+        source_resolution = _resolve_reference(ordered, resolver, observation.source)
         source = source_resolution.candidates[0] if source_resolution.status == "resolved" else None
         target_resolution = _resolve_reference(
             ordered,
+            resolver,
             observation.target,
             default_section=(source.section_path if source is not None else ()),
         )
@@ -889,24 +904,20 @@ def select_pass_b_targets(
 
 def _resolve_reference(
     inventory: tuple[InventoryItem, ...],
+    resolver: IdentityResolver,
     reference: ItemReference,
     *,
     default_section: tuple[str, ...] = (),
 ) -> _ReferenceResolution:
-    identity = normalized_alias(reference.source_item_id or reference.raw_reference)
-    section = reference.section_path or default_section
-    matches = tuple(
-        item
-        for item in inventory
-        if item.kind is reference.node_kind
-        and normalized_alias(item.source_item_id or item.raw_reference) == identity
-        and (not section or item.section_path == section)
+    by_node = {item.node_id: item for item in inventory}
+    try:
+        resolution = resolver.resolve(reference, default_section_path=default_section)
+    except IdentityError:
+        return _ReferenceResolution(status="unresolved", candidates=())
+    return _ReferenceResolution(
+        status=resolution.status,
+        candidates=tuple(by_node[node_id] for node_id in resolution.candidate_node_ids),
     )
-    if len(matches) == 1:
-        return _ReferenceResolution(status="resolved", candidates=matches)
-    if matches:
-        return _ReferenceResolution(status="ambiguous", candidates=matches)
-    return _ReferenceResolution(status="unresolved", candidates=())
 
 
 def _has_opaque_condition(condition: object) -> bool:
@@ -971,16 +982,39 @@ def _relevant_inventory(
     maximum: int,
 ) -> tuple[InventoryItem, ...]:
     sections = {item.section_path for item in targets}
-    relevant = tuple(item for item in inventory if item.section_path in sections)
-    if len(relevant) <= maximum:
-        return relevant
     target_ids = {item.node_id for item in targets}
-    selected = list(targets)
+    selected_by_id: dict[str, InventoryItem] = {}
+
+    def add(item: InventoryItem) -> None:
+        if len(selected_by_id) < maximum:
+            selected_by_id.setdefault(item.node_id, item)
+
+    ordered = tuple(sorted(inventory, key=lambda item: item.source_order))
+    for target in sorted(targets, key=lambda item: item.source_order):
+        preceding = tuple(item for item in ordered if item.source_order < target.source_order)
+        for item in reversed(preceding[-3:]):
+            if item.node_id not in target_ids:
+                add(item)
+        seen_sections: set[tuple[str, ...]] = set()
+        for item in reversed(preceding):
+            if item.section_path in seen_sections:
+                continue
+            seen_sections.add(item.section_path)
+            if item.node_id not in target_ids:
+                add(item)
+
+    relevant = tuple(item for item in ordered if item.section_path in sections)
     for item in relevant:
-        if len(selected) >= maximum:
+        if len(selected_by_id) >= maximum:
             break
         if item.node_id not in target_ids:
-            selected.append(item)
+            add(item)
+
+    if not selected_by_id:
+        for target in targets:
+            add(target)
+
+    selected = list(selected_by_id.values())
     selected.sort(key=lambda item: item.source_order)
     return tuple(selected)
 

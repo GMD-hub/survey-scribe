@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Set
 from enum import Enum
 from typing import Annotated, Literal, TypeAlias, TypeVar
 
@@ -35,6 +35,12 @@ from survey_scribe.routing.contracts import (
     PositiveInt,
     SourceSpan,
     StrictRoutingModel,
+    TransitionEvidence,
+    project_extracted_condition,
+)
+from survey_scribe.routing.normalization import (
+    normalize_section_path_value,
+    normalized_alias_value,
 )
 
 NonNegativeInt = Annotated[StrictInt, Field(ge=0)]
@@ -421,6 +427,19 @@ class RoutingAudit(StrictRoutingModel):
             _require_members(decision.candidate_ids, candidates, "decision candidate")
             _require_members(decision.evidence_ids, evidence, "decision evidence")
             _require_members(decision.cited_span_ids, spans, "decision cited span")
+            candidate_evidence = {
+                evidence_id
+                for candidate_id in decision.candidate_ids
+                for evidence_id in candidates[candidate_id].evidence_ids
+            }
+            if not set(decision.evidence_ids).issubset(candidate_evidence):
+                raise ValueError("decision evidence must belong to its reviewed candidates")
+            evidence_spans = {
+                evidence[evidence_id].observation.source_span.span_id
+                for evidence_id in decision.evidence_ids
+            }
+            if not set(decision.cited_span_ids).issubset(evidence_spans):
+                raise ValueError("decision spans must belong to its cited evidence")
             if decision.replacement is not None:
                 _require_members(
                     decision.replacement.evidence_ids,
@@ -552,6 +571,12 @@ class QuestionnaireRoutingGraph(StrictRoutingModel):
         evidence = {item.evidence_id: item for item in self.routing_audit.evidence}
         decisions = {item.decision_id: item for item in self.routing_audit.review_decisions}
         candidates = {item.candidate_id: item for item in self.routing_audit.candidate_edges}
+        inventory = {item.node_id: item for item in self.routing_audit.inventory}
+        superseded_decisions = {
+            decision.supersedes_decision_id
+            for decision in decisions.values()
+            if decision.supersedes_decision_id is not None
+        }
 
         outgoing: dict[str, list[RoutingEdge]] = {node_id: [] for node_id in nodes}
         incoming: dict[str, list[RoutingEdge]] = {node_id: [] for node_id in nodes}
@@ -562,6 +587,14 @@ class QuestionnaireRoutingGraph(StrictRoutingModel):
             _require_members(edge.evidence_ids, evidence, "accepted edge evidence")
             if edge.review_decision_id is not None and edge.review_decision_id not in decisions:
                 raise ValueError("accepted edge review decision must exist in the audit")
+            _validate_edge_support(
+                edge,
+                evidence=evidence,
+                decisions=decisions,
+                candidates=candidates,
+                inventory=inventory,
+                superseded_decisions=superseded_decisions,
+            )
             outgoing[edge.source_node_id].append(edge)
             incoming[edge.target_node_id].append(edge)
             if edge.kind is EdgeKind.default:
@@ -863,12 +896,22 @@ class RoutedSurveySVIS(SurveySVIS):
         if self.routing_graph.routing_audit.source_binding.survey_id != self.survey_id:
             raise ValueError("routing source binding survey must match the routed survey")
         nodes = {node.node_id: node for node in self.routing_graph.nodes}
-        for variable in self.variables:
-            if variable.routing_node_id is None:
-                continue
-            node = nodes.get(variable.routing_node_id)
-            if node is None or node.kind is not NodeKind.question:
+        inventory_links: dict[int, str] = {}
+        for item in self.routing_graph.routing_audit.inventory:
+            for variable_index in item.linked_variable_indices:
+                if variable_index >= len(self.variables):
+                    raise ValueError(
+                        "inventory variable link is outside the routed variable sequence"
+                    )
+                inventory_links[variable_index] = item.node_id
+        for variable_index, variable in enumerate(self.variables):
+            node = None if variable.routing_node_id is None else nodes.get(variable.routing_node_id)
+            if variable.routing_node_id is not None and (
+                node is None or node.kind is not NodeKind.question
+            ):
                 raise ValueError("routed variable links must reference question nodes")
+            if variable.routing_node_id != inventory_links.get(variable_index):
+                raise ValueError("routed variable links must match inventory variable indices")
         return self
 
     def to_survey_svis(self) -> SurveySVIS:
@@ -955,6 +998,226 @@ def _condition_question_ids(condition: CanonicalRoutingCondition) -> tuple[str, 
         if current.children:
             stack.extend(reversed(current.children))
     return tuple(identifiers)
+
+
+def _validate_edge_support(
+    edge: RoutingEdge,
+    *,
+    evidence: Mapping[str, EvidenceRecord],
+    decisions: Mapping[str, ReviewDecision],
+    candidates: Mapping[str, CandidateEdge],
+    inventory: Mapping[str, InventoryItem],
+    superseded_decisions: Set[str],
+) -> None:
+    decision_id = edge.review_decision_id
+    if decision_id is None:
+        if not inventory:
+            raise ValueError("accepted edge evidence requires a complete audit inventory")
+        if any(
+            not _transition_evidence_matches_edge(
+                edge,
+                evidence[evidence_id].observation,
+                inventory,
+            )
+            for evidence_id in edge.evidence_ids
+        ):
+            raise ValueError("accepted edge evidence must describe the same canonical route")
+        return
+
+    if decision_id in superseded_decisions:
+        raise ValueError("accepted edge cannot cite a superseded review decision")
+    decision = decisions[decision_id]
+    if decision.action is ReviewAction.confirm_candidate:
+        matching = tuple(
+            candidate
+            for candidate_id in decision.candidate_ids
+            if (candidate := candidates[candidate_id]).target_node_id is not None
+            and _edge_matches_candidate(edge, candidate, inventory, evidence)
+        )
+        if len(matching) != 1:
+            raise ValueError("confirmed edge must match one active reviewed candidate")
+        return
+    if decision.action is ReviewAction.replace_candidate and decision.replacement is not None:
+        if not _edge_matches_replacement(edge, decision.replacement, inventory, evidence):
+            raise ValueError("replacement edge must match its active review decision")
+        return
+    raise ValueError("accepted edge review decision cannot reject or defer its route")
+
+
+def _transition_evidence_matches_edge(
+    edge: RoutingEdge,
+    observation: EvidenceObservation,
+    inventory: Mapping[str, InventoryItem],
+) -> bool:
+    if not isinstance(observation, TransitionEvidence):
+        return False
+    source = _resolve_audit_reference(observation.source, inventory)
+    source_item = inventory.get(source) if source is not None else None
+    target = _resolve_audit_reference(
+        observation.target,
+        inventory,
+        default_section_path=(source_item.section_path if source_item is not None else ()),
+    )
+    if (
+        source != edge.source_node_id
+        or target != edge.target_node_id
+        or observation.transition_kind.value != edge.kind.value
+    ):
+        return False
+    condition = _project_audit_condition(
+        observation.condition,
+        inventory,
+        default_section_path=(source_item.section_path if source_item is not None else ()),
+    )
+    return _conditions_match(edge.condition, condition)
+
+
+def _edge_matches_candidate(
+    edge: RoutingEdge,
+    candidate: CandidateEdge,
+    inventory: Mapping[str, InventoryItem],
+    evidence: Mapping[str, EvidenceRecord],
+) -> bool:
+    source = inventory.get(candidate.source_node_id)
+    condition = _project_audit_condition(
+        candidate.condition,
+        inventory,
+        default_section_path=(source.section_path if source is not None else ()),
+    )
+    return (
+        edge.source_node_id == candidate.source_node_id
+        and edge.target_node_id == candidate.target_node_id
+        and edge.kind is candidate.kind
+        and edge.priority == candidate.priority
+        and edge.evidence_ids == candidate.evidence_ids
+        and _resolve_audit_reference(
+            candidate.target_reference,
+            inventory,
+            default_section_path=(source.section_path if source is not None else ()),
+        )
+        == candidate.target_node_id
+        and _conditions_match(edge.condition, condition)
+        and all(
+            _transition_evidence_matches_edge(edge, evidence[evidence_id].observation, inventory)
+            for evidence_id in edge.evidence_ids
+        )
+    )
+
+
+def _edge_matches_replacement(
+    edge: RoutingEdge,
+    replacement: ReplacementEdge,
+    inventory: Mapping[str, InventoryItem],
+    evidence: Mapping[str, EvidenceRecord],
+) -> bool:
+    source = inventory.get(replacement.source_node_id)
+    condition = _project_audit_condition(
+        replacement.condition,
+        inventory,
+        default_section_path=(source.section_path if source is not None else ()),
+    )
+    return (
+        edge.source_node_id == replacement.source_node_id
+        and edge.target_node_id == replacement.target_node_id
+        and edge.kind is replacement.kind
+        and edge.priority == replacement.priority
+        and edge.evidence_ids == replacement.evidence_ids
+        and _resolve_audit_reference(
+            replacement.target_reference,
+            inventory,
+            default_section_path=(source.section_path if source is not None else ()),
+        )
+        == replacement.target_node_id
+        and _conditions_match(edge.condition, condition)
+        and all(
+            _transition_evidence_matches_edge(edge, evidence[evidence_id].observation, inventory)
+            for evidence_id in edge.evidence_ids
+        )
+    )
+
+
+def _project_audit_condition(
+    condition: ExtractedRoutingCondition | None,
+    inventory: Mapping[str, InventoryItem],
+    *,
+    default_section_path: tuple[str, ...],
+) -> CanonicalRoutingCondition | None:
+    if condition is None:
+        return None
+    bindings: dict[tuple[tuple[str, ...], str, NodeKind], str] = {}
+    stack = [condition]
+    while stack:
+        current = stack.pop()
+        reference = current.item_reference
+        if reference is not None:
+            node_id = _resolve_audit_reference(
+                reference,
+                inventory,
+                default_section_path=default_section_path,
+            )
+            if node_id is None:
+                return None
+            bindings[reference.binding_key] = node_id
+        if current.children:
+            stack.extend(current.children)
+    try:
+        return project_extracted_condition(condition, bindings)
+    except ValueError:
+        return None
+
+
+def _resolve_audit_reference(
+    reference: ItemReference,
+    inventory: Mapping[str, InventoryItem],
+    *,
+    default_section_path: tuple[str, ...] = (),
+) -> str | None:
+    identity = _audit_alias(reference.source_item_id or reference.raw_reference)
+    section = reference.section_path or default_section_path
+    matches = tuple(
+        item.node_id
+        for item in inventory.values()
+        if item.kind is reference.node_kind
+        and _audit_alias(item.source_item_id or item.raw_reference) == identity
+        and (not section or _audit_section(item.section_path) == _audit_section(section))
+    )
+    if not matches and section and not reference.section_path:
+        matches = tuple(
+            item.node_id
+            for item in inventory.values()
+            if item.kind is reference.node_kind
+            and _audit_alias(item.source_item_id or item.raw_reference) == identity
+        )
+    return matches[0] if len(matches) == 1 else None
+
+
+def _audit_alias(value: str) -> str:
+    return normalized_alias_value(value)
+
+
+def _audit_section(value: tuple[str, ...]) -> tuple[str, ...]:
+    return normalize_section_path_value(value)
+
+
+def _conditions_match(
+    left: CanonicalRoutingCondition | None,
+    right: CanonicalRoutingCondition | None,
+) -> bool:
+    if left is None or right is None:
+        return left is right
+    return _condition_support_identity(left) == _condition_support_identity(right)
+
+
+def _condition_support_identity(condition: CanonicalRoutingCondition) -> str:
+    value = condition.model_dump(mode="json")
+    stack = [value]
+    while stack:
+        current = stack.pop()
+        current.pop("raw_text", None)
+        children = current.get("children")
+        if isinstance(children, list):
+            stack.extend(child for child in children if isinstance(child, dict))
+    return json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
 
 
 __all__ = [

@@ -134,7 +134,7 @@ def analyze_routing_components(
     dead_ends = tuple(
         node_id
         for node_id, node in nodes_by_id.items()
-        if node.kind is not NodeKind.terminal and not outgoing[node_id]
+        if node_id in reachable and node.kind is not NodeKind.terminal and not outgoing[node_id]
     )
     if dead_ends:
         generated.append(_diagnostic("DEAD_END_NONTERMINAL", node_ids=dead_ends))

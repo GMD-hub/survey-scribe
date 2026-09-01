@@ -4,15 +4,19 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from typing import TypeVar
 
 from survey_scribe.models.routing import (
+    InventoryItem,
     QuestionnaireRoutingGraph,
+    ReplacementEdge,
     ReviewDecision,
+    RoutingDiscrepancy,
 )
 from survey_scribe.routing.config import RoutingConfig
 from survey_scribe.routing.diagnostics import stable_identifier
+from survey_scribe.routing.identity import IdentityError, IdentityResolver, normalized_alias
 from survey_scribe.routing.prompts import ReviewerPromptPacket, RoutingReviewerResponse
 
 _SAFE_REVIEW_RATIONALE = "The bounded cited evidence supports the recorded action."
@@ -38,8 +42,10 @@ def build_reviewer_packets(
         if discrepancy.resolved_by_decision_id is None
     )
     packets: list[ReviewerPromptPacket] = []
-    for start in range(0, len(unresolved), config.max_discrepancies_per_review_call):
-        discrepancies = unresolved[start : start + config.max_discrepancies_per_review_call]
+    for discrepancies in _coalesced_discrepancy_batches(
+        unresolved,
+        config.max_discrepancies_per_review_call,
+    ):
         packet_candidates = _ordered_records(
             (candidate_id for item in discrepancies for candidate_id in item.candidate_ids),
             candidates,
@@ -58,6 +64,20 @@ def build_reviewer_packets(
             for candidate in packet_candidates
             if candidate.target_node_id is not None
         )
+        for candidate in packet_candidates:
+            try:
+                target_alias = normalized_alias(
+                    candidate.target_reference.source_item_id
+                    or candidate.target_reference.raw_reference
+                )
+            except IdentityError:
+                continue
+            endpoint_ids.extend(
+                item.node_id
+                for item in audit.inventory
+                if item.kind is candidate.target_reference.node_kind
+                and normalized_alias(item.source_item_id or item.raw_reference) == target_alias
+            )
         packet_inventory = _ordered_records(endpoint_ids, inventory)
         if not packet_inventory:
             raise ReviewValidationError("review packet has no canonical inventory endpoint")
@@ -80,6 +100,7 @@ def build_review_decisions(
     prompt_version: str,
     prompt_sha256: str,
     max_source_spans_per_decision: int = 8,
+    existing_decisions: Sequence[ReviewDecision] = (),
 ) -> tuple[ReviewDecision, ...]:
     """Validate all citations before creating append-only fixed-prose decisions."""
     expected_discrepancies = tuple(item.discrepancy_id for item in packet.discrepancies)
@@ -89,9 +110,24 @@ def build_review_decisions(
     discrepancies = {item.discrepancy_id: item for item in packet.discrepancies}
     evidence = {item.evidence_id: item for item in packet.evidence}
     spans = {item.span_id: item for item in packet.source_spans}
-    inventory_ids = {item.node_id for item in packet.item_inventory}
+    inventory = {item.node_id: item for item in packet.item_inventory}
+    inventory_ids = set(inventory)
+    resolver = IdentityResolver(packet.item_inventory)
     response_digest = _model_sha256(response)
     decisions: list[ReviewDecision] = []
+    latest_by_candidate: dict[str, str] = {}
+    decision_candidates: dict[str, tuple[str, ...]] = {}
+    superseded = {
+        decision.supersedes_decision_id
+        for decision in existing_decisions
+        if decision.supersedes_decision_id is not None
+    }
+    for decision in existing_decisions:
+        decision_candidates[decision.decision_id] = decision.candidate_ids
+        if decision.decision_id in superseded:
+            continue
+        for candidate_id in decision.candidate_ids:
+            latest_by_candidate[candidate_id] = decision.decision_id
     for output in response.decisions:
         if len(output.cited_span_ids) > max_source_spans_per_decision:
             raise ReviewValidationError("review citations are invalid")
@@ -138,6 +174,20 @@ def build_review_decisions(
             replacement.source_node_id not in inventory_ids
             or replacement.target_node_id not in inventory_ids
             or not set(replacement.evidence_ids).issubset(output.evidence_ids)
+            or not _replacement_target_matches(replacement, inventory, resolver)
+        ):
+            raise ReviewValidationError("review citations are invalid")
+        predecessors = {
+            latest_by_candidate[candidate_id]
+            for candidate_id in output.candidate_ids
+            if candidate_id in latest_by_candidate
+        }
+        if len(predecessors) > 1:
+            raise ReviewValidationError("review citations are invalid")
+        predecessor_id = next(iter(predecessors), None)
+        if (
+            predecessor_id is not None
+            and decision_candidates[predecessor_id] != output.candidate_ids
         ):
             raise ReviewValidationError("review citations are invalid")
         payload = {
@@ -148,29 +198,83 @@ def build_review_decisions(
             "evidence_ids": output.evidence_ids,
             "prompt_sha256": prompt_sha256,
             "provider_response_sha256": response_digest,
+            "supersedes_decision_id": predecessor_id,
             "replacement": (
                 replacement.model_dump(mode="json") if replacement is not None else None
             ),
         }
-        decisions.append(
-            ReviewDecision(
-                decision_id=stable_identifier("review-decision", payload),
-                discrepancy_ids=output.discrepancy_ids,
-                candidate_ids=output.candidate_ids,
-                evidence_ids=output.evidence_ids,
-                cited_span_ids=output.cited_span_ids,
-                action=output.action,
-                replacement=replacement,
-                rationale=_SAFE_REVIEW_RATIONALE,
-                confidence=output.confidence,
-                needs_human_review=output.needs_human_review,
-                prompt_version=prompt_version,
-                prompt_sha256=prompt_sha256,
-                provider_response_sha256=response_digest,
-                supersedes_decision_id=None,
-            )
+        decision = ReviewDecision(
+            decision_id=stable_identifier("review-decision", payload),
+            discrepancy_ids=output.discrepancy_ids,
+            candidate_ids=output.candidate_ids,
+            evidence_ids=output.evidence_ids,
+            cited_span_ids=output.cited_span_ids,
+            action=output.action,
+            replacement=replacement,
+            rationale=_SAFE_REVIEW_RATIONALE,
+            confidence=output.confidence,
+            needs_human_review=output.needs_human_review,
+            prompt_version=prompt_version,
+            prompt_sha256=prompt_sha256,
+            provider_response_sha256=response_digest,
+            supersedes_decision_id=predecessor_id,
         )
+        decisions.append(decision)
+        decision_candidates[decision.decision_id] = decision.candidate_ids
+        for candidate_id in decision.candidate_ids:
+            latest_by_candidate[candidate_id] = decision.decision_id
     return tuple(decisions)
+
+
+def _replacement_target_matches(
+    replacement: ReplacementEdge,
+    inventory: Mapping[str, InventoryItem],
+    resolver: IdentityResolver,
+) -> bool:
+    source = inventory[replacement.source_node_id]
+    try:
+        resolution = resolver.resolve(
+            replacement.target_reference,
+            default_section_path=source.section_path,
+        )
+    except IdentityError:
+        return False
+    return resolution.status == "resolved" and resolution.node_id == replacement.target_node_id
+
+
+def _coalesced_discrepancy_batches(
+    discrepancies: Sequence[RoutingDiscrepancy],
+    maximum: int,
+) -> tuple[tuple[RoutingDiscrepancy, ...], ...]:
+    remaining = list(discrepancies)
+    components: list[tuple[RoutingDiscrepancy, ...]] = []
+    while remaining:
+        connected: list[RoutingDiscrepancy] = [remaining.pop(0)]
+        candidate_ids = set(connected[0].candidate_ids)
+        changed = True
+        while changed:
+            changed = False
+            for item in tuple(remaining):
+                item_candidates = set(item.candidate_ids)
+                if candidate_ids.intersection(item_candidates):
+                    remaining.remove(item)
+                    connected.append(item)
+                    candidate_ids.update(item_candidates)
+                    changed = True
+        if len(connected) > maximum:
+            raise ReviewValidationError("overlapping discrepancies exceed the review packet limit")
+        components.append(tuple(connected))
+
+    batches: list[tuple[RoutingDiscrepancy, ...]] = []
+    pending: list[RoutingDiscrepancy] = []
+    for component in components:
+        if pending and len(pending) + len(component) > maximum:
+            batches.append(tuple(pending))
+            pending = []
+        pending.extend(component)
+    if pending:
+        batches.append(tuple(pending))
+    return tuple(batches)
 
 
 _Record = TypeVar("_Record")

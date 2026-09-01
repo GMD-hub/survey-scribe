@@ -37,6 +37,7 @@ from survey_scribe.routing.identity import (
     validate_source_binding,
     verify_source_quote,
 )
+from survey_scribe.routing.normalization import normalized_alias_value
 from survey_scribe.sources.base import SourceBlock, SourceDocument, SourceProvenance
 
 
@@ -384,6 +385,12 @@ def test_source_binding_uses_and_validates_only_the_normalized_snapshot() -> Non
 
     mime_svis = _svis().model_copy(update={"source_format": "text/plain"})
     assert create_source_binding(document, mime_svis).media_type == "text/plain"
+
+
+def test_shared_alias_normalization_preserves_distinct_unicode_identities() -> None:
+    assert normalized_alias_value("É") == normalized_alias("É") == "é"
+    assert normalized_alias_value("Ñ") == normalized_alias("Ñ") == "ñ"
+    assert normalized_alias("É") != normalized_alias("Ñ")
 
 
 def test_source_quote_verification_normalizes_only_bounded_whitespace() -> None:

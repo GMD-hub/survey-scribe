@@ -24,6 +24,11 @@ from survey_scribe.routing.contracts import (
     SourceSpan,
     StrictRoutingModel,
 )
+from survey_scribe.routing.normalization import (
+    identity_slug,
+    normalize_section_path_value,
+    normalized_alias_value,
+)
 from survey_scribe.sources.base import SourceDocument
 
 SOURCE_CONVERSION_SCHEMA_VERSION = "1.0"
@@ -32,11 +37,6 @@ DigestFactory: TypeAlias = Callable[[bytes], str]
 ResolutionStatus: TypeAlias = Literal["resolved", "ambiguous", "unresolved"]
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
-_ALIAS_SEPARATORS_RE = re.compile(r"[\s._-]+")
-_QUESTION_NUMBER_RE = re.compile(r"^(?:q|question)0*([0-9]+)$")
-_NUMBER_RE = re.compile(r"^0*([0-9]+)$")
-_TABLE_REFERENCE_RE = re.compile(r"^(?:col|column)[\s._-]+(.+)$")
-
 _MEDIA_TYPES_BY_FORMAT: Mapping[str, frozenset[str]] = {
     "csv": frozenset({"text/csv"}),
     "docx": frozenset({"application/vnd.openxmlformats-officedocument.wordprocessingml.document"}),
@@ -128,29 +128,18 @@ def _digest(payload: bytes, digest_factory: DigestFactory) -> str:
 
 def normalize_section_path(section_path: Iterable[str]) -> tuple[str, ...]:
     """Normalize a section namespace without discarding its hierarchy."""
-    normalized = tuple(_slug(part) for part in section_path)
-    if any(not part for part in normalized):
-        raise IdentityError("section path parts must contain identity characters")
-    return normalized
+    try:
+        return normalize_section_path_value(section_path)
+    except ValueError as error:
+        raise IdentityError(str(error)) from None
 
 
 def normalized_alias(value: str) -> str:
     """Return one bounded exact alias key without semantic or fuzzy matching."""
-    normalized = unicodedata.normalize("NFKC", value).strip().casefold()
-    table_match = _TABLE_REFERENCE_RE.fullmatch(normalized)
-    if table_match is not None:
-        normalized = table_match.group(1).strip()
-    compact = _ALIAS_SEPARATORS_RE.sub("", normalized)
-    question_match = _QUESTION_NUMBER_RE.fullmatch(compact)
-    if question_match is not None:
-        return f"q{int(question_match.group(1))}"
-    number_match = _NUMBER_RE.fullmatch(compact)
-    if number_match is not None:
-        return f"q{int(number_match.group(1))}"
-    alias = _slug(normalized)
-    if not alias:
-        raise IdentityError("item reference must contain identity characters")
-    return alias
+    try:
+        return normalized_alias_value(value)
+    except ValueError as error:
+        raise IdentityError(str(error)) from None
 
 
 def printed_identity_key(
@@ -435,18 +424,7 @@ def build_evidence_records(
 
 
 def _slug(value: str) -> str:
-    normalized = unicodedata.normalize("NFKC", value).strip().casefold()
-    parts: list[str] = []
-    separator = False
-    for character in normalized:
-        if character.isalnum():
-            if separator and parts:
-                parts.append("-")
-            parts.append(character)
-            separator = False
-        else:
-            separator = True
-    return "".join(parts).strip("-")
+    return identity_slug(value)
 
 
 def _normalize_source_text(value: str) -> str:

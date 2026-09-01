@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import re
+import unicodedata
+from collections import Counter
 from typing import cast
 
 from pydantic import ValidationError
@@ -21,7 +23,7 @@ from survey_scribe.models.routing import (
     TerminalKind,
 )
 from survey_scribe.models.svis import SurveySVIS, SurveyVariable
-from survey_scribe.providers.base import StructuredProvider
+from survey_scribe.providers.base import ProviderError, StructuredProvider
 from survey_scribe.results import (
     ArtifactProvenance,
     Diagnostic,
@@ -31,7 +33,7 @@ from survey_scribe.results import (
     PromptArtifactProvenance,
 )
 from survey_scribe.routing.config import RoutingConfig
-from survey_scribe.routing.contracts import NodeKind
+from survey_scribe.routing.contracts import NodeKind, RoutingScalar
 from survey_scribe.routing.extraction import (
     ProviderCallRecord,
     RoutingExtractionStatus,
@@ -49,7 +51,7 @@ from survey_scribe.routing.reconcile import ReconciliationError, reconcile_routi
 from survey_scribe.sources.base import LocalSource, SourceBundle, SourceDocument, SourceError
 from survey_scribe.sources.registry import SourceRegistry
 
-_PRINTED_ITEM_ID = re.compile(r"(?i)\b(?:question\s+)?(q[0-9]+[a-z]?)\b")
+_PRINTED_ITEM_ID = re.compile(r"(?i)^\s*(?:question\s+)?(q[0-9]+[a-z]?)\b[\s.:|)\]-]*")
 
 
 class QuestionnaireRouter:
@@ -90,7 +92,11 @@ class QuestionnaireRouter:
         """Build a routed SVIS with native bypass or provider-backed enrichment."""
         detached = SurveySVIS.model_validate(svis.model_dump(mode="json"))
         try:
-            conversion = self._sources.convert_with_native(source, detached)
+            conversion = await asyncio.to_thread(
+                self._sources.convert_with_native,
+                source,
+                detached,
+            )
         except SourceBindingError:
             return _failed(detached.survey_id, "ROUTING_SOURCE_MISMATCH", _SOURCE_MISMATCH)
         except SourceError as error:
@@ -126,6 +132,7 @@ class QuestionnaireRouter:
                 "ROUTING_EMPTY_INVENTORY",
                 "The routing inventory is empty or invalid.",
             )
+        known_category_codes = _known_category_codes(detached, prepared)
         if native is not None and not native.complete and self._provider is None:
             return _failed(
                 detached.survey_id,
@@ -145,6 +152,7 @@ class QuestionnaireRouter:
                     source_binding=conversion.source_binding,
                     verified_evidence=prepared.evidence,
                     source_priorities=prepared.source_priorities,
+                    known_category_codes=known_category_codes,
                 )
             except (ReconciliationError, ValidationError):
                 return _failed(
@@ -165,8 +173,9 @@ class QuestionnaireRouter:
                     config=self._config,
                     initial_verified_evidence=(prepared.evidence if native is not None else None),
                     source_priorities=(prepared.source_priorities if native is not None else None),
+                    known_category_codes=known_category_codes,
                 )
-            except Exception:
+            except (ProviderError, ReconciliationError, SourceBindingError, ValidationError):
                 return _failed(
                     detached.survey_id,
                     "ROUTING_PROVIDER_FAILED",
@@ -244,7 +253,12 @@ def _document_semantics(document: SourceDocument, svis: SurveySVIS) -> NativeRou
         )
     first = document.blocks[0]
     last = document.blocks[-1]
-    candidates = _question_candidates(document)
+    candidates = _question_candidates(document, svis)
+    candidate_matches = tuple(
+        _matching_variable_names(source_item_id, source_text, svis)
+        for source_item_id, source_text, _ in candidates
+    )
+    match_counts = Counter(name for matches in candidate_matches for name in matches)
     items: list[NativeRoutingItem] = [
         NativeRoutingItem(
             local_id="document:entry",
@@ -264,28 +278,29 @@ def _document_semantics(document: SourceDocument, svis: SurveySVIS) -> NativeRou
             repeat_kind=None,
         )
     ]
-    for index, variable in enumerate(svis.variables):
-        if index < len(candidates):
-            source_item_id, source_text, block_id = candidates[index]
-        else:
-            block = document.blocks[min(index, len(document.blocks) - 1)]
-            source_item_id = None
-            source_text = _variable_source_text(variable, block.text)
-            block_id = block.id
+    for index, ((source_item_id, source_text, block_id), matches) in enumerate(
+        zip(candidates, candidate_matches, strict=True)
+    ):
+        linked_variable_names = tuple(name for name in matches if match_counts[name] == 1)
+        linked_variables = tuple(
+            variable for variable in svis.variables if variable.raw_name in linked_variable_names
+        )
+        modules = {variable.module for variable in linked_variables if variable.module}
+        label = _question_candidate_label(source_item_id, source_text)
         items.append(
             NativeRoutingItem(
                 local_id=f"document:question:{index:06d}",
                 source_item_id=source_item_id,
-                raw_reference=source_item_id or f"Logical question {index + 1}",
-                label=variable.label or variable.question_text or f"Logical question {index + 1}",
-                section_path=((variable.module,) if variable.module else ()),
+                raw_reference=source_item_id or source_text,
+                label=label,
+                section_path=((next(iter(modules)),) if len(modules) == 1 else ()),
                 source_order=index + 1,
                 block_ids=(block_id,),
                 kind=NodeKind.question,
                 parent_local_id=None,
                 repeat_group_local_id=None,
                 is_entry=False,
-                linked_variable_names=(variable.raw_name,),
+                linked_variable_names=linked_variable_names,
                 source_text=source_text,
                 terminal_kind=None,
                 repeat_kind=None,
@@ -322,21 +337,64 @@ def _document_semantics(document: SourceDocument, svis: SurveySVIS) -> NativeRou
     )
 
 
-def _question_candidates(document: SourceDocument) -> tuple[tuple[str, str, str], ...]:
-    candidates: list[tuple[str, str, str]] = []
+def _question_candidates(
+    document: SourceDocument,
+    svis: SurveySVIS,
+) -> tuple[tuple[str | None, str, str], ...]:
+    candidates: list[tuple[str | None, str, str]] = []
     for block in document.blocks:
         for line in block.text.splitlines() or (block.text,):
-            match = _PRINTED_ITEM_ID.search(line)
+            normalized_line = line.strip()
+            if not normalized_line:
+                continue
+            match = _PRINTED_ITEM_ID.match(normalized_line)
             if match is not None:
-                candidates.append((match.group(1).upper(), line, block.id))
+                candidates.append((match.group(1).upper(), normalized_line, block.id))
+            elif _matching_variable_names(None, normalized_line, svis):
+                candidates.append((None, normalized_line, block.id))
     return tuple(candidates)
 
 
-def _variable_source_text(variable: SurveyVariable, block_text: str) -> str:
-    for value in (variable.question_text, variable.label):
-        if value and value in block_text:
-            return value
-    return block_text
+def _matching_variable_names(
+    source_item_id: str | None,
+    source_text: str,
+    svis: SurveySVIS,
+) -> tuple[str, ...]:
+    source_label = _normalize_identity_text(_question_candidate_label(source_item_id, source_text))
+    source_id = source_item_id.casefold() if source_item_id is not None else None
+    if source_id is not None:
+        id_matches = [
+            variable.raw_name
+            for variable in svis.variables
+            if variable.raw_name.casefold() == source_id
+        ]
+        if id_matches:
+            return (id_matches[0],) if len(id_matches) == 1 else ()
+    matches: list[str] = []
+    for variable in svis.variables:
+        identities = {
+            _normalize_identity_text(value)
+            for value in (variable.raw_name, variable.label, variable.question_text)
+            if value
+        }
+        if source_label and source_label in identities:
+            matches.append(variable.raw_name)
+    unique = tuple(dict.fromkeys(matches))
+    return unique if len(unique) == 1 else ()
+
+
+def _question_candidate_label(source_item_id: str | None, source_text: str) -> str:
+    if source_item_id is None:
+        return source_text
+    match = _PRINTED_ITEM_ID.match(source_text)
+    label = source_text[match.end() :].strip() if match is not None else source_text
+    return label or source_item_id
+
+
+def _normalize_identity_text(value: str) -> str:
+    normalized = unicodedata.normalize("NFKC", value)
+    normalized = re.sub(r"\s+", " ", normalized).strip().casefold()
+    return normalized.rstrip(".:")
 
 
 def _routed_svis(
@@ -364,6 +422,23 @@ def _routed_svis(
         routing_schema_version="1.0",
         routing_graph=graph,
     )
+
+
+def _known_category_codes(
+    svis: SurveySVIS,
+    prepared: PreparedNativeRouting,
+) -> dict[str, tuple[RoutingScalar, ...]]:
+    observed: dict[str, list[tuple[RoutingScalar, ...]]] = {}
+    for variable_index, node_id in enumerate(prepared.inventory.variable_node_ids):
+        categories = svis.variables[variable_index].categories
+        if node_id is None or not categories:
+            continue
+        observed.setdefault(node_id, []).append(tuple(category.code for category in categories))
+    return {
+        node_id: values[0]
+        for node_id, values in observed.items()
+        if values and all(value == values[0] for value in values)
+    }
 
 
 def _routed_variable(variable: SurveyVariable, node_id: str | None) -> RoutedSurveyVariable:

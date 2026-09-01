@@ -19,6 +19,7 @@ from survey_scribe.models.routing import (
     RoutingSourceBinding,
     TerminalKind,
 )
+from survey_scribe.routing.config import RoutingConfig
 from survey_scribe.routing.contracts import (
     ActivationEvidence,
     CanonicalRoutingCondition,
@@ -29,6 +30,7 @@ from survey_scribe.routing.contracts import (
     ItemReference,
     NativeExpression,
     NodeKind,
+    RoutingScalar,
     SourceSpan,
     TransitionEvidence,
     TransitionKind,
@@ -39,6 +41,7 @@ from survey_scribe.routing.reconcile import (
     append_review_decisions,
     reconcile_routing_graph,
 )
+from survey_scribe.routing.review import build_reviewer_packets
 
 
 def _reference(
@@ -258,6 +261,7 @@ def _reconcile(
     *,
     inventory: tuple[InventoryItem, ...] | None = None,
     priorities: Mapping[str, int] | None = None,
+    known_category_codes: Mapping[str, tuple[RoutingScalar, ...]] | None = None,
 ):
     items = inventory or _inventory()
     return reconcile_routing_graph(
@@ -267,6 +271,7 @@ def _reconcile(
         source_binding=_binding(),
         verified_evidence=_verified(records),
         source_priorities=priorities,
+        known_category_codes=known_category_codes,
     )
 
 
@@ -380,8 +385,89 @@ def test_forward_evidence_accepts_parallel_edges_and_derives_accepted_only_adjac
     assert q2.next_node_ids == ("terminal:complete",)
 
 
+def test_reconciliation_uses_linked_category_codes_for_end_to_end_branch_coverage() -> None:
+    first_branch = _transition(
+        "evidence:category-one",
+        "Q1",
+        "Q2",
+        kind=TransitionKind.conditional,
+        condition=_condition(value=1),
+    )
+    second_branch = _transition(
+        "evidence:category-two",
+        "Q1",
+        "Q3",
+        kind=TransitionKind.conditional,
+        condition=_condition(value=2),
+    )
+    known = {"question:main:q1": (1, 2)}
+
+    missing = _reconcile((first_branch,), known_category_codes=known)
+    complete = _reconcile(
+        (first_branch, second_branch),
+        known_category_codes=known,
+    )
+
+    assert "UNCOVERED_BRANCH" in {item.code for item in missing.diagnostics}
+    assert "UNCOVERED_BRANCH" not in {item.code for item in complete.diagnostics}
+
+
+def test_independently_verified_sibling_branches_are_not_cross_compared() -> None:
+    records = (
+        _transition(
+            "evidence:forward-one",
+            "Q1",
+            "Q2",
+            kind=TransitionKind.conditional,
+            condition=_condition(value=1),
+        ),
+        _transition(
+            "evidence:forward-two",
+            "Q1",
+            "Q3",
+            kind=TransitionKind.conditional,
+            condition=_condition(value=2),
+        ),
+        _transition(
+            "evidence:incoming-one",
+            "Q1",
+            "Q2",
+            kind=TransitionKind.conditional,
+            condition=_condition(value=1),
+            origin=EvidenceOrigin.incoming_extraction,
+        ),
+        _transition(
+            "evidence:incoming-two",
+            "Q1",
+            "Q3",
+            kind=TransitionKind.conditional,
+            condition=_condition(value=2),
+            origin=EvidenceOrigin.incoming_extraction,
+        ),
+    )
+    priorities = {
+        "evidence:forward-one": 1,
+        "evidence:incoming-one": 1,
+        "evidence:forward-two": 2,
+        "evidence:incoming-two": 2,
+    }
+
+    graph = _reconcile(records, priorities=priorities)
+
+    assert [edge.target_node_id for edge in graph.edges] == [
+        "question:main:q2",
+        "question:main:q3",
+    ]
+    assert [edge.evidence_ids for edge in graph.edges] == [
+        ("evidence:forward-one", "evidence:incoming-one"),
+        ("evidence:forward-two", "evidence:incoming-two"),
+    ]
+    assert graph.routing_audit.candidate_edges == ()
+    assert "CONFLICTING_TARGET" not in {item.code for item in graph.diagnostics}
+
+
 @pytest.mark.parametrize(
-    ("incoming", "expected_code"),
+    ("incoming", "expected_code", "forward_is_accepted"),
     [
         (
             _transition(
@@ -391,6 +477,7 @@ def test_forward_evidence_accepts_parallel_edges_and_derives_accepted_only_adjac
                 origin=EvidenceOrigin.incoming_extraction,
             ),
             "CONFLICTING_TARGET",
+            False,
         ),
         (
             _transition(
@@ -401,33 +488,44 @@ def test_forward_evidence_accepts_parallel_edges_and_derives_accepted_only_adjac
                 condition=_condition(value=2),
                 origin=EvidenceOrigin.incoming_extraction,
             ),
-            "CONFLICTING_CONDITION",
+            "INCOMING_ONLY",
+            True,
         ),
     ],
 )
 def test_incoming_disagreement_moves_forward_and_incoming_claims_to_audit(
     incoming: EvidenceRecord,
     expected_code: str,
+    forward_is_accepted: bool,
 ) -> None:
+    assert isinstance(incoming.observation, TransitionEvidence)
     forward = _transition(
         "evidence:forward",
         "Q1",
         "Q2",
         kind=(
             TransitionKind.conditional
-            if expected_code == "CONFLICTING_CONDITION"
+            if incoming.observation.transition_kind is TransitionKind.conditional
             else TransitionKind.unconditional
         ),
-        condition=_condition(value=1) if expected_code == "CONFLICTING_CONDITION" else None,
+        condition=(
+            _condition(value=1)
+            if incoming.observation.transition_kind is TransitionKind.conditional
+            else None
+        ),
     )
 
     graph = _reconcile((forward, incoming))
 
-    assert graph.edges == ()
-    assert {item.evidence_ids for item in graph.routing_audit.candidate_edges} == {
-        (forward.evidence_id,),
-        (incoming.evidence_id,),
-    }
+    assert bool(graph.edges) is forward_is_accepted
+    expected_candidates = (
+        {(incoming.evidence_id,)}
+        if forward_is_accepted
+        else {(forward.evidence_id,), (incoming.evidence_id,)}
+    )
+    assert {
+        item.evidence_ids for item in graph.routing_audit.candidate_edges
+    } == expected_candidates
     assert expected_code in {diagnostic.code for diagnostic in graph.diagnostics}
     assert graph.routing_audit.discrepancies[0].candidate_ids
 
@@ -541,6 +639,28 @@ def test_one_default_is_accepted_and_conflicting_defaults_remain_candidates() ->
     } == {"evidence:default-a", "evidence:default-b"}
     assert graph.routing_audit.discrepancies[0].kind.value == "multiple_defaults"
     assert "MULTIPLE_DEFAULTS" in {item.code for item in graph.diagnostics}
+
+
+def test_reviewer_packet_includes_complete_identity_collision_closure() -> None:
+    inventory = (
+        _inventory_item("entry:start", "START", 0, kind=NodeKind.entry),
+        _inventory_item("question:main:q0", "Q0", 1),
+        _inventory_item("question:main:q1-a", "Q1", 2),
+        _inventory_item("question:main:q1-b", "Q1", 3),
+        _inventory_item("terminal:complete", "END", 4, kind=NodeKind.terminal),
+    )
+    graph = _reconcile(
+        (_transition("evidence:ambiguous", "Q0", "Q1"),),
+        inventory=inventory,
+    )
+
+    packets = build_reviewer_packets(graph, RoutingConfig())
+
+    assert len(packets) == 1
+    assert {item.node_id for item in packets[0].item_inventory if item.source_item_id == "Q1"} == {
+        "question:main:q1-a",
+        "question:main:q1-b",
+    }
 
 
 def test_ambiguous_fuzzy_unresolved_opaque_and_condition_references_stay_in_audit() -> None:
@@ -668,7 +788,12 @@ def test_confirm_then_reject_is_append_only_and_updates_only_review_accepted_edg
 
 
 def test_replace_and_unresolved_reviews_preserve_original_candidate_history() -> None:
-    unresolved_evidence = _transition("evidence:unresolved", "Q1", "missing")
+    unresolved_evidence = _transition(
+        "evidence:unresolved",
+        "Q1",
+        "Q3",
+        ambiguity_note="The printed target requires review.",
+    )
     initial = _reconcile((unresolved_evidence,))
     replacement = ReplacementEdge(
         source_node_id="question:main:q1",
@@ -690,7 +815,7 @@ def test_replace_and_unresolved_reviews_preserve_original_candidate_history() ->
 
     assert replaced.edges[0].target_node_id == "question:main:q3"
     assert replaced.edges[0].review_decision_id == "decision:replace"
-    assert replaced.routing_audit.candidate_edges[0].target_node_id is None
+    assert replaced.routing_audit.candidate_edges[0].target_node_id == "question:main:q3"
     assert replaced.routing_audit.candidate_edges[0].status is CandidateStatus.rejected
 
     unresolved = _decision(

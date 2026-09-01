@@ -93,6 +93,7 @@ def test_source_package_contains_step_10_runtime_modules(repository_root) -> Non
         "src/survey_scribe/routing/identity.py",
         "src/survey_scribe/routing/inventory.py",
         "src/survey_scribe/routing/native.py",
+        "src/survey_scribe/routing/normalization.py",
         "src/survey_scribe/routing/pipeline.py",
         "src/survey_scribe/routing/prompts.py",
         "src/survey_scribe/routing/reconcile.py",

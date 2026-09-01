@@ -52,6 +52,7 @@ from survey_scribe.routing.extraction import (
     RiskPredicate,
     RoutingExtractionStatus,
     _generate_cached,
+    _relevant_inventory,
     extract_routing,
     select_pass_b_targets,
 )
@@ -63,6 +64,7 @@ from survey_scribe.routing.prompts import (
 )
 from survey_scribe.routing.review import (
     ReviewValidationError,
+    _coalesced_discrepancy_batches,
     build_review_decisions,
 )
 from survey_scribe.sources.base import SourceBlock, SourceCoverage, SourceDocument, SourceProvenance
@@ -460,7 +462,11 @@ async def test_complete_request_cache_hits_only_inside_one_open_run() -> None:
         ),
         (
             RiskPredicate.ambiguous_target,
-            (_item("Q0", 0), _item("Q1", 1), _item("Q1", 2)),
+            (
+                _item("Q0", 0),
+                _item("Q1", 1),
+                _item("Q1", 2).model_copy(update={"node_id": "question:main:q1-duplicate"}),
+            ),
             _batch((_transition("a", "Q0", "Q1", source_order=0),)),
         ),
         (
@@ -733,6 +739,97 @@ async def test_risky_region_runs_independent_pass_b_and_merges_evidence() -> Non
         RoutingPassKind.forward,
         RoutingPassKind.incoming_activation,
     ]
+
+
+@pytest.mark.asyncio
+async def test_cross_section_pass_b_packet_includes_independent_predecessor_context() -> None:
+    inventory = (
+        _item("Q0", 0, section=("A",)),
+        _item("Q1", 1, section=("A",)),
+        _item("Q2", 2, section=("B",)),
+        _item("Q3", 3, section=("B",)),
+    )
+
+    async def respond(request: FakeRequest) -> object:
+        task = _task_message(request)
+        chunk_id = json.loads(task.split("CHUNK_JSON: ", maxsplit=1)[1].splitlines()[0])
+        if task.startswith("PASS: forward"):
+            items = _data_block(task, "ITEM_INVENTORY")
+            assert isinstance(items, list)
+            examined = tuple(item["source_item_id"] for item in items)
+            evidence = (
+                (
+                    _transition(
+                        "forward:cross-section",
+                        "Q1",
+                        "Q2",
+                        source_order=1,
+                        source_section=("A",),
+                        target_section=("B",),
+                    ),
+                )
+                if examined == ("Q0", "Q1")
+                else ()
+            )
+            return RoutingEvidenceBatch(
+                chunk_id=chunk_id,
+                pass_kind=RoutingPassKind.forward,
+                examined_item_ids=examined,
+                evidence=evidence,
+                unresolved_references=(),
+                notes=(),
+            )
+
+        relevant = _data_block(task, "RELEVANT_ITEM_INVENTORY")
+        assert isinstance(relevant, list)
+        relevant_ids = tuple(item["source_item_id"] for item in relevant)
+        windows = _data_block(task, "RETRIEVED_SOURCE_WINDOWS")
+        assert isinstance(windows, str)
+        assert "Q1" in relevant_ids
+        assert "Q1: synthetic item 1" in windows
+        incoming = _incoming_transition().model_copy(
+            update={
+                "source": _reference("Q1", section=("A",)),
+                "target": _reference("Q2", section=("B",)),
+                "source_span": _span(1),
+            }
+        )
+        return RoutingEvidenceBatch(
+            chunk_id=chunk_id,
+            pass_kind=RoutingPassKind.incoming_activation,
+            examined_item_ids=("Q2",),
+            evidence=(incoming,),
+            unresolved_references=(),
+            notes=(),
+        )
+
+    result = await extract_routing(
+        provider=_provider(respond),
+        document=_document(4),
+        inventory=inventory,
+        nodes=_nodes(inventory),
+        entry_node_ids=(inventory[0].node_id,),
+        source_binding=_binding(),
+        config=RoutingConfig(max_inventory_items_per_call=2),
+    )
+
+    assert result.status is RoutingExtractionStatus.success
+    assert result.graph is not None
+    assert len(result.graph.edges) == 1
+    assert len(result.graph.edges[0].evidence_ids) == 2
+
+
+def test_full_pass_b_target_chunk_keeps_separate_predecessor_context() -> None:
+    inventory = (
+        _item("Q0", 0, section=("A",)),
+        _item("Q1", 1, section=("B",)),
+        _item("Q2", 2, section=("B",)),
+    )
+    targets = inventory[1:]
+
+    relevant = _relevant_inventory(targets, inventory, maximum=2)
+
+    assert [item.source_item_id for item in relevant] == ["Q0"]
 
 
 @pytest.mark.asyncio
@@ -1043,6 +1140,61 @@ def test_reviewer_actions_become_append_only_safe_decisions(action: ReviewAction
     assert "model-native prose" not in repr(decisions)
 
 
+def test_overlapping_reviewer_decisions_chain_and_discrepancies_share_packets() -> None:
+    base_packet = _review_packet()
+    first = base_packet.discrepancies[0]
+    overlapping = first.model_copy(update={"discrepancy_id": "discrepancy:2"})
+    packet = base_packet.model_copy(update={"discrepancies": (first, overlapping)})
+    output = ReviewerDecisionOutput(
+        discrepancy_ids=("discrepancy:1",),
+        candidate_ids=("candidate:1",),
+        evidence_ids=("evidence:1",),
+        cited_span_ids=("temporary:0",),
+        action=ReviewAction.reject_candidate,
+        replacement=None,
+        rationale="first then second",
+        confidence=0.8,
+        needs_human_review=False,
+    )
+    second_output = output.model_copy(update={"discrepancy_ids": ("discrepancy:2",)})
+    response = RoutingReviewerResponse(
+        reviewed_discrepancy_ids=("discrepancy:1", "discrepancy:2"),
+        decisions=(output, second_output),
+    )
+
+    decisions = build_review_decisions(
+        packet=packet,
+        response=response,
+        prompt_version="1.0.0",
+        prompt_sha256="b" * 64,
+    )
+
+    assert decisions[0].supersedes_decision_id is None
+    assert decisions[1].supersedes_decision_id == decisions[0].decision_id
+    assert decisions[1].decision_id != decisions[0].decision_id
+    follow_up = build_review_decisions(
+        packet=packet,
+        response=response,
+        prompt_version="1.0.0",
+        prompt_sha256="b" * 64,
+        existing_decisions=decisions,
+    )
+    assert follow_up[0].supersedes_decision_id == decisions[-1].decision_id
+    assert follow_up[1].supersedes_decision_id == follow_up[0].decision_id
+
+    separate = first.model_copy(
+        update={
+            "discrepancy_id": "discrepancy:3",
+            "candidate_ids": ("candidate:other",),
+        }
+    )
+    batches = _coalesced_discrepancy_batches((first, overlapping, separate), 2)
+    assert [[item.discrepancy_id for item in batch] for batch in batches] == [
+        ["discrepancy:1", "discrepancy:2"],
+        ["discrepancy:3"],
+    ]
+
+
 def test_reviewer_replace_round_trips_and_invalid_citations_change_nothing() -> None:
     packet = _review_packet()
     replacement = packet.candidates[0]
@@ -1066,9 +1218,12 @@ def test_reviewer_replace_round_trips_and_invalid_citations_change_nothing() -> 
         confidence=0.9,
         needs_human_review=False,
     )
-    response = RoutingReviewerResponse(
+    base_response = RoutingReviewerResponse(
         reviewed_discrepancy_ids=("discrepancy:1",),
         decisions=(output,),
+    )
+    response = base_response.model_copy(
+        update={"decisions": (output,)},
     )
     decisions = build_review_decisions(
         packet=packet,
@@ -1077,6 +1232,23 @@ def test_reviewer_replace_round_trips_and_invalid_citations_change_nothing() -> 
         prompt_sha256="b" * 64,
     )
     assert decisions[0].replacement is not None
+
+    assert output.replacement is not None
+    contradictory_replacement = output.replacement.model_copy(
+        update={"target_reference": _reference("Q0")}
+    )
+    contradictory = response.model_copy(
+        update={
+            "decisions": (output.model_copy(update={"replacement": contradictory_replacement}),)
+        }
+    )
+    with pytest.raises(ReviewValidationError, match="review citations are invalid"):
+        build_review_decisions(
+            packet=packet,
+            response=contradictory,
+            prompt_version="1.0.0",
+            prompt_sha256="b" * 64,
+        )
 
     invalid = response.model_copy(
         update={
@@ -1109,6 +1281,80 @@ def test_reviewer_replace_round_trips_and_invalid_citations_change_nothing() -> 
             prompt_sha256="b" * 64,
             max_source_spans_per_decision=0,
         )
+
+
+@pytest.mark.parametrize(
+    "failure",
+    (
+        "unknown_discrepancy",
+        "unknown_candidate",
+        "unknown_evidence",
+        "outside_span_closure",
+        "unknown_replacement_endpoint",
+    ),
+)
+def test_reviewer_rejection_matrix_creates_no_decision_or_packet_mutation(failure: str) -> None:
+    packet = _review_packet()
+    candidate = packet.candidates[0]
+    replacement = {
+        "source_node_id": candidate.source_node_id,
+        "target_node_id": candidate.target_node_id,
+        "target_reference": candidate.target_reference,
+        "kind": candidate.kind,
+        "condition": candidate.condition,
+        "priority": candidate.priority,
+        "evidence_ids": candidate.evidence_ids,
+    }
+    output = ReviewerDecisionOutput(
+        discrepancy_ids=("discrepancy:1",),
+        candidate_ids=("candidate:1",),
+        evidence_ids=("evidence:1",),
+        cited_span_ids=("temporary:0",),
+        action=ReviewAction.replace_candidate,
+        replacement=replacement,  # type: ignore[arg-type]
+        rationale="replace",
+        confidence=0.9,
+        needs_human_review=False,
+    )
+    base_response = RoutingReviewerResponse(
+        reviewed_discrepancy_ids=("discrepancy:1",),
+        decisions=(output,),
+    )
+    if failure == "unknown_discrepancy":
+        output = output.model_copy(update={"discrepancy_ids": ("discrepancy:missing",)})
+    elif failure == "unknown_candidate":
+        output = output.model_copy(update={"candidate_ids": ("candidate:missing",)})
+    elif failure == "unknown_evidence":
+        output = output.model_copy(update={"evidence_ids": ("evidence:missing",)})
+    elif failure == "outside_span_closure":
+        extra_span = _span(1).model_copy(update={"span_id": "temporary:outside"})
+        packet = packet.model_copy(update={"source_spans": packet.source_spans + (extra_span,)})
+        output = output.model_copy(update={"cited_span_ids": (extra_span.span_id,)})
+    else:
+        assert output.replacement is not None
+        output = output.model_copy(
+            update={
+                "replacement": output.replacement.model_copy(
+                    update={"target_node_id": "question:missing"}
+                )
+            }
+        )
+    response = base_response.model_copy(
+        update={"decisions": (output,)},
+    )
+    before = packet.model_dump_json()
+    decisions = ()
+
+    with pytest.raises(ReviewValidationError, match="review citations are invalid"):
+        decisions = build_review_decisions(
+            packet=packet,
+            response=response,
+            prompt_version="1.0.0",
+            prompt_sha256="b" * 64,
+        )
+
+    assert decisions == ()
+    assert packet.model_dump_json() == before
 
 
 def test_cache_key_contains_every_contract_component_and_cache_is_destroyed() -> None:

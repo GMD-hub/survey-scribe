@@ -14,6 +14,7 @@ from survey_scribe.models.routing import (
     DiscrepancyKind,
     EdgeKind,
     EvidenceRecord,
+    InventoryItem,
     LoopKind,
     QuestionnaireRoutingGraph,
     RepeatKind,
@@ -35,6 +36,7 @@ from survey_scribe.routing.contracts import (
     ConditionOperator,
     EvidenceOrigin,
     EvidencePerspective,
+    ExtractedRoutingCondition,
     ItemReference,
     NodeKind,
     SourceSpan,
@@ -59,9 +61,9 @@ def _reference(item_id: str, kind: NodeKind = NodeKind.question) -> ItemReferenc
     )
 
 
-def _span() -> SourceSpan:
+def _span(identifier: str = "1") -> SourceSpan:
     return SourceSpan(
-        span_id="span:1",
+        span_id=f"span:{identifier}",
         block_id="block:1",
         source_name="questionnaire.txt",
         pages=(1,),
@@ -239,14 +241,130 @@ def _graph(
     entries: tuple[str, ...] = ("entry",),
     audit: RoutingAudit | None = None,
 ) -> QuestionnaireRoutingGraph:
+    materialized_nodes = tuple(nodes)
+    explicitly_stated = (
+        audit.evidence[0].observation.explicitly_stated
+        if audit is not None
+        and audit.evidence
+        and isinstance(audit.evidence[0].observation, TransitionEvidence)
+        else True
+    )
+    normalized_edges = tuple(
+        edge.model_copy(
+            update={"evidence_ids": ("evidence:1" if index == 0 else f"evidence:{edge.edge_id}",)}
+        )
+        for index, edge in enumerate(edges)
+    )
+    inventory = tuple(
+        InventoryItem(
+            node_id=node.node_id,
+            source_item_id=node.node_id,
+            raw_reference=node.node_id,
+            section_path=("Main",),
+            source_order=index,
+            block_ids=("block:1",),
+            kind=node.kind,
+            repeat_group_node_id=(
+                node.containment.parent_node_id
+                if node.containment.parent_node_id is not None
+                and next(
+                    candidate
+                    for candidate in materialized_nodes
+                    if candidate.node_id == node.containment.parent_node_id
+                ).kind
+                is NodeKind.repeat_group
+                else None
+            ),
+            parent_node_id=node.containment.parent_node_id,
+            linked_variable_indices=(),
+        )
+        for index, node in enumerate(materialized_nodes)
+    )
+    nodes_by_id = {node.node_id: node for node in materialized_nodes}
+    evidence = tuple(
+        _edge_evidence(
+            edge,
+            nodes_by_id,
+            evidence_id=edge.evidence_ids[0],
+            span_id=str(index + 1),
+            explicitly_stated=explicitly_stated,
+        )
+        for index, edge in enumerate(normalized_edges)
+    )
+    base_audit = audit or _audit()
+    graph_audit = RoutingAudit(
+        source_binding=base_audit.source_binding,
+        inventory=inventory,
+        source_spans=tuple(record.observation.source_span for record in evidence),
+        evidence=evidence,
+        candidate_edges=base_audit.candidate_edges,
+        discrepancies=base_audit.discrepancies,
+        review_decisions=base_audit.review_decisions,
+    )
     return QuestionnaireRoutingGraph(
         schema_version="1.0",
         entry_node_ids=entries,
-        nodes=_with_adjacency(nodes, edges),
-        edges=edges,
+        nodes=_with_adjacency(materialized_nodes, normalized_edges),
+        edges=normalized_edges,
         loops=(),
         diagnostics=(),
-        routing_audit=audit or _audit(),
+        routing_audit=graph_audit,
+    )
+
+
+def _edge_evidence(
+    edge: RoutingEdge,
+    nodes: Mapping[str, RoutingNode],
+    *,
+    evidence_id: str,
+    span_id: str,
+    explicitly_stated: bool,
+) -> EvidenceRecord:
+    condition = _extracted_condition(edge.condition)
+    return EvidenceRecord(
+        evidence_id=evidence_id,
+        observation=TransitionEvidence(
+            evidence_type="transition",
+            local_id=f"local:{edge.edge_id}",
+            perspective=EvidencePerspective.outgoing,
+            origin=EvidenceOrigin.forward_extraction,
+            source=_reference(edge.source_node_id, nodes[edge.source_node_id].kind),
+            target=_reference(edge.target_node_id, nodes[edge.target_node_id].kind),
+            transition_kind=TransitionKind(edge.kind.value),
+            condition=condition,
+            source_span=_span(span_id),
+            native_expression=None,
+            explicitly_stated=explicitly_stated,
+            confidence=1.0,
+            ambiguity_note=None,
+        ),
+    )
+
+
+def _extracted_condition(
+    condition: CanonicalRoutingCondition | None,
+) -> ExtractedRoutingCondition | None:
+    if condition is None:
+        return None
+    return ExtractedRoutingCondition(
+        operator=condition.operator,
+        item_reference=(
+            _reference(condition.question_node_id)
+            if condition.question_node_id is not None
+            else None
+        ),
+        value=condition.value,
+        values=condition.values,
+        children=(
+            tuple(
+                child
+                for item in condition.children
+                if (child := _extracted_condition(item)) is not None
+            )
+            if condition.children is not None
+            else None
+        ),
+        raw_text=condition.raw_text,
     )
 
 
@@ -420,7 +538,6 @@ def test_audit_target_incoming_and_activation_conflicts_get_fixed_diagnostics() 
     assert _codes(validated.diagnostics) == (
         "AMBIGUOUS_TARGET",
         "UNREACHABLE_NODE",
-        "DEAD_END_NONTERMINAL",
         "INCOMING_EVIDENCE_MISMATCH",
         "ACTIVATION_ROUTING_CONFLICT",
     )
@@ -444,6 +561,7 @@ def test_reachability_dead_end_and_terminal_path_diagnostics_are_entry_scoped() 
         "NO_TERMINAL_PATH",
     )
     assert validated.diagnostics[0].node_ids == ("unreachable", "terminal")
+    assert validated.diagnostics[1].node_ids == ("dead-end",)
     assert validated.diagnostics[-1].node_ids == ("entry", "dead-end")
 
 

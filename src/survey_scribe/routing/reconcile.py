@@ -51,7 +51,7 @@ from survey_scribe.routing.identity import (
     normalized_alias,
     resolve_extracted_condition,
 )
-from survey_scribe.routing.validate import validate_routing_graph
+from survey_scribe.routing.validate import KnownCategoryCodes, validate_routing_graph
 
 _ISSUE_ORDER = (
     "CONFLICTING_TARGET",
@@ -151,6 +151,7 @@ def reconcile_routing_graph(
     verified_evidence: VerifiedEvidence,
     source_priorities: Mapping[str, int] | None = None,
     review_decisions: Iterable[ReviewDecision] = (),
+    known_category_codes: KnownCategoryCodes | None = None,
 ) -> QuestionnaireRoutingGraph:
     """Reconcile verified evidence and return an accepted-only canonical graph."""
     ordered_inventory = tuple(sorted(inventory, key=lambda item: item.source_order))
@@ -231,18 +232,29 @@ def reconcile_routing_graph(
                 loops=(),
                 diagnostics=activation_diagnostics + transition_diagnostics,
                 routing_audit=audit,
-            )
+            ),
+            known_category_codes=known_category_codes,
         )
     except ValidationError as error:
         raise ReconciliationError("reconciled graph failed a structural invariant") from error
 
     decisions = tuple(review_decisions)
-    return append_review_decisions(graph, decisions) if decisions else graph
+    return (
+        append_review_decisions(
+            graph,
+            decisions,
+            known_category_codes=known_category_codes,
+        )
+        if decisions
+        else graph
+    )
 
 
 def append_review_decisions(
     graph: QuestionnaireRoutingGraph,
     decisions: Iterable[ReviewDecision],
+    *,
+    known_category_codes: KnownCategoryCodes | None = None,
 ) -> QuestionnaireRoutingGraph:
     """Append source-cited decisions and project only active decisions into accepted edges."""
     appended = tuple(decisions)
@@ -332,7 +344,8 @@ def append_review_decisions(
                 loops=(),
                 diagnostics=base_diagnostics + tuple(decision_diagnostics),
                 routing_audit=updated_audit,
-            )
+            ),
+            known_category_codes=known_category_codes,
         )
     except ValidationError as error:
         raise ReconciliationError(
@@ -534,24 +547,53 @@ def _validate_native_projection(claim: _TransitionClaim) -> None:
 
 
 def _mark_incoming_disagreements(claims: list[_TransitionClaim]) -> None:
+    by_source: dict[str, list[_TransitionClaim]] = {}
     for claim in claims:
-        if claim.has_incoming_support and not claim.has_outgoing_support:
+        by_source.setdefault(claim.source_node_id, []).append(claim)
+
+    for source_claims in by_source.values():
+        outgoing = [
+            claim
+            for claim in source_claims
+            if claim.has_outgoing_support and not claim.has_incoming_support
+        ]
+        incoming = [
+            claim
+            for claim in source_claims
+            if claim.has_incoming_support and not claim.has_outgoing_support
+        ]
+        unmatched_incoming: list[_TransitionClaim] = []
+        unmatched_outgoing = list(outgoing)
+        for incoming_claim in incoming:
+            matching = [
+                outgoing_claim
+                for outgoing_claim in outgoing
+                if _branch_identity(outgoing_claim) == _branch_identity(incoming_claim)
+            ]
+            if not matching:
+                unmatched_incoming.append(incoming_claim)
+                continue
+            for outgoing_claim in matching:
+                outgoing_claim.issues.add("CONFLICTING_TARGET")
+                incoming_claim.issues.add("CONFLICTING_TARGET")
+                if outgoing_claim in unmatched_outgoing:
+                    unmatched_outgoing.remove(outgoing_claim)
+
+        for claim in unmatched_incoming:
             claim.issues.add("INCOMING_ONLY")
-    for index, left in enumerate(claims):
-        for right in claims[index + 1 :]:
-            if left.source_node_id != right.source_node_id:
-                continue
-            if not (
-                (left.has_outgoing_support and right.has_incoming_support)
-                or (right.has_outgoing_support and left.has_incoming_support)
-            ):
-                continue
-            if left.target_node_id != right.target_node_id:
-                left.issues.add("CONFLICTING_TARGET")
-                right.issues.add("CONFLICTING_TARGET")
-            else:
-                left.issues.add("CONFLICTING_CONDITION")
-                right.issues.add("CONFLICTING_CONDITION")
+
+
+def _branch_identity(claim: _TransitionClaim) -> str:
+    return stable_identifier(
+        "branch",
+        {
+            "condition": _condition_identity(
+                claim.canonical_condition or claim.extracted_condition
+            ),
+            "kind": claim.kind.value,
+            "priority": claim.priority,
+        },
+    )
 
 
 def _mark_default_and_priority_conflicts(claims: list[_TransitionClaim]) -> None:

@@ -6,19 +6,22 @@ import asyncio
 import json
 from datetime import date
 from pathlib import Path
+from threading import Event as ThreadEvent
 from typing import cast
 
 import pytest
 
 from survey_scribe.models.routing import RoutingSourceBinding
-from survey_scribe.models.svis import DataType, SurveySVIS, SurveyVariable
+from survey_scribe.models.svis import AnswerCategory, DataType, SurveySVIS, SurveyVariable
 from survey_scribe.providers.base import ProviderTransportError
 from survey_scribe.providers.capabilities import CapabilityEvidence, ModelCapabilities
 from survey_scribe.providers.testing import DeterministicFakeProvider, FakeRequest
 from survey_scribe.results import ResultStatus
+from survey_scribe.routing import pipeline as pipeline_module
 from survey_scribe.routing.contracts import ConditionOperator, RoutingEvidenceBatch, RoutingPassKind
 from survey_scribe.routing.pipeline import QuestionnaireRouter
 from survey_scribe.serialization.routing import ArtifactManifestV2, parse_artifact_manifest
+from survey_scribe.sources.base import SourceBundle
 from survey_scribe.sources.registry import SourceConversionResult, SourceRegistry
 
 
@@ -217,6 +220,64 @@ async def test_complete_binding_mismatch_fails_before_provider_or_inventory_work
 
 
 @pytest.mark.asyncio
+async def test_companion_mutation_fails_binding_before_provider_call(tmp_path: Path) -> None:
+    path = tmp_path / "questionnaire.txt"
+    companion = tmp_path / "labels.txt"
+    path.write_text("Q1. Age", encoding="utf-8")
+    companion.write_text("Age label", encoding="utf-8")
+    bundle = SourceBundle(
+        root=tmp_path,
+        primary=Path(path.name),
+        companions=(Path(companion.name),),
+    )
+    svis = _svis(path, "age")
+    binding = SourceRegistry.default().convert_with_native(bundle, svis).source_binding
+    companion.write_text("Changed age label", encoding="utf-8")
+    provider = _provider()
+
+    result = await QuestionnaireRouter(provider).aroute(
+        bundle,
+        svis,
+        source_binding=binding,
+    )
+
+    assert result.status is ResultStatus.failed
+    assert result.diagnostics[0].code == "ROUTING_SOURCE_MISMATCH"
+    assert provider.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_public_router_passes_linked_svis_category_codes_to_validation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "questionnaire.txt"
+    path.write_text("Q1. Age", encoding="utf-8")
+    svis = _svis(path, "age")
+    svis.variables[0].categories = [
+        AnswerCategory(code=1, label="One"),
+        AnswerCategory(code=2, label="Two"),
+    ]
+    captured: dict[str, tuple[object, ...]] = {}
+    original_extract = pipeline_module.extract_routing
+
+    async def capture_categories(**kwargs: object) -> object:
+        captured.update(kwargs["known_category_codes"])  # type: ignore[arg-type]
+        return await original_extract(**kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(pipeline_module, "extract_routing", capture_categories)
+
+    result = await QuestionnaireRouter(_provider()).aroute(
+        path,
+        svis,
+        source_binding=_binding(path, svis),
+    )
+
+    assert result.output is not None
+    assert tuple(captured.values()) == ((1, 2),)
+
+
+@pytest.mark.asyncio
 async def test_non_native_source_requires_provider_and_provider_path_is_stable(
     tmp_path: Path,
 ) -> None:
@@ -235,6 +296,16 @@ async def test_non_native_source_requires_provider_and_provider_path_is_stable(
     assert routed.output is not None
     assert provider.call_count > 0
     assert [item.raw_name for item in routed.output.variables] == ["age", "employment"]
+    linked_nodes = {
+        node.node_id: node
+        for node in routed.output.routing_graph.nodes
+        if node.kind.value == "question"
+    }
+    assert [
+        linked_nodes[item.routing_node_id].source_item_id
+        for item in routed.output.variables
+        if item.routing_node_id is not None
+    ] == ["Q1", "Q2"]
     orders = [item.source_order for item in routed.output.routing_graph.routing_audit.inventory]
     assert orders == sorted(orders)
     assert routed.artifact_provenance is not None
@@ -249,6 +320,59 @@ async def test_non_native_source_requires_provider_and_provider_path_is_stable(
     assert manifest.source_sha256 == routed.artifact_provenance.source_sha256
     assert manifest.model_response_sha256 == routed.artifact_provenance.model_response_sha256
     assert manifest.prompt_versions == routed.artifact_provenance.prompt_versions
+
+
+@pytest.mark.asyncio
+async def test_document_variables_link_only_to_unique_exact_source_identity(tmp_path: Path) -> None:
+    path = tmp_path / "questionnaire.txt"
+    path.write_text("Q9. Routing instruction\nQ1. Age", encoding="utf-8")
+    svis = _svis(path, "age", "employment")
+
+    result = await QuestionnaireRouter(_provider()).aroute(
+        path,
+        svis,
+        source_binding=_binding(path, svis),
+    )
+
+    assert result.status is ResultStatus.partial
+    assert result.output is not None
+    age, employment = result.output.variables
+    assert age.routing_node_id is not None
+    assert employment.routing_node_id is None
+    nodes = {node.node_id: node for node in result.output.routing_graph.nodes}
+    assert nodes[age.routing_node_id].source_item_id == "Q1"
+    q9 = next(
+        item
+        for item in result.output.routing_graph.routing_audit.inventory
+        if item.source_item_id == "Q9"
+    )
+    assert q9.linked_variable_indices == ()
+    assert any(diagnostic.code == "UNLINKED_VARIABLE" for diagnostic in result.diagnostics)
+
+
+@pytest.mark.asyncio
+async def test_printed_identity_precedes_competing_variable_label(tmp_path: Path) -> None:
+    path = tmp_path / "questionnaire.txt"
+    path.write_text("Q1. Age", encoding="utf-8")
+    svis = _svis(path, "Q1", "age")
+
+    result = await QuestionnaireRouter(_provider()).aroute(
+        path,
+        svis,
+        source_binding=_binding(path, svis),
+    )
+
+    assert result.status is ResultStatus.partial
+    assert result.output is not None
+    printed, label_only = result.output.variables
+    assert printed.routing_node_id is not None
+    assert label_only.routing_node_id is None
+    node = next(
+        item
+        for item in result.output.routing_graph.nodes
+        if item.node_id == printed.routing_node_id
+    )
+    assert node.source_item_id == "Q1"
 
 
 @pytest.mark.asyncio
@@ -348,7 +472,7 @@ async def test_empty_inventory_source_error_and_total_provider_failure_are_faile
 
 
 @pytest.mark.asyncio
-async def test_document_inventory_fallbacks_and_provider_exception_are_safe(
+async def test_document_inventory_fallbacks_and_exception_boundaries_are_safe(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -371,6 +495,16 @@ async def test_document_inventory_fallbacks_and_provider_exception_are_safe(
         raise ValueError("private provider detail")
 
     monkeypatch.setattr("survey_scribe.routing.pipeline.extract_routing", fail_before_graph)
+    with pytest.raises(ValueError, match="private provider detail"):
+        await QuestionnaireRouter(_provider()).aroute(path, svis, source_binding=binding)
+
+    async def expected_provider_failure(**_kwargs: object) -> object:
+        raise ProviderTransportError(retryable=False)
+
+    monkeypatch.setattr(
+        "survey_scribe.routing.pipeline.extract_routing",
+        expected_provider_failure,
+    )
     failed = await QuestionnaireRouter(_provider()).aroute(path, svis, source_binding=binding)
     assert failed.status is ResultStatus.failed
     assert failed.diagnostics[0].code == "ROUTING_PROVIDER_FAILED"
@@ -458,6 +592,49 @@ async def test_cancellation_propagates_from_provider_work(
             svis,
             source_binding=_binding(path, svis),
         )
+
+
+@pytest.mark.asyncio
+async def test_source_conversion_runs_off_loop_and_cancellation_prevents_provider_call(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "questionnaire.txt"
+    path.write_text("Q1. Age", encoding="utf-8")
+    svis = _svis(path, "age")
+    conversion = SourceRegistry.default().convert_with_native(path, svis)
+    entered = ThreadEvent()
+    release = ThreadEvent()
+    finished = ThreadEvent()
+
+    class BlockingRegistry:
+        def convert_with_native(self, *_args: object, **_kwargs: object) -> SourceConversionResult:
+            entered.set()
+            release.wait(timeout=5)
+            finished.set()
+            return conversion
+
+    provider = _provider()
+    router = QuestionnaireRouter(provider, sources=cast(SourceRegistry, BlockingRegistry()))
+    task = asyncio.create_task(router.aroute(path, svis, source_binding=conversion.source_binding))
+    assert await asyncio.to_thread(entered.wait, 2)
+    assert finished.is_set() is False
+
+    ticked = False
+
+    async def tick() -> None:
+        nonlocal ticked
+        await asyncio.sleep(0)
+        ticked = True
+
+    await tick()
+    assert ticked is True
+    task.cancel()
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    finally:
+        release.set()
+    assert provider.call_count == 0
 
 
 @pytest.mark.asyncio

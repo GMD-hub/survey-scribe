@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
+from survey_scribe.errors import ArtifactWriteError
 from survey_scribe.models.routing import (
     CandidateEdge,
     CandidateStatus,
@@ -67,6 +68,7 @@ from survey_scribe.routing.contracts import (
     TransitionKind,
     project_extracted_condition,
 )
+from survey_scribe.serialization.routing import RoutedSurveySVISArtifactSerializer
 
 
 def _reference(item_id: str = "Q1", *, kind: NodeKind = NodeKind.question) -> ItemReference:
@@ -144,6 +146,27 @@ def _evidence_record(evidence_id: str = "evidence:1") -> EvidenceRecord:
     return EvidenceRecord(evidence_id=evidence_id, observation=_transition())
 
 
+def _route_evidence(
+    evidence_id: str,
+    *,
+    source: str,
+    source_kind: NodeKind,
+    target: str,
+    target_kind: NodeKind,
+    kind: TransitionKind,
+    condition: ExtractedRoutingCondition | None,
+) -> EvidenceRecord:
+    observation = _transition(f"local:{evidence_id}").model_copy(
+        update={
+            "source": _reference(source, kind=source_kind),
+            "target": _reference(target, kind=target_kind),
+            "transition_kind": kind,
+            "condition": condition,
+        }
+    )
+    return EvidenceRecord(evidence_id=evidence_id, observation=observation)
+
+
 def _source_binding() -> RoutingSourceBinding:
     return RoutingSourceBinding(
         survey_id="TST_2024_SYNTH",
@@ -169,6 +192,30 @@ def _inventory_item(
         kind=NodeKind.question,
         repeat_group_node_id=None,
         parent_node_id=None,
+        linked_variable_indices=linked_variable_indices,
+    )
+
+
+def _route_inventory_item(
+    node_id: str,
+    *,
+    raw_reference: str,
+    kind: NodeKind,
+    source_order: int,
+    parent_node_id: str | None = None,
+    repeat_group_node_id: str | None = None,
+    linked_variable_indices: tuple[int, ...] = (),
+) -> InventoryItem:
+    return InventoryItem(
+        node_id=node_id,
+        source_item_id=(raw_reference if kind is NodeKind.question else None),
+        raw_reference=raw_reference,
+        section_path=("main",),
+        source_order=source_order,
+        block_ids=("block:0",),
+        kind=kind,
+        repeat_group_node_id=repeat_group_node_id,
+        parent_node_id=parent_node_id,
         linked_variable_indices=linked_variable_indices,
     )
 
@@ -229,7 +276,7 @@ def _valid_graph() -> QuestionnaireRoutingGraph:
         kind=EdgeKind.unconditional,
         condition=None,
         priority=None,
-        evidence_ids=("evidence:1",),
+        evidence_ids=("evidence:entry",),
         confidence=1.0,
         review_decision_id=None,
     )
@@ -272,7 +319,38 @@ def _valid_graph() -> QuestionnaireRoutingGraph:
         edges=(entry_edge, terminal_edge),
         loops=(),
         diagnostics=(),
-        routing_audit=_audit(),
+        routing_audit=_audit(
+            inventory=(
+                _route_inventory_item(
+                    "entry:start", raw_reference="START", kind=NodeKind.entry, source_order=0
+                ),
+                _route_inventory_item(
+                    "question:q1",
+                    raw_reference="Q1",
+                    kind=NodeKind.question,
+                    source_order=1,
+                    linked_variable_indices=(0,),
+                ),
+                _route_inventory_item(
+                    "terminal:complete",
+                    raw_reference="END",
+                    kind=NodeKind.terminal,
+                    source_order=2,
+                ),
+            ),
+            evidence=(
+                _route_evidence(
+                    "evidence:entry",
+                    source="START",
+                    source_kind=NodeKind.entry,
+                    target="Q1",
+                    target_kind=NodeKind.question,
+                    kind=TransitionKind.unconditional,
+                    condition=None,
+                ),
+                _evidence_record(),
+            ),
+        ),
     )
 
 
@@ -292,7 +370,7 @@ def _repeat_graph() -> QuestionnaireRoutingGraph:
             kind=EdgeKind.unconditional,
             condition=None,
             priority=None,
-            evidence_ids=("evidence:1",),
+            evidence_ids=("evidence:repeat-entry",),
             confidence=1.0,
             review_decision_id=None,
         ),
@@ -303,7 +381,7 @@ def _repeat_graph() -> QuestionnaireRoutingGraph:
             kind=EdgeKind.unconditional,
             condition=None,
             priority=None,
-            evidence_ids=("evidence:1",),
+            evidence_ids=("evidence:group-entry",),
             confidence=1.0,
             review_decision_id=None,
         ),
@@ -314,7 +392,7 @@ def _repeat_graph() -> QuestionnaireRoutingGraph:
             kind=EdgeKind.conditional,
             condition=_canonical_condition(),
             priority=1,
-            evidence_ids=("evidence:1",),
+            evidence_ids=("evidence:return",),
             confidence=1.0,
             review_decision_id=None,
         ),
@@ -325,7 +403,7 @@ def _repeat_graph() -> QuestionnaireRoutingGraph:
             kind=EdgeKind.default,
             condition=None,
             priority=2,
-            evidence_ids=("evidence:1",),
+            evidence_ids=("evidence:exit",),
             confidence=1.0,
             review_decision_id=None,
         ),
@@ -340,7 +418,7 @@ def _repeat_graph() -> QuestionnaireRoutingGraph:
         return_edge_ids=("edge:return",),
         exit_edge_ids=("edge:exit",),
         source_supported=True,
-        evidence_ids=("evidence:1",),
+        evidence_ids=("evidence:return",),
     )
     return QuestionnaireRoutingGraph(
         schema_version="1.0",
@@ -397,19 +475,75 @@ def _repeat_graph() -> QuestionnaireRoutingGraph:
                 message="A declared repeat loop is recorded.",
                 node_ids=("repeat:roster",),
                 edge_ids=("edge:return",),
-                evidence_ids=("evidence:1",),
+                evidence_ids=("evidence:return",),
                 candidate_ids=(),
             ),
         ),
         routing_audit=_audit(
             inventory=(
-                _inventory_item().model_copy(
-                    update={
-                        "repeat_group_node_id": "repeat:roster",
-                        "parent_node_id": "repeat:roster",
-                    }
+                _route_inventory_item(
+                    "entry:start", raw_reference="START", kind=NodeKind.entry, source_order=0
                 ),
-            )
+                _route_inventory_item(
+                    "repeat:roster",
+                    raw_reference="ROSTER",
+                    kind=NodeKind.repeat_group,
+                    source_order=1,
+                ),
+                _route_inventory_item(
+                    "question:q1",
+                    raw_reference="Q1",
+                    kind=NodeKind.question,
+                    source_order=2,
+                    parent_node_id="repeat:roster",
+                    repeat_group_node_id="repeat:roster",
+                    linked_variable_indices=(0,),
+                ),
+                _route_inventory_item(
+                    "terminal:complete",
+                    raw_reference="END",
+                    kind=NodeKind.terminal,
+                    source_order=3,
+                ),
+            ),
+            evidence=(
+                _route_evidence(
+                    "evidence:repeat-entry",
+                    source="START",
+                    source_kind=NodeKind.entry,
+                    target="ROSTER",
+                    target_kind=NodeKind.repeat_group,
+                    kind=TransitionKind.unconditional,
+                    condition=None,
+                ),
+                _route_evidence(
+                    "evidence:group-entry",
+                    source="ROSTER",
+                    source_kind=NodeKind.repeat_group,
+                    target="Q1",
+                    target_kind=NodeKind.question,
+                    kind=TransitionKind.unconditional,
+                    condition=None,
+                ),
+                _route_evidence(
+                    "evidence:return",
+                    source="Q1",
+                    source_kind=NodeKind.question,
+                    target="Q1",
+                    target_kind=NodeKind.question,
+                    kind=TransitionKind.conditional,
+                    condition=_extracted_condition(),
+                ),
+                _route_evidence(
+                    "evidence:exit",
+                    source="Q1",
+                    source_kind=NodeKind.question,
+                    target="END",
+                    target_kind=NodeKind.terminal,
+                    kind=TransitionKind.default,
+                    condition=None,
+                ),
+            ),
         ),
     )
 
@@ -999,17 +1133,71 @@ def test_valid_replacement_decision_is_source_cited_and_graph_bounded() -> None:
     )
     decision = ReviewDecision.model_validate(decision_values)
     discrepancy = _discrepancy().model_copy(update={"resolved_by_decision_id": "decision:replace"})
-    audit = _audit(
-        candidate_edges=(_candidate(),),
-        discrepancies=(discrepancy,),
-        review_decisions=(decision,),
+    base = _valid_graph()
+    audit = base.routing_audit.model_copy(
+        update={
+            "candidate_edges": (_candidate(),),
+            "discrepancies": (discrepancy,),
+            "review_decisions": (decision,),
+        }
     )
-    values = _graph_data()
+    values = base.model_dump(mode="json")
     values["routing_audit"] = audit.model_dump(mode="json")
 
     graph = QuestionnaireRoutingGraph.model_validate(values)
 
     assert graph.routing_audit.review_decisions[0].replacement == _replacement()
+
+
+def test_accepted_edge_rejects_unrelated_existing_evidence() -> None:
+    values = _graph_data()
+    values["edges"][1]["evidence_ids"] = ["evidence:entry"]
+
+    with pytest.raises(ValidationError, match="same canonical route"):
+        QuestionnaireRoutingGraph.model_validate(values)
+
+
+def test_reviewed_edge_rejects_unrelated_candidate_evidence() -> None:
+    values = _graph_data()
+    candidate = _candidate().model_copy(update={"evidence_ids": ("evidence:entry",)})
+    discrepancy = _discrepancy().model_copy(
+        update={
+            "evidence_ids": ("evidence:entry",),
+            "resolved_by_decision_id": "decision:confirm",
+        }
+    )
+    decision = _decision("decision:confirm").model_copy(
+        update={"evidence_ids": ("evidence:entry",)}
+    )
+    values["routing_audit"]["candidate_edges"] = [candidate.model_dump(mode="json")]
+    values["routing_audit"]["discrepancies"] = [discrepancy.model_dump(mode="json")]
+    values["routing_audit"]["review_decisions"] = [decision.model_dump(mode="json")]
+    values["edges"][1].update(
+        evidence_ids=["evidence:entry"],
+        review_decision_id="decision:confirm",
+    )
+
+    with pytest.raises(ValidationError, match="reviewed candidate"):
+        QuestionnaireRoutingGraph.model_validate(values)
+
+
+def test_reviewed_replacement_reference_must_match_accepted_target() -> None:
+    values = _graph_data()
+    candidate = _candidate()
+    discrepancy = _discrepancy().model_copy(update={"resolved_by_decision_id": "decision:replace"})
+    replacement = _replacement().model_copy(update={"target_reference": _reference("Q1")})
+    decision_values = _decision("decision:replace").model_dump(mode="json")
+    decision_values.update(
+        action=ReviewAction.replace_candidate,
+        replacement=replacement.model_dump(mode="json"),
+    )
+    values["routing_audit"]["candidate_edges"] = [candidate.model_dump(mode="json")]
+    values["routing_audit"]["discrepancies"] = [discrepancy.model_dump(mode="json")]
+    values["routing_audit"]["review_decisions"] = [decision_values]
+    values["edges"][1]["review_decision_id"] = "decision:replace"
+
+    with pytest.raises(ValidationError, match="active review decision"):
+        QuestionnaireRoutingGraph.model_validate(values)
 
 
 def test_unresolved_decision_requires_human_review() -> None:
@@ -1454,6 +1642,12 @@ def test_nullable_unlinked_variable_projects_without_mutable_nested_values() -> 
         numeric_range=None,
         routing_node_id=None,
     )
+    question_inventory = next(
+        item
+        for item in values["routing_graph"]["routing_audit"]["inventory"]
+        if item["node_id"] == "question:q1"
+    )
+    question_inventory["linked_variable_indices"] = []
     routed = RoutedSurveySVIS.model_validate(values)
 
     legacy = routed.to_survey_svis()
@@ -1473,6 +1667,50 @@ def test_routed_model_rejects_source_binding_and_variable_link_mismatch() -> Non
     values["variables"][0]["routing_node_id"] = "entry:start"
     with pytest.raises(ValidationError, match="question nodes"):
         RoutedSurveySVIS.model_validate(values)
+
+
+def test_routed_variable_link_must_equal_its_inventory_index_mapping() -> None:
+    present_mapping = _routed_svis().model_dump(mode="json")
+    present_mapping["variables"][0]["routing_node_id"] = None
+    with pytest.raises(ValidationError, match="match inventory"):
+        RoutedSurveySVIS.model_validate(present_mapping)
+
+    missing_mapping = _routed_svis().model_dump(mode="json")
+    question_inventory = next(
+        item
+        for item in missing_mapping["routing_graph"]["routing_audit"]["inventory"]
+        if item["node_id"] == "question:q1"
+    )
+    question_inventory["linked_variable_indices"] = []
+    with pytest.raises(ValidationError, match="match inventory"):
+        RoutedSurveySVIS.model_validate(missing_mapping)
+
+    wrong_question = _routed_svis().model_dump(mode="json")
+    second_node = _node("question:q2", NodeKind.question).model_dump(mode="json")
+    second_node.update(source_item_id="Q2", raw_name="q2")
+    wrong_question["routing_graph"]["nodes"].append(second_node)
+    first_inventory = next(
+        item
+        for item in wrong_question["routing_graph"]["routing_audit"]["inventory"]
+        if item["node_id"] == "question:q1"
+    )
+    first_inventory["linked_variable_indices"] = []
+    wrong_question["routing_graph"]["routing_audit"]["inventory"].append(
+        _route_inventory_item(
+            "question:q2",
+            raw_reference="Q2",
+            kind=NodeKind.question,
+            source_order=3,
+            linked_variable_indices=(0,),
+        ).model_dump(mode="json")
+    )
+    with pytest.raises(ValidationError, match="match inventory"):
+        RoutedSurveySVIS.model_validate(wrong_question)
+
+    out_of_range = _routed_svis().model_dump(mode="json")
+    out_of_range["routing_graph"]["routing_audit"]["inventory"][1]["linked_variable_indices"] = [1]
+    with pytest.raises(ValidationError, match="outside"):
+        RoutedSurveySVIS.model_validate(out_of_range)
 
 
 def test_routed_variable_rejects_non_collection_categories() -> None:
@@ -1515,6 +1753,17 @@ def test_routed_and_graph_versions_are_equal_and_fixed_at_one() -> None:
     values["routing_graph"]["schema_version"] = "2.0"
     with pytest.raises(ValidationError):
         RoutedSurveySVIS.model_validate(values)
+
+
+def test_routed_serializer_rejects_edge_with_unrelated_existing_evidence() -> None:
+    routed = _routed_svis()
+    edges = list(routed.routing_graph.edges)
+    edges[1] = edges[1].model_copy(update={"evidence_ids": ("evidence:entry",)})
+    invalid_graph = routed.routing_graph.model_copy(update={"edges": tuple(edges)})
+    invalid = routed.model_copy(update={"routing_graph": invalid_graph})
+
+    with pytest.raises(ArtifactWriteError, match="Routed artifact validation failed"):
+        RoutedSurveySVISArtifactSerializer().build_plan(invalid, survey_id=invalid.survey_id)
 
 
 def test_json_round_trip_preserves_graph_and_discriminated_evidence() -> None:
