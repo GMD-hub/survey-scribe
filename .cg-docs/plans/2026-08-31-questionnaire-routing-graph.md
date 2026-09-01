@@ -44,8 +44,9 @@ The repository already has:
 - Pydantic v2 public models in `src/survey_scribe/models/svis.py`.
 - Exact field-order and fixed-clock JSON characterization tests.
 - Frozen typed results, stable diagnostics, recursive redaction, normalized
-  source blocks, provenance, chunking, and artifact foundations that still have
-  open production-review hardening findings.
+  source blocks, provenance, chunking, and artifact foundations. The current
+  branch includes the production-review remediation and cross-platform CI fixes
+  that were pending in the original plan baseline.
 - Optional locked OpenAI, Instructor, Tenacity, and tiktoken dependencies.
 - An active production-package plan that keeps SVIS JSON exact through 1.x,
   separates provider SDKs from core code, and requires native XLSForm logic to
@@ -127,16 +128,19 @@ alignment and local review settings could not be verified.
 | R14 | Reconcile evidence deterministically, keep accepted edges separate from disputed candidates, derive node adjacency only from accepted edges, and emit stable graph diagnostics | Validation-first purpose and plan review QRG-PLN-005 |
 | R15 | Require every reviewer correction to cite supplied evidence; never silently repair or invent disputed routing | User review objective |
 | R16 | Keep all source-derived and model-generated questionnaire prose out of logs, diagnostics, sidecars, and persistent caches while allowing cited source text in the local primary routed artifact | Existing privacy/redaction boundary |
-| R17 | Evaluate graph and extraction quality on approved synthetic or sanitized fixtures, and report first-pass and post-review quality separately | Brainstorm evaluation strategy |
+| R17 | Require deterministic mechanics evaluation on approved synthetic fixtures; treat a protected real-provider capture as optional model-quality evidence and report first-pass and post-review quality separately | Brainstorm evaluation strategy and 2026-09-01 G6 decision |
 | R18 | Keep runtime interview execution, JSON Logic guarantees, runtime loop unrolling, graphical editing, and all-vendor parser delivery out of scope | Approved boundary |
 | R19 | Retain Python 3.11-3.13, Ruff, Pyright, pytest, Hatchling, uv, PEP 561, and exact-artifact package testing without adding a graph runtime dependency | Existing package baseline |
+| R20 | Keep G6 as a lightweight, protected, manual authorization only for an optional live test capture; absence or deferral of G6 must not block deterministic evidence, package completion, or merge readiness | 2026-09-01 user decision |
+| R21 | In final production, replace per-run interactive G6 approval with administrator-owned provider, quota, secret, data-handling, and gateway policy; keep credentials outside serialized configuration and artifacts | 2026-09-01 production/testing distinction |
+| R22 | Support institutional OpenAI-compatible gateways such as World Bank mAI Factory by recording the configured gateway route plus returned provider/model metadata; require a pinned backend only for exact-backend quality claims | 2026-09-01 gateway decision |
 
 ## Prerequisite Gates
 
-Routing work depends on production foundations that the 2026-08-28 full review
-still marks open. Step 1 must close and execute the evidence for these gates, or
-verify that another approved work run has already closed them. Static inspection
-or a plan-status claim is not sufficient.
+Routing work depends on production foundations identified by the 2026-08-28 full
+review. The current branch includes their approved remediation. Step 1 evidence
+remains the authority for those gates; static inspection or a plan-status claim
+alone is not sufficient.
 
 | Gate | Required closure before | Required production findings/evidence |
 |---|---|---|
@@ -145,13 +149,15 @@ or a plan-status claim is not sufficient.
 | G3 Provider contract | Phase 3 structured extraction | Step 8 owns the required production-provider slice when it is not already complete: `StructuredProvider.generate()`, `ProviderResponse[T]`, `ModelCapabilities`, truncation, retry counts, cancellation, redaction, and provider contract tests |
 | G4 Native core adapter | Final native-routing evidence V9 | Step 9 owns the required production XLSForm slice when it is not already complete: one real core adapter with relevance/repeat semantics and a versioned support matrix; a synthetic adapter alone cannot close V9 |
 | G5 Coverage | Final V12 | Close production review P1.13 and pass the configured 95% branch-coverage command without lowering the threshold |
-| G6 Captured benchmark authorization | Phase 5 model-quality capture | Before Step 11 model calls, record an approved sanitized real-questionnaire source manifest, rights basis, named provider/model capability row, capture authorization, maximum request/token/cost budget, secure no-log capture command, retention path, and stop conditions |
+| G6 Protected test-capture authorization | Optional Phase 5 live model-quality capture only | Before any protected test call, record a human source-safety attestation, gateway route/model alias, credential environment-variable name only, request/token ceilings, temporary-output policy, and stop conditions; technical endpoint/header/SDK details are discovered by the capture preflight and secrets are never recorded |
 
-This plan owns all six gates. If another approved work run already satisfies a
-gate, this plan records the executed evidence in its own work report instead of
+This plan owns G1-G5 as completion gates and G6 as an action gate. If another
+approved work run already satisfies a gate, this plan records the executed evidence in its own work report instead of
 reimplementing it. Otherwise Step 1 implements G1/G2/G5, Step 8 implements G3,
-Step 9 implements G4, and Step 11 requests G6 approval before any paid/protected
-capture. Historical reviews and another plan's work report remain unchanged.
+Step 9 implements G4, and Step 11 requests G6 approval only before an optional
+paid/protected capture. A deferred G6 records `not_run` model-quality evidence;
+it does not block deterministic evaluation, V12, or plan completion. Historical
+reviews and another plan's work report remain unchanged.
 
 ## Normative Design Contracts
 
@@ -330,6 +336,105 @@ These decisions are implementation authority. A change requires approval under
 - Questionnaire source quotes can appear in the local primary routed artifact.
   They cannot appear in logs, sidecars, cache keys, exception text, or telemetry.
 
+### G6 Test Capture Versus Final Production Contract
+
+G6 governs one optional protected test action. It is not the production runtime
+configuration model and is not an approval that every production caller must
+repeat. The package must keep these two concerns separate.
+
+#### Testing-Phase G6 Requirements
+
+- G6 is required only before a real provider receives a sanitized questionnaire
+  during an optional model-quality smoke or benchmark capture. Unit, contract,
+  integration, security, scale, package, and deterministic mechanics evaluation
+  use fakes, recorded structured outputs, native routes, or synthetic sources and
+  do not require G6.
+- The human supplies only decisions the software cannot infer: confirmation that
+  the source is sanitized and authorized for the institutional gateway, the
+  intended gateway route/model alias, request and token ceilings, and the raw-
+  output handling rule. Exact cost is optional when the gateway does not expose
+  cost; request and token ceilings remain mandatory.
+- The capture preflight discovers technical API details such as endpoint shape,
+  authentication-header name, API version, SDK version, strict-schema support,
+  and returned metadata. It records no credential value and asks for another
+  decision only if the discovered route or behavior conflicts with the approved
+  summary.
+- An OpenAI-compatible institutional gateway such as World Bank mAI Factory is
+  identified as the provider boundary. Record its configured route/model alias
+  and the provider/model metadata returned by each call. A pinned backend is
+  required only when the report makes a claim about one exact Azure OpenAI,
+  Vertex AI, or Bedrock model. An unpinned route is reported only as a gateway-
+  route benchmark.
+
+#### Testing-Phase G6 Configuration
+
+The protected capture runner uses an ephemeral, non-serialized configuration
+with these fields:
+
+- authorized source path and computed SHA-256;
+- human source-safety and rights attestation;
+- gateway provider name and route/model alias;
+- credential environment-variable name, never its value;
+- maximum requests, maximum input tokens, and maximum output tokens;
+- optional maximum cost when reliable cost metadata exists;
+- temporary private capture location or in-memory-only mode;
+- raw-output deletion rule and fixed stop conditions.
+
+The runner first emits a sanitized dry-run summary containing only source digest,
+gateway/route identity, limits, output policy, and discovered capability status.
+One explicit `APPROVE G6 CAPTURE` confirmation authorizes only that summary.
+
+#### Testing-Phase Expected Behavior
+
+- No call occurs before the dry-run summary is approved.
+- The runner stops if the source digest, gateway route, strict-schema support,
+  request/token ceilings, or output policy changes.
+- The API key is read only from the approved environment variable. It never
+  appears in command arguments, prompts, logs, reports, exceptions, fixtures,
+  artifacts, or Git history.
+- Raw questionnaire text, prompts, and provider responses remain temporary and
+  are deleted after sanitized metrics and digests are produced. They are never
+  committed. Gateway-side retention follows the approved institutional policy
+  and is reported as policy context rather than controlled by this package.
+- If G6 is declined, unavailable, or a protected capture fails, record the live
+  model-quality result as deferred or failed without changing deterministic
+  correctness evidence or blocking package completion. Do not claim real mAI
+  Factory or exact-model quality when no passing capture exists.
+
+#### Final Production Requirements And Configuration
+
+- Production does not use interactive G6 approval for every request. A deployment
+  administrator configures `SurveyScribeConfig`, the selected
+  `StructuredProvider`, gateway policy, and organizational data-handling policy
+  before the service accepts work.
+- Package configuration contains non-secret provider name, model or gateway route
+  alias, base URL, API version when needed, generation/retry settings, per-request
+  token limits, and concurrency. Credentials come from one approved secret source
+  such as an environment variable, bearer-token callback, or platform secret
+  store and remain excluded from serialization and representation.
+- Aggregate request, token, cost, rate, data-classification, and gateway-retention
+  policy can be enforced by the hosting service or institutional gateway. This
+  package must enforce its configured per-request/schema/concurrency bounds and
+  must not claim control over APIM or backend retention that it cannot verify.
+- Production startup or provider construction validates that one credential form
+  is available, the configured route can represent the strict request schema,
+  and required limits are valid before source content is sent.
+
+#### Final Production Expected Behavior
+
+- Authorized production requests run without a manual capture prompt and return
+  normal success, partial, or failed routing results under the existing outcome
+  contract.
+- Every provider call records non-sensitive configured provider/route identity,
+  returned provider/model identity when available, normalized token usage,
+  prompt/schema hashes, attempts, and response digest. Dynamic gateway routing is
+  visible in metadata and never presented as a pinned-model guarantee.
+- Application logs, diagnostics, sidecars, and manifests remain content-safe.
+  The application keeps no persistent raw prompt/response cache by default.
+- Source authorization and gateway retention remain deployment-policy
+  responsibilities. Documentation must state these responsibilities and must not
+  imply that the testing G6 approval configures or certifies production.
+
 ### Public Routing API Contract
 
 Keep routing separate from the production plan's SVIS-only `SurveyScribe` API:
@@ -434,7 +539,7 @@ written when `output` is absent.
 | 2. Deterministic graph core | Phase 1 models and rights-approved source cases | LLM evidence reconciliation |
 | 3. Structured extraction and review | Phases 1-2; Step 8 supplies or reuses G3 before routing calls | End-to-end routed pipeline |
 | 4. Pipeline, native path, and artifacts | Phases 1-3 plus G2; Step 9 supplies or reuses G4 | Public routed output |
-| 5. Evaluation, docs, and package evidence | Phases 1-4 plus G6 capture authorization | `/cg-work` completion |
+| 5. Evaluation, docs, and package evidence | Phases 1-4; G6 only if an optional protected capture is selected | `/cg-work` completion |
 
 Phases are sequential at their evidence gates. Phase 1 first closes or verifies
 G1, G2, and G5, then freezes model/API/version/limit names before expected graph
@@ -532,7 +637,10 @@ integration before legacy projection tests and G2 evidence exist.
   versions, and append-only review linkage. Generate canonical JSON Schema from
   Pydantic. Provider request-schema compatibility is deferred to the G3 adapter
   and named `ModelCapabilities` rows in Step 8; do not claim one generic offline
-  provider subset.
+  provider subset. Keep G6 capture authorization, credentials, gateway endpoints,
+  and production deployment policy out of the public routed graph schema.
+  Provider execution metadata remains a separate non-sensitive operational
+  record so the graph contract is identical under tests and production.
 - **Test Scenarios**: Every valid operator; missing/extra/wrong-shape fields;
   Boolean/integer ambiguity; NaN/infinity; AST depth/node limits; ambiguous
   union; extracted-to-canonical reference conversion; native expression with
@@ -691,9 +799,10 @@ integration before legacy projection tests and G2 evidence exist.
 
 ### 8. Add Adaptive Extraction, Independent Verification, and Reviewer Orchestration
 
-- **Requirements**: R7, R8, R11, R12, R14, R15, R16, R17
+- **Requirements**: R7, R8, R11, R12, R14, R15, R16, R17, R20, R21, R22
 - **Files**: `src/survey_scribe/routing/extraction.py`,
   `src/survey_scribe/routing/review.py`, routing config additions,
+  `src/survey_scribe/config.py`,
   `src/survey_scribe/providers/base.py`, `providers/capabilities.py`, the
   production provider package's Instructor-backed OpenAI-compatible adapter when
   absent, `tests/integration/test_routing_extraction.py`, production provider
@@ -722,6 +831,18 @@ integration before legacy projection tests and G2 evidence exist.
   source data. Keep one optional protected live schema smoke. Append every
   discrepancy and decision to `routing_audit`. Use safe operational templates
   and never log source, prompt, response, native expression, or reviewer bodies.
+  Keep testing authorization outside the provider port. The provider adapter
+  accepts production configuration supplied by the caller and records the
+  configured gateway/provider identity, configured route/model alias, returned
+  provider/model identity, normalized token usage when supplied, response ID,
+  attempts, prompt/schema hashes, and response digest without raw content.
+  OpenAI-compatible institutional gateways are valid provider boundaries. A
+  dynamic gateway route is allowed for normal production operation and for a
+  gateway-route smoke, but it cannot support an exact-backend benchmark claim
+  unless the backend is pinned or proved by returned metadata. Do not require a
+  cost field when the gateway exposes no reliable cost; preserve request/token
+  usage so the capture runner or hosting service can enforce its own aggregate
+  policy.
 - **Test Scenarios**: No-risk section avoids Pass B; each risk predicate selects
   Pass B; Pass B cannot access Pass A; one/all chunks fail; truncation; malformed
   response; retry success/exhaustion; cancellation; out-of-order completion;
@@ -739,13 +860,15 @@ integration before legacy projection tests and G2 evidence exist.
   decision changes the graph; every review action round-trips in the audit;
   G3 has passing evidence in this plan's work report; outbound operations never
   exceed `max_concurrency`; cancellation and process-
-  control exceptions propagate with no artifact; core imports no provider SDK.
+  control exceptions propagate with no artifact; core imports no provider SDK;
+  credentials and G6 approvals never enter provider call records or artifacts;
+  configured and returned gateway/model identities are distinguishable.
 
 ## Phase 4: Routed Pipeline, Native Sources, and Artifacts
 
 ### 9. Assemble the Routed Pipeline and Native Routing Bypass
 
-- **Requirements**: R1, R3, R6, R7, R8, R9, R10, R12, R13, R14, R15, R18
+- **Requirements**: R1, R3, R6, R7, R8, R9, R10, R12, R13, R14, R15, R18, R21, R22
 - **Files**: `src/survey_scribe/routing/pipeline.py`,
   `src/survey_scribe/routing/native.py`, `sources/registry.py`, the production
   core XLSForm adapter/support matrix when absent,
@@ -772,6 +895,11 @@ integration before legacy projection tests and G2 evidence exist.
   `RoutedSurveyVariable` records by typed reconstruction and verified inventory
   links under the nullable/cardinality policy. Derive final graph indexes only
   from accepted edges and apply the routing result outcome table exactly.
+  `QuestionnaireRouter` does not request interactive G6 approval. In production,
+  it uses the provider and validated runtime configuration injected by the
+  caller. The deployment is responsible for deciding which sources may be sent
+  to its gateway; this package enforces exact source binding and content-safe
+  operational boundaries but does not claim to infer institutional data rights.
 - **Test Scenarios**: PDF-like text route; all-native route with zero model calls;
   mixed native plus LLM enrichment; no provider for native source; missing item
   link; duplicate link; section/repeat/terminal nodes; partial failed section;
@@ -795,7 +923,7 @@ integration before legacy projection tests and G2 evidence exist.
 
 ### 10. Publish Routed Artifacts, Configuration, and Public Exports Safely
 
-- **Requirements**: R1, R2, R12, R16, R19
+- **Requirements**: R1, R2, R12, R16, R19, R20, R21, R22
 - **Files**: `src/survey_scribe/serialization/routing.py`,
   `serialization/artifacts.py`, `results.py`, routing/public exports,
   `config.py`, `tests/unit/test_routing_artifacts.py`, public API and package tests
@@ -809,7 +937,12 @@ integration before legacy projection tests and G2 evidence exist.
   request boundary; do not limit protection to `raw_text` and quotes. Record only
   versions and digests in sidecars/manifests.
   Add routing limits and thresholds as typed nested configuration without
-  credentials or implicit provider selection. Export routed models and
+  credentials or implicit provider selection. Keep production provider/model/
+  base-URL/API-version configuration separate from the ephemeral G6 capture
+  record. Secret values remain excluded from serialization and representation.
+  Routed operational metadata may retain configured/returned provider and model
+  identifiers, normalized usage, versions, and digests, but no endpoint query,
+  authentication header value, source prose, prompt, or response body. Export routed models and
   `QuestionnaireRouter` from the stable paths in the API contract; no routing
   module imports Instructor.
 - **Test Scenarios**: v1 ordered semantic compatibility; routed main round trip;
@@ -834,50 +967,71 @@ integration before legacy projection tests and G2 evidence exist.
 
 ### 11. Add Routing Quality Evaluation and Questionnaire-Scale Evidence
 
-- **Requirements**: R8, R9, R10, R14, R16, R17, R19
+- **Requirements**: R8, R9, R10, R14, R16, R17, R19, R20, R22
 - **Files**: `scripts/evaluate_routing.py`, deterministic mechanics fixtures,
-  separately approved captured model-quality benchmark manifest/responses,
+  optional protected capture runner and private capture manifest,
   evaluation tests/report, scale benchmark
 - **Details**: Implement deterministic comparison of expected and actual nodes,
   directed edges, targets, edge kinds, normalized condition ASTs, terminal/loop
   classes, unresolved references, and reviewer changes. Report first-pass and
   post-review metrics separately. Mechanics fixtures test scoring and graph
-  behavior only. At Phase 5 entry, request G6 as a recorded consequential
-  decision. Do not select a provider/model, spend limit, source, retention path,
-  or capture command automatically. After approval, acquire or identify the
-  rights-approved sanitized real-questionnaire benchmark and execute the
-  approved named model within the approved request/token/cost ceiling rather than authoring its
-  outputs, and record source rights/provenance, provider, exact model/deployment
-  and version/capability row, SDK version, prompt version/hash, canonical and
-  provider request-schema hashes, generation settings, capture date, source and
-  response digests, and reviewer-pass identity. If this captured benchmark is
-  unavailable or unapproved, V11 and final completion remain blocked even when mechanics tests
-  pass. Gate the captured reference on edge
-  precision >= 0.95, edge recall >= 0.90, target accuracy >= 0.95, explicit
-  normalized condition-AST exact match >= 0.90, terminal/cycle classification at
-  1.00, and zero invented accepted source IDs. An unresolved expected edge is a
-  recall false negative and target miss; it cannot protect precision. Also report
-  opaque and unresolved rates explicitly.
+  behavior and are the required V11 evidence.
+
+  The live model-quality capture is optional and separate. When selected, run a
+  protected preflight that computes the source digest and discovers endpoint/API/
+  SDK/schema capabilities without exposing credentials or source text. The human
+  approves one sanitized summary containing: source authorization attestation,
+  gateway route/model alias, credential environment-variable name only, maximum
+  requests, maximum input/output tokens, optional cost ceiling when reliable,
+  temporary-output/deletion policy, and stop conditions. Do not require the human
+  to know APIM header names, SDK internals, or backend deployment metadata that
+  the preflight can discover. Execute only after `APPROVE G6 CAPTURE` and only
+  within the approved summary.
+
+  For World Bank mAI Factory or another multi-cloud gateway, record the gateway
+  identity, configured route/model alias, and returned provider/model metadata
+  for each response. If the route is dynamic, label the result as a gateway-route
+  benchmark and make no exact Azure OpenAI, Gemini, or Claude claim. If the route
+  is pinned, record the exact returned backend/model when available. Record SDK,
+  prompt version/hash, canonical and request-schema hashes, generation settings,
+  capture date, source and response digests, normalized request/token usage, and
+  reviewer-pass identity. Never record a key or raw endpoint credential.
+
+  Evaluate any protected capture against edge precision >= 0.95, edge recall >=
+  0.90, target accuracy >= 0.95, explicit normalized condition-AST exact match >=
+  0.90, terminal/cycle classification at 1.00, and zero invented accepted source
+  IDs. An unresolved expected edge is a recall false negative and target miss; it
+  cannot protect precision. Report opaque and unresolved rates explicitly. A
+  missing, declined, or below-threshold live capture limits model-quality claims
+  but does not block deterministic V11, V12, or plan completion. Do not spend
+  additional prompt/reconciliation rounds beyond the approved cap merely to make
+  the benchmark pass.
+
   Add a generated 1,000-node/3,000-edge run that records hardware, duration, and
   peak-memory method without imposing a fragile cross-platform microbenchmark
   threshold. Prevent evaluator inputs/outputs from entering built distributions.
 - **Test Scenarios**: Exact match; missing/extra/reversed edge; parallel edges;
   equivalent and non-equivalent AST; wrong target; unresolved; reviewer improves,
   degrades, or leaves quality; invented ID; zero denominator; large deterministic
-  graph; authored synthetic response rejected as model benchmark; missing model/
-  rights/schema metadata; no source text in metric output.
+  graph; authored synthetic response rejected as live model benchmark; dry-run
+  without credential access; source digest or route changes after approval;
+  dynamic route labeled as gateway-route evidence; request/token cap exhaustion;
+  missing source attestation; temporary raw-output deletion; no source text in
+  metric output.
 - **Tests**: Evaluator unit tests and `uv run python scripts/evaluate_routing.py
-  --manifest tests/fixtures/routing/manifest.json`.
-- **Acceptance criteria**: G6 approval and actual-versus-budget usage are recorded
-  in this plan's work report; deterministic mechanics checks pass and the separately
-  approved captured model benchmark meets every edge, target, condition,
-  terminal, cycle, unresolved, and invention gate; first-pass quality is not
-  hidden by review; scale run completes without recursion failure or
-  nondeterministic hashes; reports contain metrics and digests, not source text.
+  --manifest tests/fixtures/routing/manifest.toml`. Protected capture tests use a
+  fake gateway and never require provider credentials in CI.
+- **Acceptance criteria**: Deterministic mechanics checks and evaluator edge cases
+  pass; first-pass quality is not hidden by review; the scale run completes
+  without recursion failure or nondeterministic hashes; reports contain metrics
+  and digests, not source text. When an optional G6 capture runs, its approval,
+  discovered capability summary, actual-versus-budget usage, deletion result,
+  and benchmark status are recorded. When it does not run, record `not_run` and
+  prohibit real-provider/model quality claims without blocking completion.
 
 ### 12. Complete Routing Documentation, Schema Export, and Final Quality Gates
 
-- **Requirements**: R1, R2, R3, R4, R5, R6, R7, R8, R9, R10, R11, R12, R13, R14, R15, R16, R17, R18, R19
+- **Requirements**: R1, R2, R3, R4, R5, R6, R7, R8, R9, R10, R11, R12, R13, R14, R15, R16, R17, R18, R19, R20, R21, R22
 - **Files**: `README.md`, `docs/routing.md`, schema/API/provider/source/security/
   evaluation docs, `mkdocs.yml`, schema export command/tests, package allowlists,
   changelog
@@ -889,7 +1043,12 @@ integration before legacy projection tests and G2 evidence exist.
   to provider adapters and that direct OpenAI/LangChain integrations must adapt
   to `StructuredProvider` rather than enter the routing core,
   artifact/privacy behavior, known limitations, and migration from
-  `skip_condition_raw`. Generate JSON Schema from Pydantic and verify drift.
+  `skip_condition_raw`. Clearly document that G6 is an optional protected test
+  capture, while final production uses administrator-owned `SurveyScribeConfig`,
+  provider construction, gateway quotas, secret storage, source authorization,
+  and institutional retention policy without an interactive approval on every
+  request. Document gateway-route versus pinned-backend quality claims. Generate
+  JSON Schema from Pydantic and verify drift.
   Provide small synthetic examples with a conditional/default path, multiple
   incoming paths, and a loop. State that output is not an interview engine.
   Update wheel/sdist allowlists and test the exact built wheel in isolation.
@@ -911,8 +1070,9 @@ integration before legacy projection tests and G2 evidence exist.
   credentials. Only the exact-wheel installation test claims enforced offline
   execution after wheelhouse preparation; Ruff, Pyright, coverage, docs, build,
   and Twine use the locked development environment but do not claim network-
-  denial evidence. The separately approved G6 model capture is the only provider
-  inference operation.
+  denial evidence. A separately approved optional G6 capture is the only provider
+  inference operation in the test/evidence workflow; normal production inference
+  follows deployed runtime policy and is outside these package gates.
 
 ## Testing Strategy
 
@@ -927,7 +1087,7 @@ Use an offline-first test pyramid:
 | Security | Prompt injection, quote verification, redaction, import boundaries | Forbidden |
 | Scale | 1,000+ node deterministic graph and AST limits | Forbidden |
 | Mechanics quality | Scoring, edge/target/condition/loop comparison | Authored synthetic fixtures; forbidden |
-| Model quality | Captured first-pass and post-review extraction metrics | Approved sanitized sources and captured responses; capture is protected, replay is offline |
+| Model quality | Optional captured first-pass and post-review extraction metrics | Lightweight G6 approval, approved sanitized source, bounded protected capture, and offline sanitized replay; not a PR or completion gate |
 | Package/docs | Exact wheel/sdist, isolated import, schema/example/docs drift | No provider credentials; exact-wheel install is network denied after wheelhouse preparation |
 | Optional live smoke | Provider schema/API drift | Protected manual/scheduled only; not required here |
 
@@ -941,6 +1101,12 @@ Rules:
 - Test all malformed external values with safe validation messages that exclude
   rejected input.
 - Keep model-quality thresholds separate from deterministic graph correctness.
+- Treat a missing or failed G6 capture as `not_run` or failed optional evidence,
+  not as a deterministic package failure. Limit claims instead of weakening
+  mechanics gates.
+- In production, use deployment configuration and institutional source/gateway
+  policy. Do not reuse the test capture approval as a production secret or
+  authorization mechanism.
 - Build once and test the exact current-version wheel, not only the editable
   checkout.
 
@@ -962,6 +1128,11 @@ Rules:
 - [ ] Provide conditional/default, multiple-incoming, terminal, and loop examples.
 - [ ] State deterministic mechanics limits, captured model-benchmark scope, and
       first-pass versus reviewer effect separately.
+- [ ] Distinguish lightweight G6 test-capture requirements, configuration, and
+      behavior from final production provider, secret, quota, source, logging,
+      and retention policy.
+- [ ] Explain gateway-route benchmarks versus pinned exact-backend claims,
+      including World Bank mAI Factory-style multi-cloud routing.
 - [ ] State that runtime interview execution and JSON Logic guarantees are out of
       scope.
 - [ ] Add migration guidance from `skip_condition_raw` without deprecating the
@@ -983,7 +1154,7 @@ All findings from the 2026-08-31 `/cg-plan-review` are accepted for revision.
 | QRG-PLN-008 | Condition Contract and Steps 3-5 split extracted `ItemReference` conditions from canonical node-ID conditions |
 | QRG-PLN-009 | Compatibility/API/outcome contracts and Steps 3/4/9 define nullable links, many-to-one cardinality, `UNLINKED_VARIABLE`, and partial status |
 | QRG-PLN-010 | Condition Contract and Steps 3/9 add typed native expressions, opaque projections, support matrix, and zero-LLM preservation |
-| QRG-PLN-011 | Step 11 and V11 split authored mechanics fixtures from a rights-approved captured real-questionnaire model benchmark |
+| QRG-PLN-011 | Step 11 and V11 split required authored mechanics fixtures from an optional G6-protected real-questionnaire model benchmark |
 | QRG-PLN-012 | Step 11 and V11 add condition exact match and count unresolved expected routes as recall/target failures |
 | QRG-PLN-013 | Security contract and Steps 8/10 require safe templates plus complete source-derived string coverage and adversarial negatives |
 | QRG-PLN-014 | Routing Result Outcome Table and Steps 9/10 define failed/partial/success, control-exception, empty-inventory, and artifact rules |
@@ -1002,7 +1173,7 @@ All findings from the 2026-08-31 `/cg-plan-review` are accepted for revision.
 | QRG-PLN-027 | Structured-output contract and Step 8 separate canonical/request schemas, use `ModelCapabilities`, record both hashes, and keep a protected drift smoke |
 | QRG-VER-001 | C8 explicitly permits only the bounded per-run parsed cache, prohibits prose in keys/persistent caches, and requires run-end destruction |
 | QRG-VER-002 | This plan owns G3 in Step 8 and G4 in Step 9, so `/cg-work` has no older-plan execution handoff |
-| QRG-VER-003 | G6 freezes source/model/cost/capture authorization before Phase 5; Step 11 executes only the approved capture and evaluation |
+| QRG-VER-003 | G6 is a lightweight action gate only for an optional protected test capture; Step 11 requires a sanitized dry-run summary and one approval, while deterministic Phase 5 and production runtime configuration remain independent |
 | QRG-VER-004 | Step 1 and V1 record remediation evidence in this plan's work report without editing historical reviews or another work report |
 | QRG-VER-005 | Public API, Steps 3/4/9, and C13 require a detached SVIS snapshot and typed exact-source binding before any provider call |
 | QRG-FINAL-001 | Cross-Plan Scope Approval now permits only the reusable G3 provider and G4 core XLSForm slices without completing broader production-plan steps |
@@ -1010,6 +1181,7 @@ All findings from the 2026-08-31 `/cg-plan-review` are accepted for revision.
 | QRG-FINAL-003 | Step 8 uses the `openai` extra and Step 9 uses the `tabular` extra with the explicit XLSForm contract test |
 | QRG-FINAL-004 | Step 12 permits one credential-free network wheelhouse preparation and keeps G6 separate from deterministic package evidence |
 | QRG-CERT-001 | Testing Strategy and Step 12 claim enforced offline execution only for the exact-wheel install after wheelhouse preparation; other locked local gates claim no provider credentials, not network denial |
+| QRG-G6-001 | Requirements R20-R22, the G6 contract, Steps 8-12, V11, and testing strategy distinguish optional mAI Factory-style test capture from administrator-owned final production configuration and behavior |
 
 ## Risks & Mitigations
 
@@ -1029,7 +1201,7 @@ All findings from the 2026-08-31 `/cg-plan-review` are accepted for revision.
 | Native source logic is flattened and re-inferred | Loss of exact relevance/repeat semantics | Separate native routing protocol and zero-model-call contract tests |
 | Reviewer silently rewrites evidence | Audit trail becomes unreliable | Append cited decisions; preserve original evidence; unresolved goes to human review |
 | New graph dependency increases package surface | Build and maintenance burden | Use standard-library iterative algorithms; architecture test dependency boundary |
-| Quality threshold overfits authored fixtures | Production quality is overstated | Separate mechanics fixtures from a rights-approved captured real-questionnaire benchmark; block V11 when unavailable |
+| Quality threshold overfits authored fixtures | Production quality is overstated | Keep deterministic mechanics required; treat protected live capture as optional evidence and limit provider/model claims when it is absent or below threshold |
 | Parallel active production plan changes provider/artifact seams | Merge conflict or duplicate architecture | Gate on G2/G3/G4, consume production ports, re-read current seams at phase start, and pause before contract duplication |
 | Open source/artifact production findings remain | Routing evidence or publication is unsafe | Step 1 owns G1/G2/G5 closure and blocks dependent work until executed evidence passes |
 
@@ -1075,8 +1247,12 @@ and variable order; whitespace is not contractual.
 | V8 | 3 | Step 8 supplies G3 provider capability/request-schema checks, adaptive verification, shared concurrency, cache isolation, cancellation, and audited review decisions under fakes/recorded responses | Provider contracts and routing extraction integration suite | yes |
 | V9 | 4 | Step 9 supplies G4 through additive source-registry behavior and real core XLSForm relevance/repeat routing that preserves typed native expressions and makes zero LLM calls | Existing `convert()` compatibility, `convert_with_native()` contract, and real core XLSForm integration/support matrix | yes |
 | V10 | 4 | Routed main, append-only audit, routed manifest v2, and ordered exact legacy projection recover transactionally, round-trip, and contain no source/model prose outside primary content | Artifact, fault-recovery, redaction, manifest, and compatibility suites | yes |
-| V11 | 5 | G6 authorization is recorded and the rights-approved captured model benchmark stays within its approved budget while meeting edge precision >= 0.95, edge recall >= 0.90, target accuracy >= 0.95, condition exact match >= 0.90, terminal/cycle accuracy 1.00, and zero invented accepted source IDs; unresolved expected edges reduce recall/target accuracy | G6 approval/budget record, captured benchmark manifest, first-pass/post-review evaluation reports, and evaluator command | yes |
+| V11 | 5 | Deterministic evaluator mechanics, first-pass/post-review separation, unresolved-edge penalties, invention detection, and 1,000-node scale evidence pass without provider credentials | Evaluator unit suite, synthetic mechanics manifest/report, and scale report | yes |
 | V12 | final | Ruff, formatting, Pyright, exact 95% branch coverage, package build, strict docs, and exact-wheel checks pass | Step 12 commands, including Step 1 coverage command | yes |
+
+Optional G6 capture is supplemental model-quality evidence, not a numbered
+verification requirement. Record it under the work report's G6 status as
+`not_run`, `passed`, or `failed`, together with the permitted claim scope.
 
 ### Constraints
 
@@ -1084,7 +1260,7 @@ and variable order; whitespace is not contractual.
 |----|-------|------------|-------|
 | C1 | all | Legacy `SurveySVIS` models and ordered JSON semantics remain exact through 1.x; whitespace is not contractual | Characterization and projection tests |
 | C2 | all | Only accepted canonical edges are authoritative; candidates/audit are separate; adjacency is derived from accepted edges | Model and reconciliation tests |
-| C3 | all | Unclear logic stays `opaque` or unresolved; no unsupported precision | Mechanics, captured benchmark, and adversarial tests |
+| C3 | all | Unclear logic stays `opaque` or unresolved; no unsupported precision | Mechanics, optional captured benchmark, and adversarial tests |
 | C4 | 2 | Graph algorithms are iterative and have no new graph runtime dependency | Architecture and 1,000-node tests |
 | C5 | 3 | Routing consumes `StructuredProvider`; core imports no Instructor, OpenAI, LangChain, or provider SDK types | Architecture and provider contract tests |
 | C6 | 3 | Pass B cannot read Pass A output; reviewer changes always cite source evidence and persist in append-only audit | Orchestration and audit round-trip tests |
@@ -1120,9 +1296,9 @@ and variable order; whitespace is not contractual.
 5. In Step 9, reuse existing G4 evidence or implement the bounded core XLSForm
    slice there; keep `SourceRegistry.convert()` unchanged and preserve unsupported
    native expressions without LLM reconstruction.
-6. Use synthetic mechanics fixtures and request G6 before a separately approved captured model
-   benchmark. Never add restricted
-   questionnaires.
+6. Complete required synthetic mechanics evidence without provider credentials.
+   Request lightweight G6 approval only before an optional protected model
+   capture. Never add restricted questionnaires or raw capture content.
 7. Run at most two focused fix-and-retest rounds for a failed required gate.
 8. Under `deviation-policy: ask`, stop before changing public compatibility,
    dependencies, quality thresholds, or native-source scope.
@@ -1144,10 +1320,11 @@ and variable order; whitespace is not contractual.
 - Evidence source spans cannot be verified against normalized source blocks.
 - Required graph invariants or 1,000-node checks fail after two focused recovery
   rounds.
-- G6 source/model/cost/capture authorization is unavailable, or the subsequent
-  rights-approved captured model benchmark is unavailable, lacks required
-  provenance, or remains below a required threshold after two
-  prompt/reconciliation rounds.
+- An optional G6 capture is selected but its sanitized dry-run summary is not
+  approved, the source is not authorized, credentials cannot remain secret, or
+  the run would exceed its request/token/output policy. Stop that capture and
+  record `not_run`; continue deterministic Phase 5 without provider-quality
+  claims.
 - A change requires a new runtime dependency or broad provider architecture
   without approval.
 - Required verification cannot run, fails after allowed recovery, or would cross

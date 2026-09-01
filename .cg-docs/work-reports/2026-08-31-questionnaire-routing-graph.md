@@ -1,7 +1,7 @@
 ---
 date: 2026-08-31
 plan: "../plans/2026-08-31-questionnaire-routing-graph.md"
-status: blocked
+status: active
 ---
 
 # Work Report: Questionnaire Routing Graph
@@ -32,6 +32,8 @@ status: blocked
 - Phase 4 Step 9 completed: G4 additive native conversion, QuestionnaireRouter pipeline, and real XLSForm relevance/repeat routing passed.
 - Phase 4 Step 10 completed: routed manifest v2, durable publication, exact legacy projection, configuration, and stable exports passed.
 - Phase 4 completed on 2026-09-01.
+- Plan revised on 2026-09-01 to make G6 an optional protected test-capture
+  action gate and to separate it from final production configuration.
 
 ## Deviations
 
@@ -55,7 +57,8 @@ None.
 | V8 | 3 | passed | G3 suite: 65 passed, 1 authorized-only skip; exact coverage: 748 passed, 1 skip at 98.34%; full suite: 752 passed, 1 skip |
 | V9 | 4 | passed | Exact G4 Step 9 suite: 62 passed; routing regressions: 243 passed; focused branch coverage reported 97.96% |
 | V10 | 4 | passed | Routed artifact/public API gate: 66 passed; exact coverage: 833 passed, 1 skip at 97.82%; full suite: 837 passed, 1 skip |
-| V11 | 5 | blocked | G6 denied: no source approved, no model approved, zero budget, and no capture approved |
+| V11 | 5 | pending | Required deterministic evaluator mechanics and scale evidence have not run |
+| G6 | 5 | not_run | Optional protected model-quality capture deferred; no real-provider quality claim is permitted |
 | V12 | final | pending | Not run |
 
 ## Constraints Check
@@ -78,15 +81,18 @@ None.
 
 ## Remaining Uncertainty
 
-- G6 source, model, cost, capture, and retention authorization is not yet recorded.
+- The optional mAI Factory or other live provider capture is deferred. This
+  limits model-quality claims but no longer blocks deterministic Phase 5.
 
-## Blocked Stop: Phase 5 Step 11
+## Superseded G6 Block: Phase 5 Step 11
 
 - Time: 2026-09-01T10:07:08Z
 - Gate: G6 captured benchmark authorization.
 - Decision: no source approved; no model approved; zero budget; no capture approved.
-- Effect: no provider call or protected capture was made. V11 cannot be executed, Phase 5 cannot complete, and the plan cannot be marked completed.
-- Resume command after explicit authorization: `/cg-work phase5 .cg-docs/plans/2026-08-31-questionnaire-routing-graph.md`.
+- Effect at the time: no provider call or protected capture was made.
+- Revision: G6 now gates only an optional protected live capture. Required V11
+  uses deterministic mechanics and scale evidence without provider credentials.
+- Resume command: `/cg-work phase5 .cg-docs/plans/2026-08-31-questionnaire-routing-graph.md`.
 
 ## Phase 1 Step 1 Evidence
 
@@ -182,4 +188,5 @@ Platform note: Windows junction, process lock, crash release, hard-exit recovery
 
 ## Final Status
 
-Blocked at G6 before Phase 5 Step 11 model capture.
+Active at Phase 5. Optional G6 live capture is deferred; deterministic V11 and
+V12 remain pending.
