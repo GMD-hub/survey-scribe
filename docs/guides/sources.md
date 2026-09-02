@@ -10,7 +10,7 @@ provenance without calling a model provider.
 | --- | --- | --- |
 | `.pdf` | Docling PDF conversion with local OCR artifacts | `pdf` |
 | `.docx` | Inert DOCX XML parsing | Base |
-| `.xlsx` | Read-only workbook parsing | `tabular` |
+| `.xlsx` | Read-only workbook parsing plus optional XLSForm native routing | `tabular` |
 | `.csv` | UTF-8 CSV parsing | Base |
 | `.html`, `.htm` | Visible text and table extraction | Base |
 | `.md`, `.markdown` | Markdown paragraphs and tables | Base |
@@ -34,6 +34,27 @@ assert tuple(block.order for block in document.blocks) == tuple(
 
 The registry verifies PDF, DOCX, and XLSX signatures against their suffixes.
 Unsupported, missing, remote, and malformed sources raise typed source errors.
+
+## Exact source binding and native routing
+
+Routing uses the additive `convert_with_native()` method. Existing `convert()`
+behavior is unchanged.
+
+```python
+conversion = registry.convert_with_native(
+    Path("questionnaire.xlsx"),
+    survey,
+)
+
+binding = conversion.source_binding
+native = conversion.native
+```
+
+The binding covers the validated primary snapshot and confined companions.
+`QuestionnaireRouter` requires this exact binding and fails before a provider
+call if the source name, format, digest, survey ID, or binding version differs.
+An XLSForm `survey` sheet can supply complete typed native routing and therefore
+make zero provider calls.
 
 ## Normalized model
 
@@ -186,6 +207,12 @@ sandbox. Use process isolation and network policy for hostile documents.
 The XLSX adapter opens workbooks in read-only mode and rejects formulas, macros,
 external links, malformed cell references, archive expansion violations, and
 excessive worksheet dimensions. It does not calculate workbook formulas.
+
+The XLSForm support matrix is version `1.0`. Groups become containment; repeats
+remain logical templates; reference comparisons, `selected()`, and Boolean
+`and`/`or`/`not` project exactly. Other functions and arithmetic remain typed
+native expressions with an `opaque` canonical projection. Constraints,
+calculations, and choice filters are preserved but are not treated as flow edges.
 
 ## Error handling
 

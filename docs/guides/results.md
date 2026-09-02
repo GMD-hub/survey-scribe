@@ -118,6 +118,37 @@ written = result.write(Path("output"), serializer=serializer)
 Generation directories preserve immutable historical output, and `active.json`
 identifies the current generation.
 
+### Routed output
+
+An exact `RoutedSurveySVIS` uses manifest version 2 and publishes both the routed
+main and the ordered legacy projection:
+
+```text
+output/
+|-- <survey_id>_svis.json
+`-- .survey-scribe/surveys/<exact_identity_key>/generations/<generation_id>/
+    |-- <survey_id>_routed_svis.json
+    |-- <survey_id>_svis.json
+    |-- <survey_id>_sidecar.json
+    `-- manifest.json
+```
+
+The routed main contains `routing_schema_version`, `routing_graph`, and the
+append-only audit. The stable `<survey_id>_svis.json` file is reconstructed as an
+exact v1 `SurveySVIS`; routed-only fields are not added to the legacy model.
+Manifest v2 records the equal routed and graph schema versions, both output
+digests, prompt versions, and source/model response digests without raw prompt or
+response bodies.
+
+The exact audit path is `routing_graph.routing_audit`. Routing-specific status
+uses the standard result envelope:
+
+| Routing outcome | Result status |
+| --- | --- |
+| Usable graph with unresolved review warnings | `success` |
+| Usable graph with an unlinked variable or failed source region | `partial` |
+| No usable graph after source, provider, or invariant failure | `failed` |
+
 ## Collision and overwrite behavior
 
 A second write for the same survey raises `ArtifactCollisionError` by default.
@@ -140,9 +171,11 @@ flush errors abort publication instead of being ignored.
 
 ## Sensitive content
 
-Sidecar diagnostics pass through package redaction. The main SVIS output is the
-intended data product and can contain full `question_text`, labels, filenames,
-and notes. Write artifacts only to an approved, access-controlled location.
+Sidecar diagnostics pass through package redaction. The main SVIS or routed SVIS
+artifact is the intended data product and can contain questionnaire content,
+filenames, notes, and bounded source citations. Logs, diagnostics, sidecars,
+manifests, evaluator reports, and persistent caches must not contain source or
+model prose. Write artifacts only to an approved, access-controlled location.
 
 ## Legacy serialization
 

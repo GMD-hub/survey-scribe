@@ -6,12 +6,13 @@
 
 Survey Scribe provides typed Pydantic models for the Survey Variable
 Information Schema (SVIS), safe local source normalization, deterministic
-chunking, secure configuration resolution, and versioned artifacts for
+chunking, questionnaire routing graphs, secure configuration resolution, and versioned artifacts for
 household survey questionnaire metadata. The repository also contains a legacy
 PDF extraction pipeline used by the World Bank Global Monitoring Database team.
 
 > **Alpha status:** Version `0.1.0` ships typed models, configuration, results,
-> serialization, and local source APIs plus a bootstrap command. The legacy
+> serialization, local source APIs, additive routed SVIS models, the
+> `QuestionnaireRouter`, and schema export. The legacy
 > extraction pipeline is not included in the wheel and depends on internal
 > authentication. Package publication remains subject to the approval recorded
 > in [`docs/legal-disposition.md`](docs/legal-disposition.md).
@@ -25,8 +26,10 @@ PDF extraction pipeline used by the World Bank Global Monitoring Database team.
 - Local PDF, DOCX, XLSX, CSV, HTML, Markdown, and text normalization.
 - Token-aware chunking with stable overlap and table provenance.
 - Credential-safe configuration and versioned artifact manifests.
+- Source-grounded directed routing multigraphs with separate evidence and audit history.
+- Native XLSForm relevance and repeat routing without a provider call.
 - A PEP 561 `py.typed` marker for editor and type-checker support.
-- A dependency-free `survey-scribe --help` and `--version` command.
+- A dependency-light command for help, version, and deterministic routing-schema export.
 
 ## Installation
 
@@ -42,8 +45,7 @@ For development from this repository, use the locked environment:
 uv sync --locked --python 3.11
 ```
 
-Optional dependency groups are available for future provider and document
-adapters:
+Optional dependency groups are available for provider and document adapters:
 
 ```console
 pip install "survey-scribe[openai]"
@@ -96,13 +98,15 @@ Inspect the installed command without loading optional providers:
 ```console
 survey-scribe --help
 survey-scribe --version
+survey-scribe schema export routing > questionnaire-routing-graph-v1.0.json
 ```
 
 ## Documentation
 
 The documentation includes installation and quickstart guides, SVIS field
 guidance, local-source and artifact workflows, API-key security practices,
-practical use cases, and a generated API reference.
+questionnaire-routing semantics, evaluation policy, practical use cases, and a
+generated API reference. Start with the [routing guide](docs/routing.md).
 
 ```console
 uv run mkdocs serve

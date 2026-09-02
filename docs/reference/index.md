@@ -1,7 +1,8 @@
 # API Overview
 
-Survey Scribe exposes a small stable top-level SVIS API and additional typed
-modules for configuration, results, serialization, and local sources.
+Survey Scribe preserves its stable legacy SVIS API and adds routed models,
+`QuestionnaireRouter`, and typed modules for providers, configuration, results,
+serialization, and local sources.
 
 ## Stable top-level imports
 
@@ -10,6 +11,10 @@ from survey_scribe import (
     AnswerCategory,
     DataType,
     NumericRange,
+    QuestionnaireRouter,
+    QuestionnaireRoutingGraph,
+    RoutedSurveySVIS,
+    RoutingConfig,
     StudyType,
     SurveySVIS,
     SurveyVariable,
@@ -18,8 +23,9 @@ from survey_scribe import (
 )
 ```
 
-The package freezes this exact top-level export set for `0.1.x`. Import secondary
-APIs from their documented modules:
+The seven legacy SVIS model exports and their serialized behavior remain exact
+through 1.x. Routed exports are additive. Import lower-level contracts from their
+documented modules:
 
 ```python
 from survey_scribe.config import SurveyScribeConfig
@@ -39,8 +45,10 @@ from survey_scribe.sources.chunking import chunk_document
 | [Results](results.md) | Result status, diagnostics, and artifact references |
 | [Sources](sources.md) | Local source models, adapters, chunking, and OCR checks |
 | [Serialization](serialization.md) | Legacy-compatible JSON conversion |
+| [Routing](routing.md) | Routed models, graph contracts, and router API |
+| [Providers](providers.md) | `StructuredProvider` and capability contracts |
 | [Exceptions](exceptions.md) | Package exceptions and redaction helpers |
-| [Command Line](cli.md) | Bootstrap CLI behavior |
+| [Command Line](cli.md) | Help, version, and routing-schema export |
 
 Generated signatures show parameter annotations and return annotations from the
 source. The guide pages explain validation rules, defaults, side effects, and
@@ -53,6 +61,6 @@ compatibility path. New code must import from `survey_scribe`.
 
 ## Package boundary
 
-No packaged function currently accepts a source file and returns extracted
-`SurveySVIS` through an LLM provider. Do not infer such an API from the provider
-extras or configuration types.
+No packaged function currently extracts a new `SurveySVIS` from a source file.
+`QuestionnaireRouter` adds routing to an existing `SurveySVIS` and requires the
+exact validated source binding. This distinction preserves the legacy contract.

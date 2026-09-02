@@ -4,9 +4,10 @@ API keys are bearer credentials. Anyone who obtains a key can use the provider
 permissions assigned to it. Keep secrets out of source control, TOML, command
 history, logs, diagnostics, and generated documentation.
 
-Survey Scribe can resolve credentials into `SurveyScribeConfig`, but the
-installed package does not yet provide an end-to-end provider client. Use the
-same controls when a downstream application creates a provider SDK client.
+Survey Scribe can resolve credentials into `SurveyScribeConfig`. Routing consumes
+an injected `StructuredProvider`; the routing core does not read credentials or
+import a provider SDK. Use the same controls when an application constructs the
+optional provider adapter.
 
 ## Recommended order
 
@@ -133,22 +134,26 @@ config = SurveyScribeConfig(api_key="<hard-coded-secret>")  # Never do this.
 
 Only one of `api_key`, `bearer_token`, or `token_callback` can be configured.
 
-## Direct provider client construction
+## Structured provider boundary
 
-Downstream applications can pass the runtime secret directly to a provider SDK.
-This example requires the `openai` extra and does not add extraction behavior to
-Survey Scribe:
+Applications can construct an adapter from the `openai` extra or provide another
+implementation of `StructuredProvider`. Instructor is internal to the packaged
+OpenAI-compatible adapter. Direct OpenAI or LangChain objects are not routing
+core inputs; adapt them to `StructuredProvider` so schema inspection, normalized
+metadata, retry counts, truncation, and shared concurrency remain enforceable.
 
-```python
-import os
+Do not first place a key in an ordinary application dictionary that might be
+logged or serialized. Do not add it to a URL query string, graph, sidecar,
+manifest, or evaluator fixture.
 
-from openai import OpenAI
+## Test capture versus production
 
-client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
-```
-
-Do not first place the key in an ordinary application dictionary that might be
-logged or serialized. Do not add it to a URL query string.
+G6 protects one optional live test capture. It does not configure production and
+must not become an interactive approval on every production request. Production
+administrators own provider selection, gateway quota, secret storage, source
+authorization, logging, and institutional retention policy. The package enforces
+configured per-request, schema, source-binding, and concurrency bounds; it does
+not claim control over gateway-side retention.
 
 ## Token callbacks
 
@@ -174,14 +179,15 @@ provider itself outside the serialized application state.
 
 ## GitHub Actions secrets
 
-Store provider keys in repository or environment secrets. Reference them only in
-the job step that needs them:
+Current Survey Scribe repository tests are credential-free. A downstream
+application can create a separate protected provider job. The command below is a
+placeholder for that downstream repository, not a Survey Scribe test path:
 
 ```yaml
 - name: Run provider integration tests
   env:
     OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-  run: python -m pytest tests/integration/provider
+  run: python -m pytest downstream_tests/protected_provider
 ```
 
 Use protected GitHub environments for production credentials. Documentation

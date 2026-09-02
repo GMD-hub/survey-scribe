@@ -12,7 +12,6 @@ site_dir: site
 exclude_docs: |
   api.md
   dependencies.md
-  evaluation.md
   examples.md
   /installation.md
   legal-disposition.md
@@ -116,6 +115,8 @@ nav:
       - Configuration: guides/configuration.md
       - Security and API Keys: guides/security.md
       - Local Sources: guides/sources.md
+      - Questionnaire Routing: routing.md
+      - Evaluation Policy: evaluation.md
       - Results and Artifacts: guides/results.md
       - Use Cases: guides/use-cases.md
   - API Reference:
@@ -125,6 +126,8 @@ nav:
       - Results: reference/results.md
       - Sources: reference/sources.md
       - Serialization: reference/serialization.md
+      - Routing: reference/routing.md
+      - Providers: reference/providers.md
       - Exceptions: reference/exceptions.md
       - Command Line: reference/cli.md
   - Project:
