@@ -1,17 +1,26 @@
 # 🧠 Project Brain — Chronological Log
 
-_Generated 2026-09-01 · 12 artifacts (newest first) + 5 roadmap features_
+_Generated 2026-09-02 · 15 artifacts (newest first) + 5 roadmap features_
+
+## 2026-09-02
+
+- **[2026-08-31-questionnaire-routing-graph-review](.cg-docs/reviews/2026-08-31-questionnaire-routing-graph-review.md)** · `review` · _—_ · `2026-09-02`
+  > **Review mode**: full **Files reviewed**: 29 **Findings**: 27 (P0: 5, P1: 8, P2: 12, P3: 2)
+- **[Bind Routing Quality Evidence Across Metrics, Fixtures, and Packages](.cg-docs/solutions/testing-patterns/2026-09-02-bind-routing-quality-evidence.md)** · `solution` · _—_ · `2026-09-02`
+  > A deterministic routing evaluator, strict documentation build, branch coverage, wheel build, and exact-wheel smoke te…
 
 ## 2026-09-01
 
 - **[2026-08-28-survey-scribe-production-package-refined-verify-review-2](.cg-docs/reviews/2026-08-28-survey-scribe-production-package-refined-verify-review-2.md)** · `review` · _—_ · `2026-09-01`
+  > **Review mode**: light verification **Parent review**: `.cg-docs/reviews/2026-08-28-survey-scribe-production-package-…
+- **[2026-08-28-survey-scribe-production-package-refined-verify-review-3](.cg-docs/reviews/2026-08-28-survey-scribe-production-package-refined-verify-review-3.md)** · `review` · _—_ · `2026-09-01`
   > **Review mode**: light verification **Parent review**: `.cg-docs/reviews/2026-08-28-survey-scribe-production-package-…
 - **[Verify Cross-Layer Invariants Beyond Coverage](.cg-docs/solutions/testing-patterns/2026-09-01-verify-cross-layer-invariants-beyond-coverage.md)** · `solution` · _—_ · `2026-09-01`
   > The package passed 837 tests, Ruff, Pyright, and a 97.82 percent statement-plus-branch coverage gate. A light verific…
 
 ## 2026-08-31
 
-- **[Implement the Questionnaire Routing Graph](.cg-docs/plans/2026-08-31-questionnaire-routing-graph.md)** · `plan` · _active_ · `2026-08-31`
+- **[Implement the Questionnaire Routing Graph](.cg-docs/plans/2026-08-31-questionnaire-routing-graph.md)** · `plan` · _completed_ · `2026-08-31`
   > Add a production-quality questionnaire routing capability that lets LLM agents understand and validate the complete f…
 - **[Questionnaire Routing Graph for LLM-Readable SVIS](.cg-docs/brainstorms/2026-08-31-questionnaire-routing-graph.md)** · `brainstorm` · _decided_ · `2026-08-31`
   > <!-- Valid status values: decided, in-progress, abandoned -->
@@ -46,7 +55,7 @@ _Generated 2026-09-01 · 12 artifacts (newest first) + 5 roadmap features_
   > Hosted Survey Scribe service
 - **[Independent review and auto-fix agents](roadmap.json#independent-review-and-auto-fix-agents)** · `feature` · _idea_ · `—`
   > Independent review and auto-fix agents
-- **[Questionnaire Routing Graph for LLM-Readable SVIS](roadmap.json#questionnaire-routing-graph-for-llm-readable-svis)** · `feature` · _active_ · `—`
+- **[Questionnaire Routing Graph for LLM-Readable SVIS](roadmap.json#questionnaire-routing-graph-for-llm-readable-svis)** · `feature` · _done_ · `—`
   > Questionnaire Routing Graph for LLM-Readable SVIS
 - **[Remote URL questionnaire ingestion](roadmap.json#remote-url-questionnaire-ingestion)** · `feature` · _idea_ · `—`
   > Remote URL questionnaire ingestion

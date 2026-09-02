@@ -95,3 +95,4 @@ regression gate, but it is not completion evidence for a semantic invariant.
 - `tests/unit/test_routing_models.py`
 - `tests/integration/test_artifact_process_safety.py`
 - `tests/package/test_clean_install.py`
+- `.cg-docs/solutions/testing-patterns/2026-09-02-bind-routing-quality-evidence.md`
