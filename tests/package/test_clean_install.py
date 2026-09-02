@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import subprocess
 import sys
+import tomllib
 from importlib.metadata import version
 from pathlib import Path
+
+from packaging.utils import canonicalize_name, parse_wheel_filename
 
 
 def _run(command: list[str], *, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
@@ -21,36 +25,52 @@ def _run(command: list[str], *, env: dict[str, str]) -> subprocess.CompletedProc
 
 
 def test_clean_wheel_install_offline(repository_root: Path, tmp_path: Path) -> None:
-    environment = os.environ.copy()
-    environment.pop("UV_INDEX", None)
-    environment.pop("UV_INDEX_URL", None)
-    environment.pop("UV_EXTRA_INDEX_URL", None)
-    for name in tuple(environment):
-        if name.startswith(("OPENAI_", "ANTHROPIC_", "AZURE_OPENAI_", "SURVEY_SCRIBE_")):
-            environment.pop(name)
+    environment = {
+        name: os.environ[name]
+        for name in (
+            "COMSPEC",
+            "HOME",
+            "LANG",
+            "PATH",
+            "PATHEXT",
+            "SYSTEMROOT",
+            "TEMP",
+            "TMP",
+            "TMPDIR",
+            "WINDIR",
+        )
+        if name in os.environ
+    }
+    environment["HOME"] = str(tmp_path / "empty-home")
     environment["UV_NO_CONFIG"] = "1"
     environment["UV_OFFLINE"] = "1"
     environment["UV_CACHE_DIR"] = str(tmp_path / "empty-uv-cache")
-    build_directory = tmp_path / "current-tree-dist"
-    _run(
-        [
-            sys.executable,
-            "-m",
-            "build",
-            "--wheel",
-            "--no-isolation",
-            "--outdir",
-            str(build_directory),
-            str(repository_root),
-        ],
-        env=environment,
+    wheels = sorted(
+        (repository_root / "dist").glob(f"survey_scribe-{version('survey-scribe')}-*.whl")
     )
-    wheels = sorted(build_directory.glob(f"survey_scribe-{version('survey-scribe')}-*.whl"))
-    assert len(wheels) == 1, "Build exactly one wheel from the current checkout."
+    assert len(wheels) == 1, "Build exactly one current-version wheel before package tests."
     wheel = wheels[0]
     virtual_environment = tmp_path / "venv"
     wheelhouse = repository_root / ".cache/wheelhouse"
     assert wheelhouse.is_dir(), "Prepare the locked test wheelhouse before package tests."
+    locked = tomllib.loads((repository_root / "uv.lock").read_text(encoding="utf-8"))
+    locked_packages = {
+        (canonicalize_name(package["name"]), package["version"]): package
+        for package in locked["package"]
+    }
+    dependency_wheels = sorted(wheelhouse.glob("*.whl"))
+    assert dependency_wheels
+    hashed_requirements = [
+        f"{wheel.as_uri()} --hash=sha256:{hashlib.sha256(wheel.read_bytes()).hexdigest()}"
+    ]
+    for dependency in dependency_wheels:
+        name, dependency_version, _build, _tags = parse_wheel_filename(dependency.name)
+        digest = f"sha256:{hashlib.sha256(dependency.read_bytes()).hexdigest()}"
+        locked_package = locked_packages[(canonicalize_name(name), str(dependency_version))]
+        assert digest in {item["hash"] for item in locked_package["wheels"]}
+        hashed_requirements.append(f"{name}=={dependency_version} --hash={digest}")
+    requirements = tmp_path / "locked-wheelhouse.txt"
+    requirements.write_text("\n".join(hashed_requirements) + "\n", encoding="utf-8")
 
     _run(
         ["uv", "venv", "--python", sys.executable, str(virtual_environment)],
@@ -67,9 +87,9 @@ def test_clean_wheel_install_offline(repository_root: Path, tmp_path: Path) -> N
             "--no-index",
             "--find-links",
             str(wheelhouse),
-            "--constraint",
-            str(repository_root / "tests/fixtures/package/constraints.txt"),
-            f"{wheel}[tabular]",
+            "--require-hashes",
+            "--requirement",
+            str(requirements),
         ],
         env=environment,
     )
@@ -94,7 +114,7 @@ from survey_scribe.config import SurveyScribeConfig
 from survey_scribe.models import DataType, SurveySVIS, SurveyVariable
 from survey_scribe.results import ExtractionResult, ResultStatus
 from survey_scribe.serialization.artifacts import write_result
-from survey_scribe.serialization import legacy_payload
+from survey_scribe.serialization import legacy_json_bytes, legacy_payload
 from survey_scribe.serialization.routing import ArtifactManifestV2, parse_artifact_manifest
 from survey_scribe.sources import SourceLimits
 from survey_scribe.sources.chunking import ConservativeTokenEstimator
@@ -149,11 +169,27 @@ with tempfile.TemporaryDirectory() as temporary_directory:
     assert routed.status is ResultStatus.success
     assert isinstance(routed.output, RoutedSurveySVIS)
     assert all(variable.routing_node_id is not None for variable in routed.output.variables)
+    consent, age = routed.output.variables
+    nodes = {node.node_id: node for node in routed.output.routing_graph.nodes}
+    age_activation = nodes[age.routing_node_id].activation_condition
+    assert age_activation is not None
+    assert age_activation.operator.value == "equals"
+    assert age_activation.question_node_id == consent.routing_node_id
+    assert age_activation.value == "yes"
+    assert any(
+        record.observation.origin.value == "native_parser"
+        for record in routed.output.routing_graph.routing_audit.evidence
+    )
+    inventory_node_ids = {
+        item.node_id for item in routed.output.routing_graph.routing_audit.inventory
+    }
+    assert all(variable.routing_node_id in inventory_node_ids for variable in routed.output.variables)
     written = routed.write(output_directory)
     manifest_path = next(item.path for item in written.artifacts if item.kind == "manifest")
     assert isinstance(parse_artifact_manifest(manifest_path.read_bytes()), ArtifactManifestV2)
     legacy_path = output_directory / "TST_2026_WHEEL_svis.json"
-    SurveySVIS.model_validate_json(legacy_path.read_text(encoding="utf-8"))
+    assert legacy_path.read_bytes() == legacy_json_bytes(svis)
+    SurveySVIS.model_validate_json(legacy_path.read_bytes())
 try:
     main(["--help"])
 except SystemExit as exc:
@@ -166,9 +202,32 @@ except SystemExit as exc:
     executable = virtual_environment / (
         "Scripts/survey-scribe.exe" if os.name == "nt" else "bin/survey-scribe"
     )
+    network_guard = tmp_path / "network-guard"
+    network_guard.mkdir()
+    network_guard.joinpath("sitecustomize.py").write_text(
+        "import socket\n"
+        "def deny_network(*args, **kwargs):\n"
+        "    raise RuntimeError('network access denied during package CLI smoke test')\n"
+        "socket.create_connection = deny_network\n"
+        "socket.socket.connect = deny_network\n",
+        encoding="utf-8",
+    )
+    runtime_environment = environment | {
+        "PYTHONNOUSERSITE": "1",
+        "PYTHONPATH": str(network_guard),
+    }
     help_result = _run(
         [str(executable), "--help"],
-        env=environment,
+        env=runtime_environment,
+    )
+    schema_result = _run(
+        [str(executable), "schema", "export", "routing"],
+        env=runtime_environment,
     )
     assert imported.returncode == 0
     assert "survey-scribe" in help_result.stdout
+    expected_schema = (
+        repository_root / "tests/fixtures/routing/schema/questionnaire-routing-graph-v1.0.json"
+    ).read_text(encoding="utf-8")
+    assert schema_result.stdout == expected_schema
+    assert schema_result.stderr == ""
