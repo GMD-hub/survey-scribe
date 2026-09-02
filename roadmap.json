@@ -42,7 +42,7 @@
         {
           "id": "questionnaire-routing-graph-for-llm-readable-svis",
           "title": "Questionnaire Routing Graph for LLM-Readable SVIS",
-          "status": "active",
+          "status": "done",
           "plan": ".cg-docs/plans/2026-08-31-questionnaire-routing-graph.md"
         }
       ]

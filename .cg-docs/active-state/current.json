@@ -1,12 +1,12 @@
 {
   "schemaVersion": "compound-gpid-active-state-v1",
-  "updatedAt": "2026-09-01T21:28:02Z",
+  "updatedAt": "2026-09-02T20:21:59Z",
   "workflow": "/cg-work",
-  "status": "active",
+  "status": "completed",
   "branch": "feat/questionnaire-skip-pattern-graph",
   "plan": ".cg-docs/plans/2026-08-31-questionnaire-routing-graph.md",
   "executionReport": ".cg-docs/work-reports/2026-08-31-questionnaire-routing-graph.md",
-  "currentPhase": 5,
+  "currentPhase": null,
   "evidenceStatus": [
     {"id": "V1", "status": "passed", "artifact": ".cg-docs/work-reports/2026-08-31-questionnaire-routing-graph.md"},
     {"id": "V2", "status": "passed", "artifact": "tests/fixtures/routing/manifest.toml"},
@@ -17,14 +17,15 @@
     {"id": "V7", "status": "passed", "artifact": "tests/fixtures/routing_prompts/structured-responses-v1.json"},
     {"id": "V8", "status": "passed", "artifact": "tests/integration/test_routing_extraction.py"},
     {"id": "V9", "status": "passed", "artifact": "tests/contract/sources/test_xlsform.py"},
-    {"id": "V10", "status": "passed", "artifact": "tests/unit/test_routing_artifacts.py"}
+    {"id": "V10", "status": "passed", "artifact": "tests/unit/test_routing_artifacts.py"},
+    {"id": "V11", "status": "passed", "artifact": ".cg-docs/work-reports/2026-08-31-questionnaire-routing-graph.md"},
+    {"id": "G6", "status": "not_run", "artifact": ".cg-docs/work-reports/2026-08-31-questionnaire-routing-graph.md"},
+    {"id": "V12", "status": "passed", "artifact": ".cg-docs/work-reports/2026-08-31-questionnaire-routing-graph.md"}
   ],
-  "unresolvedDecisions": [
-    {"id": "G6", "summary": "Optional protected live model-quality capture is deferred", "blocking": false}
-  ],
+  "unresolvedDecisions": [],
   "artifactRefs": [
-    {"kind": "plan", "path": ".cg-docs/plans/2026-08-31-questionnaire-routing-graph.md", "status": "active"},
-    {"kind": "work-report", "path": ".cg-docs/work-reports/2026-08-31-questionnaire-routing-graph.md", "status": "active"}
+    {"kind": "plan", "path": ".cg-docs/plans/2026-08-31-questionnaire-routing-graph.md", "status": "completed"},
+    {"kind": "work-report", "path": ".cg-docs/work-reports/2026-08-31-questionnaire-routing-graph.md", "status": "completed"}
   ],
-  "nextCommand": "/cg-work phase5 .cg-docs/plans/2026-08-31-questionnaire-routing-graph.md"
+  "nextCommand": "/cg-review full"
 }

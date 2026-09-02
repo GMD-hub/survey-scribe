@@ -1,7 +1,8 @@
 ---
 date: 2026-08-31
 title: "Implement the Questionnaire Routing Graph"
-status: active
+status: completed
+completed-date: 2026-09-02
 scope: "Deep"
 brainstorm: "../brainstorms/2026-08-31-questionnaire-routing-graph.md"
 language: "Python"
@@ -10,8 +11,7 @@ deviation-policy: "ask"
 artifact-schema-version: 1
 execution-report: "../work-reports/2026-08-31-questionnaire-routing-graph.md"
 phases: 5
-completed-phases: [1, 2, 3, 4]
-current-phase: 5
+completed-phases: [1, 2, 3, 4, 5]
 tags: [python, pydantic, llm, questionnaire, routing, graph, instructor, svis]
 ---
 

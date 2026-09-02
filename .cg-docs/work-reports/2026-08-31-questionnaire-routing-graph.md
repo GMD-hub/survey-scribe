@@ -1,7 +1,7 @@
 ---
 date: 2026-08-31
 plan: "../plans/2026-08-31-questionnaire-routing-graph.md"
-status: active
+status: completed
 ---
 
 # Work Report: Questionnaire Routing Graph
@@ -57,27 +57,27 @@ None.
 | V8 | 3 | passed | G3 suite: 65 passed, 1 authorized-only skip; exact coverage: 748 passed, 1 skip at 98.34%; full suite: 752 passed, 1 skip |
 | V9 | 4 | passed | Exact G4 Step 9 suite: 62 passed; routing regressions: 243 passed; focused branch coverage reported 97.96% |
 | V10 | 4 | passed | Routed artifact/public API gate: 66 passed; exact coverage: 833 passed, 1 skip at 97.82%; full suite: 837 passed, 1 skip |
-| V11 | 5 | pending | Required deterministic evaluator mechanics and scale evidence have not run |
+| V11 | 5 | passed | 10 evaluator tests passed; deterministic mechanics command passed; first-pass/post-review separation, unresolved penalties, invention checks, and 1,000-node/3,000-edge scale evidence passed without provider access |
 | G6 | 5 | not_run | Optional protected model-quality capture deferred; no real-provider quality claim is permitted |
-| V12 | final | pending | Not run |
+| V12 | final | passed | Ruff, format, Pyright, exact 95% branch coverage, strict MkDocs, schema drift, build, Twine, exact-wheel, distribution-content, and complete-suite gates passed |
 
 ## Constraints Check
 
 | ID | Status | Actual check |
 |---|---|---|
-| C1 | pending | Characterization and projection tests |
-| C2 | pending | Model and reconciliation tests |
-| C3 | pending | Mechanics, captured benchmark, and adversarial tests |
-| C4 | pending | Architecture and 1,000-node tests |
-| C5 | pending | Architecture and provider contract tests |
-| C6 | pending | Orchestration and audit tests |
-| C7 | pending | Native adapter call-count tests |
-| C8 | pending | Safe-template, cache-lifetime, and redaction tests |
-| C9 | pending | Public API and dependency checks |
-| C10 | pending | CI and package tests |
-| C11 | pending | Hierarchy and routing tests |
-| C12 | pending | Model, manifest, and artifact tests |
-| C13 | pending | Public API, source-binding, mutation, and no-call tests |
+| C1 | passed | Legacy characterization, routed projection, exact-wheel, and full suites passed |
+| C2 | passed | Routing model, reconciliation, evaluator, and full suites passed |
+| C3 | passed | Opaque/unresolved mechanics and invention tests passed; optional provider benchmark remained not_run |
+| C4 | passed | Iterative 1,000-node/3,000-edge evaluator and graph tests passed; no graph dependency was added |
+| C5 | passed | Provider contract and import-boundary tests passed; provider contract files were unchanged |
+| C6 | passed | Extraction orchestration, review audit, evaluator stage-separation, and full suites passed |
+| C7 | passed | Native routing and exact-wheel XLSForm zero-provider path passed |
+| C8 | passed | Redaction, cache, content-safe evaluator report, artifact, and full suites passed |
+| C9 | passed | Public API, dependency boundary, distribution allowlist, and exact-wheel tests passed |
+| C10 | passed | Python 3.11 exact-wheel tests and Python 3.11-3.13 metadata/CI policy checks passed; 3.12/3.13 execution remains a CI matrix responsibility |
+| C11 | passed | Hierarchy, routing model, validation, pipeline, and full suites passed |
+| C12 | passed | Routed version, manifest v1/v2, serialization, and artifact tests passed |
+| C13 | passed | Source binding, companion digest, mutation, no-call, pipeline, and exact-wheel tests passed |
 
 ## Remaining Uncertainty
 
@@ -188,5 +188,59 @@ Platform note: Windows junction, process lock, crash release, hard-exit recovery
 
 ## Final Status
 
-Active at Phase 5. Optional G6 live capture is deferred; deterministic V11 and
-V12 remain pending.
+Completed on 2026-09-02. V1-V12 passed. Optional G6 remained `not_run`, so this
+report makes no live-provider, mAI Factory, gateway-route, or exact-model quality
+claim.
+
+## Resume: 2026-09-02
+
+- Started: 2026-09-02T02:42:33Z
+- Branch: `feat/questionnaire-skip-pattern-graph`
+- Scope: Phase 5 Steps 11 and 12 only
+- Active deviation policy: `ask` (no runtime override)
+- Review mode: `manual`
+- Canonical plan validation: passed
+- Roadmap feature status: already `active`; no roadmap write required
+- G6: `not_run`; this run uses synthetic fixtures only and permits no live-provider or exact-model quality claim
+- Open evidence at resume: V11 and V12
+
+## Phase 5 Step 11 Evidence
+
+- Completed: 2026-09-02T02:58:36Z
+- Red phase: `uv run pytest tests/unit/test_evaluate_routing.py -q` failed at collection with `ModuleNotFoundError: No module named 'scripts.evaluate_routing'`.
+- Focused evaluator suite: `uv run pytest tests/unit/test_evaluate_routing.py -q` -> 10 passed.
+- Required mechanics command: `uv run python scripts/evaluate_routing.py --manifest tests/fixtures/routing/manifest.toml` -> passed without provider access.
+- First pass: 5/6 accepted edges matched; edge recall and target accuracy were 0.833333; one unresolved route was retained; normalized condition exact match was 0/1; invented accepted source IDs were 0.
+- Post review: 6/6 accepted edges, 6/6 targets, 1/1 normalized conditions, 1/1 terminal classes, and 1/1 loop classes matched; unresolved routes and invented accepted source IDs were 0.
+- Review effect: edge recall and target accuracy each increased by 0.166667; condition exact match increased by 1.0; first-pass precision remained visible at 1.0.
+- Scale evidence: 1,000 nodes and 3,000 edges; deterministic semantic SHA-256 `77d5fcfc76511c75da06ad5c6a6114b1a3ad4a9ed38be05970975f83b4c8c4c9`; Python 3.11.15 on macOS arm64; 0.107451 seconds; 5,754,435 peak traced bytes; no timing threshold.
+- Focused Ruff check and format check passed. Focused Pyright returned 0 errors and 0 warnings.
+- G6 remained `not_run`. No provider, credential, gateway, mAI Factory, or exact-model quality operation occurred or is claimed.
+
+## Phase 5 Step 12 And Boundary Evidence
+
+- Completed: 2026-09-02T03:26:29Z
+- Red phase: `uv run pytest tests/unit/test_cli.py -q` failed because `schema export routing` was not yet accepted by the CLI.
+- Focused schema/evaluator/model suite: 141 passed.
+- Routing schema CLI output exactly matched `tests/fixtures/routing/schema/questionnaire-routing-graph-v1.0.json`.
+- `uv run ruff check .` -> passed; `uv run ruff format --check .` -> 91 files formatted.
+- `uv run pyright` -> 0 errors and 0 warnings.
+- `uv run mkdocs build --strict` -> passed.
+- Exact package-excluded coverage command -> 913 passed, 5 skipped, total branch coverage 95.12%.
+- Removed stale current-version distributions; `uv build` produced one wheel and one sdist.
+- `uv run twine check --strict dist/*` -> both distributions passed.
+- Credential-free wheelhouse preparation completed with the exact seven constrained dependencies.
+- `uv run pytest tests/package` -> 4 passed. The isolated exact wheel ran native XLSForm routing, routed manifest v2 parsing, exact legacy projection validation, CLI help, and routing-schema export with network denied after wheelhouse preparation.
+- Complete suite: `uv run pytest tests` -> 917 passed and 5 expected skips.
+- Expected skips: optional protected live provider smoke, unavailable approved local OCR cache, and Windows-only durable replacement/directory flush branches.
+- Distribution allowlists confirmed that routing/provider-contract/native/serialization runtime modules are present and evaluator code, fixtures, reports, captures, `.cg-docs`, docs, tests, scripts, and `tmp` are absent.
+- Ambient `UV_INDEX`, `UV_INDEX_URL`, and `UV_EXTRA_INDEX_URL` were removed from package commands because the inherited private index value was malformed. Repository and user configuration were not changed.
+- G6 remained `not_run`; no live provider was called and no mAI Factory, gateway-route, or exact-model quality claim was made.
+
+## Completion Record
+
+- Phase 5 was appended to `completed-phases` before `current-phase` was removed.
+- The plan was marked completed with `completed-date: 2026-09-02` and passed canonical artifact validation.
+- Roadmap feature `questionnaire-routing-graph-for-llm-readable-svis` was verified as `done`.
+- Mechanical self-review found no debug statements, added TODO markers, broken imports, or hardcoded secrets.
+- Recommended review mode: `full` because the diff adds schema export and changes package/install evidence boundaries. No review agent was dispatched under `review:manual`.
