@@ -1,0 +1,126 @@
+{
+  "schema_version": 1,
+  "artifact_kind": "deterministic-routing-quality",
+  "benchmark_eligible": false,
+  "claim_scope": "deterministic-mechanics-only",
+  "g6_status": "not_run",
+  "source_manifest_sha256": "98189a8948a0d945ac14564679ff1b9c7cefb3713994b33acb7f95e8441057f2",
+  "source_fixture_ids": [
+    "skip-with-fallthrough",
+    "answer-code-branches-default",
+    "section-target",
+    "multiple-incoming-paths",
+    "activation-without-transition",
+    "roster-loop-with-exit",
+    "correction-return",
+    "unsupported-inferred-cycle",
+    "screen-out-terminal",
+    "garbled-target",
+    "repeated-consumption-template",
+    "duplicate-ids-separate-sections",
+    "prompt-injection",
+    "scale-1000-items"
+  ],
+  "expected": {
+    "nodes": [
+      {"node_id": "ENTRY", "source_item_id": null, "kind": "entry", "terminal_kind": null},
+      {"node_id": "Q1", "source_item_id": "Q1", "kind": "question", "terminal_kind": null},
+      {"node_id": "Q2", "source_item_id": "Q2", "kind": "question", "terminal_kind": null},
+      {"node_id": "Q3", "source_item_id": "Q3", "kind": "question", "terminal_kind": null},
+      {"node_id": "END", "source_item_id": null, "kind": "terminal", "terminal_kind": "survey_complete"}
+    ],
+    "edges": [
+      {"source_node_id": "ENTRY", "target_node_id": "Q1", "kind": "unconditional", "condition": null, "priority": null},
+      {
+        "source_node_id": "Q1",
+        "target_node_id": "Q2",
+        "kind": "conditional",
+        "condition": {
+          "operator": "equals",
+          "question_node_id": "Q1",
+          "value": "yes",
+          "values": null,
+          "children": null,
+          "raw_text": "If yes, continue to Q2."
+        },
+        "priority": 0
+      },
+      {"source_node_id": "Q1", "target_node_id": "END", "kind": "default", "condition": null, "priority": 1},
+      {"source_node_id": "Q2", "target_node_id": "Q3", "kind": "sequential", "condition": null, "priority": null},
+      {"source_node_id": "Q3", "target_node_id": "Q2", "kind": "unconditional", "condition": null, "priority": null},
+      {"source_node_id": "Q3", "target_node_id": "END", "kind": "default", "condition": null, "priority": null}
+    ],
+    "loops": [
+      {"kind": "correction_return", "repeat_group_node_id": null, "member_node_ids": ["Q2", "Q3"]}
+    ],
+    "unresolved_routes": []
+  },
+  "first_pass": {
+    "nodes": [
+      {"node_id": "ENTRY", "source_item_id": null, "kind": "entry", "terminal_kind": null},
+      {"node_id": "Q1", "source_item_id": "Q1", "kind": "question", "terminal_kind": null},
+      {"node_id": "Q2", "source_item_id": "Q2", "kind": "question", "terminal_kind": null},
+      {"node_id": "Q3", "source_item_id": "Q3", "kind": "question", "terminal_kind": null},
+      {"node_id": "END", "source_item_id": null, "kind": "terminal", "terminal_kind": "survey_complete"}
+    ],
+    "edges": [
+      {"source_node_id": "ENTRY", "target_node_id": "Q1", "kind": "unconditional", "condition": null, "priority": null},
+      {"source_node_id": "Q1", "target_node_id": "END", "kind": "default", "condition": null, "priority": 1},
+      {"source_node_id": "Q2", "target_node_id": "Q3", "kind": "sequential", "condition": null, "priority": null},
+      {"source_node_id": "Q3", "target_node_id": "Q2", "kind": "unconditional", "condition": null, "priority": null},
+      {"source_node_id": "Q3", "target_node_id": "END", "kind": "default", "condition": null, "priority": null}
+    ],
+    "loops": [
+      {"kind": "correction_return", "repeat_group_node_id": null, "member_node_ids": ["Q2", "Q3"]}
+    ],
+    "unresolved_routes": [
+      {
+        "source_node_id": "Q1",
+        "kind": "conditional",
+        "condition": {
+          "operator": "equals",
+          "question_node_id": "Q1",
+          "value": "yes",
+          "values": null,
+          "children": null,
+          "raw_text": "Unresolved target after a yes response."
+        },
+        "priority": 0
+      }
+    ]
+  },
+  "post_review": {
+    "nodes": [
+      {"node_id": "ENTRY", "source_item_id": null, "kind": "entry", "terminal_kind": null},
+      {"node_id": "Q1", "source_item_id": "Q1", "kind": "question", "terminal_kind": null},
+      {"node_id": "Q2", "source_item_id": "Q2", "kind": "question", "terminal_kind": null},
+      {"node_id": "Q3", "source_item_id": "Q3", "kind": "question", "terminal_kind": null},
+      {"node_id": "END", "source_item_id": null, "kind": "terminal", "terminal_kind": "survey_complete"}
+    ],
+    "edges": [
+      {"source_node_id": "ENTRY", "target_node_id": "Q1", "kind": "unconditional", "condition": null, "priority": null},
+      {
+        "source_node_id": "Q1",
+        "target_node_id": "Q2",
+        "kind": "conditional",
+        "condition": {
+          "operator": "equals",
+          "question_node_id": "Q1",
+          "value": "yes",
+          "values": null,
+          "children": null,
+          "raw_text": "Reviewer confirmed the cited yes branch."
+        },
+        "priority": 0
+      },
+      {"source_node_id": "Q1", "target_node_id": "END", "kind": "default", "condition": null, "priority": 1},
+      {"source_node_id": "Q2", "target_node_id": "Q3", "kind": "sequential", "condition": null, "priority": null},
+      {"source_node_id": "Q3", "target_node_id": "Q2", "kind": "unconditional", "condition": null, "priority": null},
+      {"source_node_id": "Q3", "target_node_id": "END", "kind": "default", "condition": null, "priority": null}
+    ],
+    "loops": [
+      {"kind": "correction_return", "repeat_group_node_id": null, "member_node_ids": ["Q2", "Q3"]}
+    ],
+    "unresolved_routes": []
+  }
+}

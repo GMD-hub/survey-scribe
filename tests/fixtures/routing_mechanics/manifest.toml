@@ -10,3 +10,7 @@ restrictions = "Mechanics regression testing only; not approved for model-qualit
 [output]
 path = "tests/fixtures/routing_mechanics/inventory-identity-v1.json"
 sha256 = "f9b2aaeea7dbc85b6cceebf92d06199e6085eb94e1a68bba8608cc0940a462c3"
+
+[evaluation]
+path = "tests/fixtures/routing_mechanics/routing-evaluation-v1.json"
+sha256 = "e1b23212379ce7fa7458d3a87e47bf1627ee26b20192b92af4976a04237d1f27"

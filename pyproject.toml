@@ -137,6 +137,7 @@ include = [
   "tests/package",
   "tests/test_schema.py",
   "tests/unit",
+  "scripts/evaluate_routing.py",
   "scripts/validate_ocr_artifacts.py",
   "scripts/validate_routing_fixtures.py",
   "scripts/cg_pr_preflight.py",
