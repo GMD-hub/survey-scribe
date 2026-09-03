@@ -105,6 +105,7 @@ class SourceProvenance(BaseModel):
     page: int | None = Field(default=None, ge=1)
     pages: tuple[int, ...] = ()
     sheet: str | None = None
+    section_path: tuple[str, ...] = ()
     row_start: int | None = Field(default=None, ge=1)
     row_end: int | None = Field(default=None, ge=1)
 
@@ -116,6 +117,15 @@ class SourceProvenance(BaseModel):
         if any(isinstance(item, bool) for item in values):
             raise ValueError("provenance pages must be positive integers")
         return value
+
+    @field_validator("section_path")
+    @classmethod
+    def validate_section_path(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        """Normalize and reject empty source section labels."""
+        normalized = tuple(item.strip() for item in value)
+        if any(not item for item in normalized):
+            raise ValueError("section path entries must not be empty")
+        return normalized
 
     @model_validator(mode="after")
     def validate_row_range(self) -> SourceProvenance:

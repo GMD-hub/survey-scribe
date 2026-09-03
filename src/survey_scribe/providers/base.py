@@ -165,7 +165,11 @@ class ProviderDependencyError(ProviderError, ImportError):
     """The selected optional provider extra is unavailable."""
 
     code = "PROVIDER_DEPENDENCY_MISSING"
-    safe_message = "The optional 'openai' extra is required for this provider."
+    safe_message = "The optional provider extra is required for this provider."
+
+    def __init__(self, extra: Literal["openai", "anthropic"] = "openai") -> None:
+        self.safe_message = f"The optional '{extra}' extra is required for this provider."
+        super().__init__()
 
 
 class ProviderCapabilityError(ProviderError, ValueError):

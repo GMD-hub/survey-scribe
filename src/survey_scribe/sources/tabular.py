@@ -138,6 +138,7 @@ class XlsxAdapter:
                 provenance = SourceProvenance(
                     source_name=source.primary.name,
                     sheet=str(sheet_name),
+                    section_path=(str(sheet_name),),
                     row_start=1,
                     row_end=len(table_rows),
                 )

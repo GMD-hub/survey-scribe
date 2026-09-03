@@ -93,6 +93,7 @@ class PdfConversionBlock:
     page: int | None = None
     pages: tuple[int, ...] = ()
     table_rows: tuple[tuple[str, ...], ...] = ()
+    section_path: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         pages = self.pages
@@ -174,6 +175,7 @@ class DoclingConverter:
         configured_max_cells = os.environ.get("SURVEY_SCRIBE_PDF_MAX_CELLS")
         max_cells = int(configured_max_cells) if configured_max_cells is not None else None
         table_cells = 0
+        current_section: tuple[str, ...] = ()
         for item, _level in document.iterate_items():
             pages = _docling_pages(item)
             page = pages[0] if pages else None
@@ -194,12 +196,22 @@ class DoclingConverter:
                             page=page,
                             pages=pages,
                             table_rows=rows,
+                            section_path=current_section,
                         )
                     )
                 continue
             text = _normalize_text(str(getattr(item, "text", "")))
             if text:
-                blocks.append(PdfConversionBlock(text=text, page=page, pages=pages))
+                if any(name in label for name in ("section", "title", "heading")):
+                    current_section = (text,)
+                blocks.append(
+                    PdfConversionBlock(
+                        text=text,
+                        page=page,
+                        pages=pages,
+                        section_path=current_section,
+                    )
+                )
         page_count = _docling_page_count(result, document, blocks)
         failed_pages = _docling_failed_pages(result)
         if failed_pages and (page_count == 0 or failed_pages[-1] > page_count):
@@ -279,6 +291,7 @@ class DoclingPdfAdapter:
                 source_name=source.primary.name,
                 page=converted.page,
                 pages=converted.pages,
+                section_path=converted.section_path,
             )
             table: SourceTable | None = None
             kind = "text"
@@ -369,13 +382,23 @@ class DocxAdapter:
         blocks: list[SourceBlock] = []
         table_index = 0
         table_cells = 0
+        current_section: tuple[str, ...] = ()
         word_blocks, unsupported_containers = _word_body_blocks(body)
         for child in word_blocks:
             _remaining_deadline(deadline)
             if child.tag == f"{{{_WORD_NAMESPACE}}}p":
                 text = _word_text(child)
                 if text:
-                    blocks.append(_text_block(source.primary.name, len(blocks), text))
+                    if _word_is_heading(child):
+                        current_section = (text,)
+                    blocks.append(
+                        _text_block(
+                            source.primary.name,
+                            len(blocks),
+                            text,
+                            section_path=current_section,
+                        )
+                    )
             else:
                 rows = _word_table_rows(child)
                 if not rows:
@@ -384,6 +407,7 @@ class DocxAdapter:
                 table_index += 1
                 provenance = SourceProvenance(
                     source_name=source.primary.name,
+                    section_path=current_section,
                     row_start=1,
                     row_end=len(rows),
                 )
@@ -469,14 +493,23 @@ class TextAdapter:
             part.strip() for part in re.split(r"\r?\n\s*\r?\n", text) if part.strip()
         )
         _remaining_deadline(deadline)
-        blocks = tuple(
-            _text_block(source.primary.name, order, paragraph)
-            for order, paragraph in enumerate(paragraphs)
-        )
+        blocks: list[SourceBlock] = []
+        current_section: tuple[str, ...] = ()
+        for paragraph in paragraphs:
+            if _plain_text_heading(paragraph):
+                current_section = (paragraph.strip(),)
+            blocks.append(
+                _text_block(
+                    source.primary.name,
+                    len(blocks),
+                    paragraph,
+                    section_path=current_section,
+                )
+            )
         return SourceDocument(
             source_name=source.primary.name,
             media_type="text/plain",
-            blocks=blocks,
+            blocks=tuple(blocks),
         )
 
 
@@ -885,13 +918,19 @@ def _word_table_rows(table: ElementTree.Element) -> tuple[tuple[str, ...], ...]:
     return tuple(rows)
 
 
-def _text_block(source_name: str, order: int, text: str) -> SourceBlock:
+def _text_block(
+    source_name: str,
+    order: int,
+    text: str,
+    *,
+    section_path: tuple[str, ...] = (),
+) -> SourceBlock:
     return SourceBlock(
         id=f"block-{order + 1:06d}",
         order=order,
         kind="text",
         text=text,
-        provenance=SourceProvenance(source_name=source_name),
+        provenance=SourceProvenance(source_name=source_name, section_path=section_path),
     )
 
 
@@ -930,6 +969,7 @@ class _SafeHtmlParser(HTMLParser):
         self._cell_text: list[str] | None = None
         self._max_cells = max_cells
         self._cell_count = 0
+        self._heading_tag: str | None = None
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         del attrs
@@ -950,6 +990,10 @@ class _SafeHtmlParser(HTMLParser):
                 self._cells = []
             elif tag in {"td", "th"}:
                 self._cell_text = []
+            return
+        if tag in {"h1", "h2", "h3", "h4", "h5", "h6"}:
+            self._flush_text()
+            self._heading_tag = tag
             return
         if tag in self._BLOCKS:
             self._flush_text()
@@ -978,6 +1022,13 @@ class _SafeHtmlParser(HTMLParser):
                 self._table_depth -= 1
                 if self._table_depth == 0 and self._rows:
                     self.events.append(("table", tuple(self._rows)))
+            return
+        if tag == self._heading_tag:
+            text = _normalize_text(" ".join(self._text))
+            self._text = []
+            self._heading_tag = None
+            if text:
+                self.events.append(("section", text))
             return
         if tag in self._BLOCKS:
             self._flush_text()
@@ -1010,9 +1061,28 @@ def _events_to_blocks(
     blocks: list[SourceBlock] = []
     table_index = 0
     table_cells = 0
+    current_section: tuple[str, ...] = ()
     for kind, value in events:
+        if kind == "section":
+            current_section = (str(value),)
+            blocks.append(
+                _text_block(
+                    source_name,
+                    len(blocks),
+                    str(value),
+                    section_path=current_section,
+                )
+            )
+            continue
         if kind == "text":
-            blocks.append(_text_block(source_name, len(blocks), str(value)))
+            blocks.append(
+                _text_block(
+                    source_name,
+                    len(blocks),
+                    str(value),
+                    section_path=current_section,
+                )
+            )
             continue
         rows = tuple(tuple(str(cell) for cell in row) for row in value)  # type: ignore[union-attr]
         if not rows:
@@ -1020,7 +1090,12 @@ def _events_to_blocks(
         if max_cells is not None:
             table_cells = _add_table_cells(table_cells, rows, max_cells)
         table_index += 1
-        provenance = SourceProvenance(source_name=source_name, row_start=1, row_end=len(rows))
+        provenance = SourceProvenance(
+            source_name=source_name,
+            section_path=current_section,
+            row_start=1,
+            row_end=len(rows),
+        )
         table = SourceTable(id=f"table-{table_index:06d}", rows=rows, provenance=provenance)
         blocks.append(
             SourceBlock(
@@ -1050,6 +1125,12 @@ def _markdown_events(text: str, *, max_cells: int | None = None) -> list[tuple[s
 
     while index < len(lines):
         line = lines[index]
+        heading = re.fullmatch(r"\s{0,3}#{1,6}\s+(.+?)\s*#*\s*", line)
+        if heading is not None:
+            flush_paragraph()
+            events.append(("section", heading.group(1)))
+            index += 1
+            continue
         if "|" in line and index + 1 < len(lines) and "|" in lines[index + 1]:
             table_lines: list[str] = []
             while index < len(lines) and "|" in lines[index] and lines[index].strip():
@@ -1072,6 +1153,24 @@ def _markdown_events(text: str, *, max_cells: int | None = None) -> list[tuple[s
         index += 1
     flush_paragraph()
     return events
+
+
+def _word_is_heading(paragraph: ElementTree.Element) -> bool:
+    properties = paragraph.find(f"{{{_WORD_NAMESPACE}}}pPr")
+    if properties is None:
+        return False
+    style = properties.find(f"{{{_WORD_NAMESPACE}}}pStyle")
+    value = style.attrib.get(f"{{{_WORD_NAMESPACE}}}val", "") if style is not None else ""
+    return value.casefold().startswith(("heading", "title"))
+
+
+def _plain_text_heading(paragraph: str) -> bool:
+    stripped = paragraph.strip()
+    if "\n" in stripped or len(stripped) > 120:
+        return False
+    return bool(re.match(r"(?i)^(?:section|module)\b", stripped)) or (
+        len(stripped.split()) <= 12 and stripped.isupper()
+    )
 
 
 def _parse_markdown_table(
