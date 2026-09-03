@@ -66,6 +66,33 @@ SDK import. Production applications normally omit it, install the `openai` extra
 and supply credentials from protected runtime configuration. Direct OpenAI or
 LangChain clients are not routing inputs. Adapt them to `StructuredProvider`.
 
+Named presets are available for OpenAI, OpenRouter, and Vercel AI Gateway.
+OpenRouter accepts only the non-secret `HTTP-Referer` and `X-Title` headers.
+Custom gateways require an explicit base URL and use the same header allowlist.
+
+Azure OpenAI uses `AzureOpenAIProvider`. Configure exactly one API key or
+refreshable token callback. Survey Scribe passes the callback to the Azure SDK
+without calling or persisting it. `InstructorAnthropicProvider` is available
+through the optional `anthropic` extra. All SDK imports remain lazy.
+
+Survey Scribe disables each SDK's internal retry loop and applies only the
+configured package retry policy. Transport and structured-validation attempts
+are therefore bounded and reported consistently. Anthropic capability rows must
+not advertise `seed`; explicit unsupported settings fail before transport.
+
+| Adapter | Capability evidence | Credentials | Notes |
+| --- | --- | --- | --- |
+| OpenAI | configuration-only | API key | The application supplies named model rows |
+| OpenRouter | configuration-only | API key | Allowlisted attribution headers only |
+| Vercel AI Gateway | configuration-only | API key | OpenAI-compatible preset |
+| Custom gateway | configuration-only | API key | Explicit base URL required |
+| Azure OpenAI/Foundry | configuration-only | API key or token callback | Deployment is the model identifier |
+| Anthropic | configuration-only | API key | Requires the `anthropic` extra |
+
+No live model row is advertised as verified by this table. A row becomes
+`verified` only after a protected, named model/version contract run records that
+evidence. Unknown rows fail closed during schema inspection.
+
 The placeholder `build_synthetic_response_for()` represents an application test
 fixture and is not a package function. No quality claim follows from this example.
 
@@ -73,3 +100,14 @@ fixture and is not a package function. No quality claim follows from this exampl
     options:
       members:
         - InstructorOpenAIProvider
+        - OpenAICompatiblePreset
+
+::: survey_scribe.providers.azure
+    options:
+      members:
+        - AzureOpenAIProvider
+
+::: survey_scribe.providers.anthropic
+    options:
+      members:
+        - InstructorAnthropicProvider

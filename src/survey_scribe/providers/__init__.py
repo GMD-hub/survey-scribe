@@ -8,7 +8,10 @@ from survey_scribe.providers.base import (
     StructuredProvider,
 )
 from survey_scribe.providers.capabilities import CapabilityEvidence, ModelCapabilities
-from survey_scribe.providers.openai_compatible import InstructorOpenAIProvider
+from survey_scribe.providers.openai_compatible import (
+    InstructorOpenAIProvider,
+    OpenAICompatiblePreset,
+)
 
 __all__ = [
     "CapabilityEvidence",
@@ -16,6 +19,7 @@ __all__ = [
     "InstructorOpenAIProvider",
     "ModelCapabilities",
     "NormalizedUsage",
+    "OpenAICompatiblePreset",
     "ProviderMessage",
     "ProviderResponse",
     "StructuredProvider",

@@ -1,5 +1,5 @@
 {
-  "edge_count": 10,
+  "edge_count": 11,
   "edges": [
     {
       "edge_type": "reviews",
@@ -35,6 +35,12 @@
       "edge_type": "reviews",
       "source": ".cg-docs/reviews/2026-08-31-questionnaire-routing-graph-review.md",
       "target": ".cg-docs/plans/2026-08-31-questionnaire-routing-graph.md",
+      "target_missing": false
+    },
+    {
+      "edge_type": "verifies",
+      "source": ".cg-docs/reviews/2026-08-31-questionnaire-routing-graph-verify-review.md",
+      "target": ".cg-docs/reviews/2026-08-31-questionnaire-routing-graph-review.md",
       "target_missing": false
     },
     {
@@ -355,6 +361,28 @@
       ]
     },
     {
+      "date": "2026-09-03",
+      "entity_type": "review",
+      "path": ".cg-docs/reviews/2026-08-31-questionnaire-routing-graph-verify-review.md",
+      "slug": "2026-08-31-questionnaire-routing-graph-verify-review",
+      "status": "",
+      "summary": "**Review mode**: light verification **Parent review**: `.cg-docs/reviews/2026-08-31-questionnaire-routing-graph-review.md` **Files reviewed**: 15 current tracked and untracked Phase 3 implementation, test, documentation, plan, and workflow-state files **Findings**: 16 (P0: 0, P1: 12, P2: 4, P3: 0)",
+      "tags": [],
+      "title": "2026-08-31-questionnaire-routing-graph-verify-review",
+      "top_keywords": [
+        "pipeline.py",
+        "openai_compatible.py",
+        "seed",
+        "providererror",
+        "src/survey_scribe/pipeline.py:103",
+        "2026-08-31-questionnaire-routing-graph-review.md",
+        "review",
+        "phase",
+        "verification",
+        "passed"
+      ]
+    },
+    {
       "date": "2026-08-28",
       "entity_type": "solution",
       "path": ".cg-docs/solutions/bugs/2026-08-28-close-credential-redaction-boundaries.md",
@@ -478,6 +506,38 @@
       ]
     },
     {
+      "date": "2026-09-03",
+      "entity_type": "solution",
+      "path": ".cg-docs/solutions/testing-patterns/2026-09-03-bound-provider-retries-and-chunk-provenance.md",
+      "slug": "2026-09-03-bound-provider-retries-and-chunk-provenance",
+      "status": "",
+      "summary": "Provider and pipeline tests passed, but verification found that production behavior could still violate the public contracts: - SDK clients could retry internally in addition to package retries; - SDK connection and Instructor validation exceptions crossed different boundaries than the test doubles; - whole-block extraction discarded overlap and repeated-row evidence; - cancellation could leave sibling requests running; - invalid numeric ranges skipped the required validation retry; and - prompt, source, and response identities were not retained together.",
+      "tags": [
+        "providers",
+        "retries",
+        "instructor",
+        "chunking",
+        "overlap",
+        "provenance",
+        "cancellation",
+        "validation",
+        "coverage"
+      ],
+      "title": "Bound Provider Retries and Preserve Chunk Provenance",
+      "top_keywords": [
+        "retries",
+        "provenance",
+        "chunk_document()",
+        "bound provider retries",
+        "preserve chunk provenance",
+        "provider",
+        "chunk",
+        "bound",
+        "preserve",
+        "sourceblock"
+      ]
+    },
+    {
       "date": "",
       "entity_type": "feature",
       "path": "roadmap.json#independent-review-and-auto-fix-agents",
@@ -588,8 +648,8 @@
       ]
     }
   ],
-  "entity_count": 20,
-  "generated": "2026-09-02",
+  "entity_count": 22,
+  "generated": "2026-09-03",
   "schema_version": "0.2.0",
   "topic_count": 4,
   "topics": [
@@ -613,6 +673,23 @@
     {
       "entity_count": 5,
       "entity_paths": [
+        ".cg-docs/solutions/bugs/2026-08-28-close-credential-redaction-boundaries.md",
+        ".cg-docs/solutions/build-errors/2026-08-26-bound-python-package-artifacts-and-evidence.md",
+        ".cg-docs/solutions/testing-patterns/2026-09-01-verify-cross-layer-invariants-beyond-coverage.md",
+        ".cg-docs/solutions/testing-patterns/2026-09-02-bind-routing-quality-evidence.md",
+        ".cg-docs/solutions/testing-patterns/2026-09-03-bound-provider-retries-and-chunk-provenance.md"
+      ],
+      "keywords": [
+        "root",
+        "cause",
+        "prevention"
+      ],
+      "label": "Root / Cause / Prevention",
+      "slug": "root-cause-prevention"
+    },
+    {
+      "entity_count": 5,
+      "entity_paths": [
         ".cg-docs/reviews/2026-08-26-survey-scribe-production-package-review.md",
         ".cg-docs/reviews/2026-08-28-survey-scribe-production-package-refined-review.md",
         ".cg-docs/reviews/2026-08-28-survey-scribe-production-package-refined-verify-review-2.md",
@@ -626,21 +703,6 @@
       ],
       "label": "Survey_Scribe / Src / Sources",
       "slug": "survey-scribe-src-sources"
-    },
-    {
-      "entity_count": 3,
-      "entity_paths": [
-        ".cg-docs/solutions/build-errors/2026-08-26-bound-python-package-artifacts-and-evidence.md",
-        ".cg-docs/solutions/testing-patterns/2026-09-01-verify-cross-layer-invariants-beyond-coverage.md",
-        ".cg-docs/solutions/testing-patterns/2026-09-02-bind-routing-quality-evidence.md"
-      ],
-      "keywords": [
-        "evidence",
-        "routing",
-        "root"
-      ],
-      "label": "Evidence / Routing / Root",
-      "slug": "evidence-routing-root"
     },
     {
       "entity_count": 3,

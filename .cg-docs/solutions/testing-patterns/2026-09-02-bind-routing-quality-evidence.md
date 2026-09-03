@@ -87,6 +87,7 @@ schema plus legacy projection bytes exactly.
 
 ## Related
 
+- `.cg-docs/solutions/testing-patterns/2026-09-03-bound-provider-retries-and-chunk-provenance.md`
 - `.cg-docs/solutions/testing-patterns/2026-09-01-verify-cross-layer-invariants-beyond-coverage.md`
 - `.cg-docs/solutions/build-errors/2026-08-26-bound-python-package-artifacts-and-evidence.md`
 - `.cg-docs/reviews/2026-08-31-questionnaire-routing-graph-review.md`

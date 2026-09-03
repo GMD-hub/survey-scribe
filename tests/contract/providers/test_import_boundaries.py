@@ -13,6 +13,7 @@ import pytest
     (
         "src/survey_scribe/providers/base.py",
         "src/survey_scribe/providers/capabilities.py",
+        "src/survey_scribe/pipeline.py",
         "src/survey_scribe/routing/extraction.py",
         "src/survey_scribe/routing/review.py",
     ),
@@ -34,6 +35,28 @@ def test_core_modules_do_not_import_optional_provider_sdks(
         if isinstance(node, ast.ImportFrom) and node.module is not None
     )
     assert imported.isdisjoint({"openai", "instructor", "tenacity", "tiktoken", "itsai"})
+
+
+def test_provider_adapters_use_lazy_sdk_imports(repository_root: Path) -> None:
+    for relative_path in (
+        "src/survey_scribe/providers/openai_compatible.py",
+        "src/survey_scribe/providers/azure.py",
+        "src/survey_scribe/providers/anthropic.py",
+    ):
+        source = (repository_root / relative_path).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        imported = {
+            alias.name.split(".", maxsplit=1)[0]
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Import)
+            for alias in node.names
+        }
+        imported.update(
+            node.module.split(".", maxsplit=1)[0]
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module is not None
+        )
+        assert imported.isdisjoint({"openai", "instructor", "anthropic", "itsai"})
 
 
 def test_routing_uses_provider_port_without_defining_a_duplicate_protocol(

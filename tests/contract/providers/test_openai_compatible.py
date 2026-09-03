@@ -300,6 +300,7 @@ async def test_lazy_sdk_path_converts_messages_settings_and_normalizes_metadata(
     assert client_kwargs == {
         "api_key": "test-key",
         "base_url": "https://gateway.example/v1",
+        "max_retries": 0,
     }
     assert request_kwargs["messages"] == [
         {"role": "system", "content": "fixed"},
@@ -354,6 +355,66 @@ async def test_metadata_objects_and_invalid_usage_are_normalized_without_raw_dat
     assert response.response_id is None
     assert response.usage is not None
     assert response.usage.total_tokens == 5
+
+    inconsistent = SimpleNamespace(
+        finish_reason="stop",
+        response_id=None,
+        usage={"input_tokens": 5, "output_tokens": 4, "total_tokens": 1},
+    )
+    safe = InstructorOpenAIProvider(
+        model="gpt-test",
+        capabilities=_capabilities(),
+        completion=lambda **_kwargs: (Answer(value=2), inconsistent),
+    )
+    normalized = await _generate(safe)
+    assert normalized.usage is not None
+    assert normalized.usage.total_tokens == 9
+
+
+@pytest.mark.asyncio
+async def test_sdk_connection_and_instructor_validation_errors_use_bounded_retries() -> None:
+    import httpx
+    from instructor.exceptions import InstructorRetryException
+    from openai import APIConnectionError
+
+    connection_calls = 0
+
+    async def connection_once(**_kwargs: object) -> Answer:
+        nonlocal connection_calls
+        connection_calls += 1
+        if connection_calls == 1:
+            raise APIConnectionError(request=httpx.Request("POST", "https://example.test"))
+        return Answer(value=12)
+
+    connection_provider = InstructorOpenAIProvider(
+        model="gpt-test",
+        capabilities=_capabilities(),
+        completion=connection_once,
+    )
+    connection_response = await _generate(connection_provider)
+    assert connection_response.transport_attempts == 2
+
+    validation_calls = 0
+
+    async def validation_once(**_kwargs: object) -> Answer:
+        nonlocal validation_calls
+        validation_calls += 1
+        if validation_calls == 1:
+            raise InstructorRetryException(
+                [ValueError("private questionnaire")],
+                n_attempts=1,
+                total_usage=0,
+            )
+        return Answer(value=13)
+
+    validation_provider = InstructorOpenAIProvider(
+        model="gpt-test",
+        capabilities=_capabilities(),
+        completion=validation_once,
+    )
+    validation_response = await _generate(validation_provider)
+    assert validation_response.transport_attempts == 2
+    assert validation_response.validation_attempts == 2
 
 
 @pytest.mark.asyncio

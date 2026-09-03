@@ -6,8 +6,9 @@ import asyncio
 import copy
 import inspect
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from enum import StrEnum
 from importlib import import_module
-from typing import TypeVar, cast
+from typing import Literal, TypeVar, cast
 
 from pydantic import BaseModel, ValidationError, create_model
 
@@ -30,6 +31,22 @@ from survey_scribe.providers.capabilities import ModelCapabilities
 T = TypeVar("T", bound=BaseModel)
 Completion = Callable[..., object | Awaitable[object]]
 
+_PRESET_BASE_URLS = {
+    "openai": "https://api.openai.com/v1",
+    "openrouter": "https://openrouter.ai/api/v1",
+    "vercel": "https://ai-gateway.vercel.sh/v1",
+}
+_ALLOWED_DEFAULT_HEADERS = frozenset({"http-referer", "x-title"})
+
+
+class OpenAICompatiblePreset(StrEnum):
+    """Reviewed endpoint presets plus an explicit custom gateway mode."""
+
+    openai = "openai"
+    openrouter = "openrouter"
+    vercel = "vercel"
+    custom = "custom"
+
 
 class InstructorOpenAIProvider:
     """Structured OpenAI-compatible provider with Instructor kept internal."""
@@ -42,6 +59,7 @@ class InstructorOpenAIProvider:
         base_url: str | None = None,
         capabilities: ModelCapabilities,
         completion: Completion | None = None,
+        default_headers: Mapping[str, str] | None = None,
     ) -> None:
         if not model.strip():
             raise ValueError("provider model must not be empty")
@@ -50,8 +68,42 @@ class InstructorOpenAIProvider:
         self._model = model
         self._api_key = api_key
         self._base_url = base_url
+        self._default_headers = _validate_default_headers(default_headers)
         self.capabilities = capabilities
         self._completion = completion
+
+    @classmethod
+    def from_preset(
+        cls,
+        preset: OpenAICompatiblePreset,
+        *,
+        model: str,
+        capabilities: ModelCapabilities,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        default_headers: Mapping[str, str] | None = None,
+        completion: Completion | None = None,
+    ) -> InstructorOpenAIProvider:
+        """Construct a reviewed named endpoint or an explicit custom gateway."""
+        selected = OpenAICompatiblePreset(preset)
+        if selected is OpenAICompatiblePreset.custom:
+            if base_url is None:
+                raise ValueError("custom provider preset requires base_url")
+            resolved_base_url = base_url
+        else:
+            if base_url is not None:
+                raise ValueError("named provider presets do not accept a custom base_url")
+            resolved_base_url = _PRESET_BASE_URLS[selected.value]
+        if capabilities.provider != selected.value:
+            raise ValueError("capability row provider must match the selected preset")
+        return cls(
+            model=model,
+            api_key=api_key,
+            base_url=resolved_base_url,
+            capabilities=capabilities,
+            completion=completion,
+            default_headers=default_headers,
+        )
 
     @property
     def adapter_identity(self) -> str:
@@ -68,6 +120,11 @@ class InstructorOpenAIProvider:
     @property
     def max_input_tokens(self) -> int:
         return self.capabilities.max_input_tokens
+
+    @property
+    def base_url(self) -> str | None:
+        """Return the configured non-secret endpoint."""
+        return self._base_url
 
     def inspect_schema(self, response_model: type[T]) -> SchemaDescriptor:
         return self.capabilities.inspect_schema(response_model)
@@ -91,7 +148,7 @@ class InstructorOpenAIProvider:
             try:
                 completion = self._load_sdk_completion()
             except ImportError:
-                raise ProviderDependencyError() from None
+                raise ProviderDependencyError(self._dependency_extra) from None
         materialized_messages = tuple(messages)
         transport_attempts = 0
         validation_attempts = 0
@@ -116,6 +173,14 @@ class InstructorOpenAIProvider:
                 await _retry_delay(retry, transport_attempts)
                 continue
             except Exception as error:
+                if _is_provider_truncation_error(error):
+                    raise ProviderTruncationError() from None
+                if _is_provider_validation_error(error):
+                    validation_attempts += 1
+                    if validation_attempts >= retry.max_attempts:
+                        raise ProviderValidationError() from None
+                    await _retry_delay(retry, validation_attempts)
+                    continue
                 normalized = _classify_transport_error(error)
                 if not normalized.retryable or transport_attempts >= retry.max_attempts:
                     raise normalized from None
@@ -154,6 +219,9 @@ class InstructorOpenAIProvider:
             client_kwargs["api_key"] = self._api_key
         if self._base_url is not None:
             client_kwargs["base_url"] = self._base_url
+        if self._default_headers:
+            client_kwargs["default_headers"] = dict(self._default_headers)
+        client_kwargs["max_retries"] = 0
         client = openai.AsyncOpenAI(**client_kwargs)
         patched = instructor.from_openai(client, mode=instructor.Mode.TOOLS_STRICT)
 
@@ -195,6 +263,10 @@ class InstructorOpenAIProvider:
             }
 
         return complete
+
+    @property
+    def _dependency_extra(self) -> Literal["openai", "anthropic"]:
+        return "openai"
 
 
 def _strict_wire_response_model(
@@ -241,6 +313,7 @@ def _usage(metadata: object) -> NormalizedUsage | None:
     input_tokens = value("input_tokens")
     output_tokens = value("output_tokens")
     total_tokens = value("total_tokens") or input_tokens + output_tokens
+    total_tokens = max(total_tokens, input_tokens + output_tokens)
     return NormalizedUsage(
         input_tokens=input_tokens,
         output_tokens=output_tokens,
@@ -259,10 +332,38 @@ def _classify_transport_error(error: Exception) -> ProviderTransportError:
         return ProviderAuthenticationError()
     if status == 429:
         return ProviderRateLimitError()
-    retryable = isinstance(error, TimeoutError | ConnectionError) or (
-        isinstance(status, int) and (status == 408 or status >= 500)
+    retryable = (
+        isinstance(error, TimeoutError | ConnectionError)
+        or _is_sdk_connection_error(error)
+        or (isinstance(status, int) and (status == 408 or status >= 500))
     )
     return ProviderTransportError(retryable=retryable)
+
+
+def _exception_identity(error: BaseException) -> tuple[str, str]:
+    error_type = type(error)
+    return error_type.__module__.split(".", maxsplit=1)[0], error_type.__name__
+
+
+def _is_sdk_connection_error(error: BaseException) -> bool:
+    module, name = _exception_identity(error)
+    return module in {"openai", "anthropic"} and name in {
+        "APIConnectionError",
+        "APITimeoutError",
+    }
+
+
+def _is_provider_validation_error(error: BaseException) -> bool:
+    module, name = _exception_identity(error)
+    return module == "instructor" and name in {
+        "InstructorRetryException",
+        "ValidationError",
+    }
+
+
+def _is_provider_truncation_error(error: BaseException) -> bool:
+    module, name = _exception_identity(error)
+    return module == "instructor" and name == "IncompleteOutputException"
 
 
 async def _retry_delay(retry: RetryConfig, attempt: int) -> None:
@@ -274,4 +375,17 @@ async def _retry_delay(retry: RetryConfig, attempt: int) -> None:
         await asyncio.sleep(delay)
 
 
-__all__ = ["InstructorOpenAIProvider"]
+def _validate_default_headers(headers: Mapping[str, str] | None) -> dict[str, str]:
+    if headers is None:
+        return {}
+    validated: dict[str, str] = {}
+    for name, value in headers.items():
+        if name.casefold() not in _ALLOWED_DEFAULT_HEADERS:
+            raise ValueError("custom provider header is not in the allowlist")
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("custom provider header values must not be empty")
+        validated[name] = value
+    return validated
+
+
+__all__ = ["InstructorOpenAIProvider", "OpenAICompatiblePreset"]

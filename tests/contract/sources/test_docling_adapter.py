@@ -962,6 +962,24 @@ def test_invalid_markdown_table_candidate_remains_text() -> None:
     assert docling_source._markdown_events("| |\n| |") == [("text", "| |\n| |")]
 
 
+def test_markdown_and_html_headings_are_preserved_as_section_provenance(tmp_path: Path) -> None:
+    markdown = tmp_path / "sections.md"
+    markdown.write_text("# Roster\n\nQ1. Age", encoding="utf-8")
+    markdown_document = MarkdownAdapter().convert(
+        resolve_local_source(markdown),
+        limits=DEFAULT_SOURCE_LIMITS,
+    )
+    assert markdown_document.blocks[-1].provenance.section_path == ("Roster",)
+
+    html = tmp_path / "sections.html"
+    html.write_text("<h2>Employment</h2><p>Q2. Work</p>", encoding="utf-8")
+    html_document = HtmlAdapter().convert(
+        resolve_local_source(html),
+        limits=DEFAULT_SOURCE_LIMITS,
+    )
+    assert html_document.blocks[-1].provenance.section_path == ("Employment",)
+
+
 def test_pdf_worker_terminates_lingering_process_and_handles_interrupts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
