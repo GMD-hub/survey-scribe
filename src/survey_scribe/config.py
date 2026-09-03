@@ -61,6 +61,33 @@ class RetryConfig(BaseModel):
         return self
 
 
+class RoutingConfig(BaseModel):
+    """Provider-neutral routing limits and thresholds."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
+
+    max_source_quote_chars: int = Field(default=2_000, ge=1, le=2_000, strict=True)
+    max_request_tokens: int = Field(default=32_000, ge=1, le=32_000, strict=True)
+    max_inventory_items_per_call: int = Field(default=250, ge=1, le=250, strict=True)
+    max_candidate_targets_per_reference: int = Field(default=10, ge=1, le=10, strict=True)
+    max_discrepancies_per_review_call: int = Field(default=25, ge=1, le=25, strict=True)
+    max_source_spans_per_decision: int = Field(default=8, ge=1, le=8, strict=True)
+    max_condition_depth: int = Field(default=6, ge=1, le=6, strict=True)
+    max_condition_nodes: int = Field(default=100, ge=1, le=100, strict=True)
+    low_confidence_threshold: float = Field(
+        default=0.70,
+        ge=0.0,
+        le=1.0,
+        strict=True,
+        allow_inf_nan=False,
+    )
+    unusual_in_degree_threshold: int = Field(default=4, ge=1, strict=True)
+    unusual_out_degree_threshold: int = Field(default=3, ge=1, strict=True)
+    max_concurrency: int = Field(default=4, ge=1, le=128, strict=True)
+    generation: GenerationConfig = Field(default_factory=GenerationConfig)
+    retry: RetryConfig = Field(default_factory=RetryConfig)
+
+
 class ArtifactConfig(BaseModel):
     """Default artifact publication settings."""
 
@@ -94,6 +121,7 @@ class SurveyScribeConfig(BaseModel):
     confidence_threshold: float = Field(
         default=0.7, ge=0.0, le=1.0, strict=True, allow_inf_nan=False
     )
+    routing: RoutingConfig = Field(default_factory=RoutingConfig)
     artifacts: ArtifactConfig = Field(default_factory=ArtifactConfig)
 
     def __init__(self, **data: Any) -> None:
@@ -304,6 +332,11 @@ class SurveyScribeConfig(BaseModel):
 
     @classmethod
     def _validate_resolved(cls, values: Mapping[str, object]) -> Self:
+        credential_names = ("api_key", "bearer_token", "token_callback")
+        if sum(values.get(name) is not None for name in credential_names) > 1:
+            raise AmbiguousCredentialError(
+                "Configure exactly one credential form: api key, bearer token, or token callback"
+            )
         try:
             return cls.model_validate(values)
         except AmbiguousCredentialError:

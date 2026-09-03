@@ -2,15 +2,20 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
+import tempfile
+import time
 import zipfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from math import isfinite
 from pathlib import Path, PurePosixPath
 from typing import Literal, Protocol, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 LocalSource: TypeAlias = str | os.PathLike[str]
 
@@ -23,6 +28,12 @@ class SourceLimits:
     max_pages: int = 2_000
     max_archive_expanded_bytes: int = 1024 * 1024 * 1024
     max_archive_ratio: float = 100.0
+    max_archive_entries: int = 10_000
+    max_archive_filename_chars: int = 512
+    max_archive_path_depth: int = 20
+    max_xml_part_bytes: int = 64 * 1024 * 1024
+    max_xml_elements: int = 2_000_000
+    max_xml_depth: int = 256
     max_cells: int = 2_000_000
     max_companions: int = 100
     deadline_seconds: float = 30 * 60.0
@@ -32,6 +43,12 @@ class SourceLimits:
             "max_source_bytes",
             "max_pages",
             "max_archive_expanded_bytes",
+            "max_archive_entries",
+            "max_archive_filename_chars",
+            "max_archive_path_depth",
+            "max_xml_part_bytes",
+            "max_xml_elements",
+            "max_xml_depth",
             "max_cells",
             "max_companions",
         ):
@@ -75,6 +92,8 @@ class ResolvedSource:
     root: Path
     primary: Path
     companions: tuple[Path, ...] = ()
+    primary_sha256: str | None = None
+    companion_sha256: tuple[str, ...] = ()
 
 
 class SourceProvenance(BaseModel):
@@ -84,12 +103,34 @@ class SourceProvenance(BaseModel):
 
     source_name: str
     page: int | None = Field(default=None, ge=1)
+    pages: tuple[int, ...] = ()
     sheet: str | None = None
     row_start: int | None = Field(default=None, ge=1)
     row_end: int | None = Field(default=None, ge=1)
 
+    @field_validator("page", "pages", mode="before")
+    @classmethod
+    def reject_boolean_pages(cls, value: object) -> object:
+        """Reject Boolean page values before Pydantic converts them to integers."""
+        values = value if isinstance(value, tuple | list) else (value,)
+        if any(isinstance(item, bool) for item in values):
+            raise ValueError("provenance pages must be positive integers")
+        return value
+
     @model_validator(mode="after")
     def validate_row_range(self) -> SourceProvenance:
+        pages = self.pages
+        if self.page is not None and not pages:
+            pages = (self.page,)
+            object.__setattr__(self, "pages", pages)
+        elif self.page is None and pages:
+            object.__setattr__(self, "page", pages[0])
+        if any(isinstance(page, bool) or page < 1 for page in pages):
+            raise ValueError("provenance pages must be positive integers")
+        if tuple(sorted(set(pages))) != pages:
+            raise ValueError("provenance pages must be unique and ordered")
+        if pages and self.page != pages[0]:
+            raise ValueError("page must be the first provenance page")
         if (self.row_start is None) != (self.row_end is None):
             raise ValueError("row_start and row_end must be provided together")
         if (
@@ -130,6 +171,65 @@ class SourceBlock(BaseModel):
         return self
 
 
+class SourceCoverage(BaseModel):
+    """Complete immutable accounting for physical source conversion units."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    unit: Literal["document", "page", "sheet"] = "document"
+    total_units: int = Field(default=1, ge=1)
+    converted_units: tuple[int, ...] = (1,)
+    failed_units: tuple[int, ...] = ()
+
+    @field_validator("total_units", "converted_units", "failed_units", mode="before")
+    @classmethod
+    def reject_boolean_units(cls, value: object) -> object:
+        """Reject Boolean unit values before Pydantic converts them to integers."""
+        values = value if isinstance(value, tuple | list) else (value,)
+        if any(isinstance(item, bool) for item in values):
+            raise ValueError("coverage units must be positive integers")
+        return value
+
+    @model_validator(mode="after")
+    def validate_complete_accounting(self) -> SourceCoverage:
+        converted = self.converted_units
+        failed = self.failed_units
+        for label, units in (("converted", converted), ("failed", failed)):
+            if any(isinstance(unit, bool) or unit < 1 for unit in units):
+                raise ValueError(f"{label} units must be positive integers")
+            if tuple(sorted(set(units))) != units:
+                raise ValueError(f"{label} units must be unique and ordered")
+        if set(converted).intersection(failed):
+            raise ValueError("converted and failed units must not overlap")
+        expected = set(range(1, self.total_units + 1))
+        if set(converted).union(failed) != expected:
+            raise ValueError("coverage must account for every source unit exactly once")
+        return self
+
+    @property
+    def complete(self) -> bool:
+        """Return whether every physical unit converted successfully."""
+        return not self.failed_units
+
+
+class SourceDiagnostic(BaseModel):
+    """Stable immutable diagnostic for one source or physical source unit."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    code: str
+    message: str
+    severity: Literal["warning", "error"] = "error"
+    unit: Literal["document", "page", "sheet"] | None = None
+    unit_index: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def validate_unit_reference(self) -> SourceDiagnostic:
+        if (self.unit is None) != (self.unit_index is None):
+            raise ValueError("diagnostic unit and unit_index must be provided together")
+        return self
+
+
 class SourceDocument(BaseModel):
     """Deterministic normalized content; all source text remains untrusted data."""
 
@@ -138,6 +238,9 @@ class SourceDocument(BaseModel):
     source_name: str
     media_type: str
     blocks: tuple[SourceBlock, ...]
+    coverage: SourceCoverage = SourceCoverage()
+    diagnostics: tuple[SourceDiagnostic, ...] = ()
+    snapshot_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     trust: Literal["untrusted"] = "untrusted"
 
     @model_validator(mode="after")
@@ -151,6 +254,13 @@ class SourceDocument(BaseModel):
         tables = tuple(block.table for block in self.blocks if block.table is not None)
         if len({table.id for table in tables}) != len(tables):
             raise ValueError("source table identifiers must be unique")
+        failed_diagnostics = {
+            diagnostic.unit_index
+            for diagnostic in self.diagnostics
+            if diagnostic.severity == "error" and diagnostic.unit == self.coverage.unit
+        }
+        if any(unit not in failed_diagnostics for unit in self.coverage.failed_units):
+            raise ValueError("every failed source unit must have an error diagnostic")
         for block in self.blocks:
             if block.provenance.source_name != self.source_name:
                 raise ValueError("block provenance must match the document source")
@@ -171,15 +281,6 @@ class SourceDocument(BaseModel):
     def tables(self) -> tuple[SourceTable, ...]:
         """Return complete tables in stable source order."""
         return tuple(block.table for block in self.blocks if block.table is not None)
-
-
-class SourceDiagnostic(BaseModel):
-    """Stable source diagnostic attached to a typed conversion error."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    code: str
-    message: str
 
 
 class SourceError(Exception):
@@ -294,17 +395,66 @@ def resolve_local_source(
     return ResolvedSource(root=root, primary=primary, companions=companions)
 
 
-def inspect_zip_archive(path: Path, limits: SourceLimits) -> tuple[zipfile.ZipInfo, ...]:
+@contextmanager
+def snapshot_resolved_source(
+    source: ResolvedSource,
+    *,
+    limits: SourceLimits = DEFAULT_SOURCE_LIMITS,
+) -> Iterator[ResolvedSource]:
+    """Yield a bounded private copy whose digest matches converted bytes."""
+    with tempfile.TemporaryDirectory(prefix="survey-scribe-source-") as directory:
+        snapshot_root = Path(directory)
+        primary_relative = _snapshot_relative_path(source, source.primary)
+        primary, primary_sha256 = _snapshot_file(
+            source.primary,
+            snapshot_root / primary_relative,
+            limits,
+        )
+        companions: list[Path] = []
+        companion_sha256: list[str] = []
+        for companion in source.companions:
+            relative = _snapshot_relative_path(source, companion)
+            snapshot, digest = _snapshot_file(companion, snapshot_root / relative, limits)
+            companions.append(snapshot)
+            companion_sha256.append(digest)
+        yield ResolvedSource(
+            root=snapshot_root,
+            primary=primary,
+            companions=tuple(companions),
+            primary_sha256=primary_sha256,
+            companion_sha256=tuple(companion_sha256),
+        )
+
+
+def inspect_zip_archive(
+    path: Path,
+    limits: SourceLimits,
+    *,
+    deadline: float | None = None,
+) -> tuple[zipfile.ZipInfo, ...]:
     """Inspect ZIP metadata without extraction and enforce archive ceilings."""
+    entry_count = _zip_entry_count(path)
+    if entry_count > limits.max_archive_entries:
+        raise SourceLimitError(
+            "max_archive_entries",
+            "Archive exceeds the configured entry-count limit",
+        )
     try:
         with zipfile.ZipFile(path) as archive:
-            entries = tuple(archive.infolist())
+            entries = archive.infolist()
     except (OSError, zipfile.BadZipFile, zipfile.LargeZipFile) as error:
         raise SourceFormatError("Source is not a valid ZIP-based document") from error
 
+    if len(entries) != entry_count or len(entries) > limits.max_archive_entries:
+        raise SourceLimitError(
+            "max_archive_entries",
+            "Archive exceeds the configured entry-count limit",
+        )
     expanded = 0
     for entry in entries:
-        _validate_archive_name(entry.filename)
+        if deadline is not None and time.monotonic() >= deadline:
+            raise SourceTimeoutError("Source conversion exceeded the configured deadline")
+        _validate_archive_name(entry.filename, limits)
         if entry.flag_bits & 0x1:
             raise SourceSecurityError("Encrypted archive entries are not supported")
         expanded += entry.file_size
@@ -319,7 +469,28 @@ def inspect_zip_archive(path: Path, limits: SourceLimits) -> tuple[zipfile.ZipIn
             "max_archive_ratio",
             "Archive exceeds the configured expansion-ratio limit",
         )
-    return entries
+    return tuple(entries)
+
+
+def _zip_entry_count(path: Path) -> int:
+    """Read the bounded EOCD record before ZipFile loads the central directory."""
+    try:
+        size = path.stat().st_size
+        with path.open("rb") as stream:
+            stream.seek(max(0, size - (65_535 + 22)))
+            trailer = stream.read(65_535 + 22)
+    except OSError as error:
+        raise SourceFormatError("Source is not a valid ZIP-based document") from error
+    offset = trailer.rfind(b"PK\x05\x06")
+    if offset < 0 or offset + 22 > len(trailer):
+        raise SourceFormatError("Source is not a valid ZIP-based document")
+    entry_count = int.from_bytes(trailer[offset + 10 : offset + 12], "little")
+    if entry_count == 0xFFFF:
+        raise SourceLimitError(
+            "max_archive_entries",
+            "ZIP64 archive entry count exceeds the configured limit",
+        )
+    return entry_count
 
 
 def read_utf8_text(path: Path) -> str:
@@ -336,8 +507,12 @@ def read_utf8_text(path: Path) -> str:
 
 
 def render_table(rows: tuple[tuple[str, ...], ...]) -> str:
-    """Render table cells deterministically without interpreting their contents."""
-    return "\n".join(" | ".join(row) for row in rows)
+    """Render a readable escaped view while typed rows remain authoritative."""
+    return "\n".join(" | ".join(_escape_table_cell(cell) for cell in row) for row in rows)
+
+
+def _escape_table_cell(cell: str) -> str:
+    return cell.replace("\\", "\\\\").replace("\r", "\\r").replace("\n", "\\n").replace("|", "\\|")
 
 
 def _resolve_bundle_member(root: Path, value: LocalSource, *, label: str) -> Path:
@@ -394,8 +569,55 @@ def _check_file_size(path: Path, limits: SourceLimits) -> None:
         )
 
 
-def _validate_archive_name(name: str) -> None:
+def _snapshot_relative_path(source: ResolvedSource, path: Path) -> Path:
+    try:
+        return path.relative_to(source.root)
+    except ValueError:
+        return Path(path.name)
+
+
+def _snapshot_file(source: Path, target: Path, limits: SourceLimits) -> tuple[Path, str]:
+    digest = hashlib.sha256()
+    total = 0
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with source.open("rb") as input_stream, target.open("xb") as output_stream:
+            initial = os.fstat(input_stream.fileno())
+            while chunk := input_stream.read(1024 * 1024):
+                total += len(chunk)
+                if total > limits.max_source_bytes:
+                    raise SourceLimitError(
+                        "max_source_bytes",
+                        f"Source exceeds the {limits.max_source_bytes}-byte limit",
+                    )
+                digest.update(chunk)
+                output_stream.write(chunk)
+            final = os.fstat(input_stream.fileno())
+        if (
+            initial.st_size != final.st_size
+            or initial.st_mtime_ns != final.st_mtime_ns
+            or final.st_size != total
+        ):
+            raise SourceInputError("Source changed while its private snapshot was created")
+    except SourceError:
+        raise
+    except OSError as error:
+        raise SourceInputError("Source could not be copied to a private snapshot") from error
+    return target, digest.hexdigest()
+
+
+def _validate_archive_name(name: str, limits: SourceLimits) -> None:
     normalized = name.replace("\\", "/")
     path = PurePosixPath(normalized)
     if normalized.startswith("/") or re.match(r"^[a-zA-Z]:", normalized) or ".." in path.parts:
         raise SourceSecurityError("Archive contains a path traversal entry")
+    if len(normalized) > limits.max_archive_filename_chars:
+        raise SourceLimitError(
+            "max_archive_filename_chars",
+            "Archive entry name exceeds the configured length limit",
+        )
+    if len(path.parts) > limits.max_archive_path_depth:
+        raise SourceLimitError(
+            "max_archive_path_depth",
+            "Archive entry path exceeds the configured depth limit",
+        )

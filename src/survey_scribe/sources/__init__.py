@@ -8,6 +8,7 @@ from survey_scribe.sources.base import (
     SourceBlock,
     SourceBundle,
     SourceConversionError,
+    SourceCoverage,
     SourceDependencyError,
     SourceDiagnostic,
     SourceDocument,
@@ -21,6 +22,7 @@ from survey_scribe.sources.base import (
     SourceTable,
     SourceTimeoutError,
     resolve_local_source,
+    snapshot_resolved_source,
 )
 from survey_scribe.sources.registry import SourceRegistry
 
@@ -32,6 +34,7 @@ __all__ = [
     "SourceBlock",
     "SourceBundle",
     "SourceConversionError",
+    "SourceCoverage",
     "SourceDependencyError",
     "SourceDiagnostic",
     "SourceDocument",
@@ -46,4 +49,5 @@ __all__ = [
     "SourceTable",
     "SourceTimeoutError",
     "resolve_local_source",
+    "snapshot_resolved_source",
 ]

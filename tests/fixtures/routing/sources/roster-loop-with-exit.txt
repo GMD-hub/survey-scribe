@@ -1,0 +1,13 @@
+SYNTHETIC QUESTIONNAIRE SOURCE: ROSTER LOOP WITH EXIT
+SECTION Household roster
+Repeat instruction: Ask R1 through R3 once for each household member.
+Repeat entry: R1.
+ITEM R1
+Question: What is this member's name?
+ITEM R2
+Question: What is this member's relationship to the household head?
+ITEM R3
+Question: What is this member's age?
+Repeat routing: If another member remains, return to R1 for the next member. Otherwise exit the repeat and go to H1.
+ITEM H1
+Question: How many rooms does the household occupy?

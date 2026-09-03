@@ -1,0 +1,14 @@
+SYNTHETIC QUESTIONNAIRE SOURCE: SECTION TARGET
+SECTION Screening
+ITEM S1
+Question: Did the household receive employment income?
+Responses: 1 Yes; 2 No.
+Routing instruction: If response is 1, go to SECTION Employment details. If response is 2, end this module.
+SECTION Employment details
+Section entry: E1.
+ITEM E1
+Question: How many earners live in the household?
+ITEM E2
+Question: What was their combined income?
+ITEM E3
+Question: Was any income paid in kind?

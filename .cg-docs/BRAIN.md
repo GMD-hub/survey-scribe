@@ -1,6 +1,6 @@
 # 🧠 Project Brain
 
-_Generated 2026-08-28 · 12 entities · 1 topics · 6 edges_
+_Generated 2026-09-02 · 20 entities · 4 topics · 10 edges_
 
 ## How to Use
 
@@ -13,25 +13,28 @@ _Generated 2026-08-28 · 12 entities · 1 topics · 6 edges_
 
 | # | Topic | Entities | File |
 |---|-------|----------|------|
-| 1 | [Future Product Extensions Objective / Scribe / Survey](BRAIN-01.md#future-product-extensions-objective-scribe-survey) | 4 | BRAIN-01.md |
+| 1 | [Future Product Extensions Objective / Production Package Completion Objective / Survey Scribe](BRAIN-01.md#future-product-extensions-objective-production-package-completion-objective-survey-scribe) | 5 | BRAIN-01.md |
+| 2 | [Survey_Scribe / Src / Sources](BRAIN-01.md#survey-scribe-src-sources) | 5 | BRAIN-01.md |
+| 3 | [Evidence / Routing / Root](BRAIN-01.md#evidence-routing-root) | 3 | BRAIN-01.md |
+| 4 | [Test Scenarios / Contract / Itsai](BRAIN-01.md#test-scenarios-contract-itsai) | 3 | BRAIN-01.md |
 
 ## Entity Summary
 
 | Type | Count |
 |------|-------|
-| brainstorm | 1 |
-| feature | 4 |
-| plan | 2 |
-| review | 3 |
-| solution | 2 |
+| brainstorm | 2 |
+| feature | 5 |
+| plan | 3 |
+| review | 6 |
+| solution | 4 |
 
-_8 entities not assigned to any topic_
+_4 entities not assigned to any topic_
 
 ## Relationship Summary
 
 | Edge Type | Count |
 |-----------|-------|
 | implements | 2 |
-| references | 1 |
-| reviews | 2 |
-| verifies | 1 |
+| references | 2 |
+| reviews | 3 |
+| verifies | 3 |

@@ -5,10 +5,13 @@ from __future__ import annotations
 import hashlib
 import os
 import sys
-from collections.abc import Mapping, Sequence
+import tempfile
+import zipfile
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, TextIO
+from typing import Literal, Protocol, TextIO
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,6 +46,114 @@ class OcrArtifactValidation:
     artifact: OcrArtifact
     status: OcrValidationStatus
     checksum_checked: bool
+
+
+class OcrCacheError(ValueError):
+    """Configured OCR files do not match the approved runtime artifacts."""
+
+
+class _ReadableBinary(Protocol):
+    def read(self, size: int = -1, /) -> bytes: ...
+
+
+def resolve_ocr_cache(
+    cache: Path,
+    *,
+    manifest: Sequence[OcrArtifact] = APPROVED_OCR_ARTIFACTS,
+) -> Path:
+    """Return one confined cache only when archives and consumed models match."""
+    try:
+        cache_root = cache.resolve(strict=True)
+    except OSError as error:
+        raise OcrCacheError("Configured OCR cache directory does not exist") from error
+    if cache.is_symlink() or not cache_root.is_dir():
+        raise OcrCacheError("Configured OCR cache directory is unsafe")
+
+    for artifact in manifest:
+        archive = cache_root / artifact.filename
+        model_name = f"{Path(artifact.filename).stem}.pth"
+        model = cache_root / model_name
+        if archive.is_symlink() or model.is_symlink():
+            raise OcrCacheError("Configured OCR cache contains unsafe artifact paths")
+        try:
+            with archive.open("rb") as archive_stream:
+                archive_details = os.fstat(archive_stream.fileno())
+                if archive_details.st_size != artifact.size:
+                    raise OcrCacheError("Configured OCR archive size does not match")
+                archive_digest = _sha256_stream(archive_stream)
+                if archive_digest != artifact.sha256:
+                    raise OcrCacheError("Configured OCR archive digest does not match")
+                archive_stream.seek(0)
+                with zipfile.ZipFile(archive_stream) as bundle:
+                    members = tuple(
+                        item
+                        for item in bundle.infolist()
+                        if not item.is_dir() and Path(item.filename).name == model_name
+                    )
+                    if len(members) != 1:
+                        raise OcrCacheError("Approved OCR archive model member is invalid")
+                    member = members[0]
+                    with bundle.open(member) as model_stream:
+                        approved_model_digest = _sha256_stream(model_stream)
+            resolved_model = model.resolve(strict=True)
+            if not resolved_model.is_relative_to(cache_root) or not resolved_model.is_file():
+                raise OcrCacheError("Configured OCR model path is unsafe")
+            with resolved_model.open("rb") as model_stream:
+                model_details = os.fstat(model_stream.fileno())
+                if model_details.st_size != member.file_size:
+                    raise OcrCacheError("Configured OCR model size does not match")
+                if _sha256_stream(model_stream) != approved_model_digest:
+                    raise OcrCacheError("Configured OCR model digest does not match")
+        except OcrCacheError:
+            raise
+        except (OSError, KeyError, zipfile.BadZipFile, RuntimeError) as error:
+            raise OcrCacheError("Configured OCR cache could not be validated") from error
+    return cache_root
+
+
+@contextmanager
+def validated_ocr_model_snapshot(
+    cache: Path,
+    *,
+    manifest: Sequence[OcrArtifact] = APPROVED_OCR_ARTIFACTS,
+) -> Iterator[Path]:
+    """Yield private model files extracted from revalidated approved archives."""
+    cache_root = resolve_ocr_cache(cache, manifest=manifest)
+    with tempfile.TemporaryDirectory(prefix="survey-scribe-ocr-") as directory:
+        snapshot = Path(directory)
+        for artifact in manifest:
+            model_name, model_payload = _approved_model_payload(cache_root, artifact)
+            target = snapshot / model_name
+            target.write_bytes(model_payload)
+        yield snapshot
+
+
+def _approved_model_payload(cache_root: Path, artifact: OcrArtifact) -> tuple[str, bytes]:
+    archive = cache_root / artifact.filename
+    model_name = f"{Path(artifact.filename).stem}.pth"
+    try:
+        with archive.open("rb") as archive_stream:
+            details = os.fstat(archive_stream.fileno())
+            if (
+                details.st_size != artifact.size
+                or _sha256_stream(archive_stream) != artifact.sha256
+            ):
+                raise OcrCacheError("Configured OCR archive changed after validation")
+            archive_stream.seek(0)
+            with zipfile.ZipFile(archive_stream) as bundle:
+                members = tuple(
+                    item
+                    for item in bundle.infolist()
+                    if not item.is_dir() and Path(item.filename).name == model_name
+                )
+                if len(members) != 1:
+                    raise OcrCacheError("Approved OCR archive model member is invalid")
+                with bundle.open(members[0]) as model_stream:
+                    return model_name, model_stream.read()
+    except OcrCacheError:
+        raise
+    except (OSError, zipfile.BadZipFile, RuntimeError) as error:
+        raise OcrCacheError("Configured OCR cache could not be snapshotted") from error
 
 
 def validate_ocr_cache(
@@ -147,4 +258,11 @@ def _sha256(path: Path) -> str:
     with path.open("rb") as stream:
         while chunk := stream.read(1024 * 1024):
             digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _sha256_stream(stream: _ReadableBinary) -> str:
+    digest = hashlib.sha256()
+    while chunk := stream.read(1024 * 1024):
+        digest.update(chunk)
     return digest.hexdigest()

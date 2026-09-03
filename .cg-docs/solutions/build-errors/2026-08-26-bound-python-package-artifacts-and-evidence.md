@@ -92,3 +92,5 @@ counts, empty provenance, and threshold weakening.
 - `tests/package/test_clean_install.py`
 - `tests/package/test_distribution_contents.py`
 - `scripts/validate_golden_manifest.py`
+- `.cg-docs/solutions/testing-patterns/2026-09-01-verify-cross-layer-invariants-beyond-coverage.md`
+- `.cg-docs/solutions/testing-patterns/2026-09-02-bind-routing-quality-evidence.md`

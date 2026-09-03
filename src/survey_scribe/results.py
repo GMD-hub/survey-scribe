@@ -2,16 +2,29 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from copy import deepcopy
 from enum import StrEnum
+from math import isfinite
 from os import PathLike
 from pathlib import Path
-from typing import Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Annotated, Any, Generic, Literal, TypeVar
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictStr,
+    computed_field,
+    field_validator,
+    model_validator,
+)
 
 T = TypeVar("T")
+
+if TYPE_CHECKING:
+    from survey_scribe.serialization.artifacts import ArtifactSerializer
 
 
 class ResultStatus(StrEnum):
@@ -47,6 +60,43 @@ class DiagnosticCode(StrEnum):
     block_failed = "BLOCK_FAILED"
 
 
+class _FrozenJsonDict(dict[str, Any]):
+    """JSON-serializable mapping that rejects mutation after construction."""
+
+    @staticmethod
+    def _immutable(*_args: object, **_kwargs: object) -> None:
+        raise TypeError("diagnostic details are immutable")
+
+    __setitem__ = _immutable  # type: ignore[assignment]
+    __delitem__ = _immutable  # type: ignore[assignment]
+    __ior__ = _immutable  # type: ignore[assignment]
+    clear = _immutable  # type: ignore[assignment]
+    pop = _immutable  # type: ignore[assignment]
+    popitem = _immutable  # type: ignore[assignment]
+    setdefault = _immutable  # type: ignore[assignment]
+    update = _immutable  # type: ignore[assignment]
+
+
+def _freeze_json_mapping(value: Mapping[str, Any]) -> dict[str, Any]:
+    if any(not isinstance(key, str) for key in value):
+        raise ValueError("diagnostic detail keys must be strings")
+    return _FrozenJsonDict({key: _freeze_json_value(item) for key, item in value.items()})
+
+
+def _freeze_json_value(value: Any) -> Any:
+    if value is None or isinstance(value, str | bool | int):
+        return value
+    if isinstance(value, float):
+        if not isfinite(value):
+            raise ValueError("diagnostic detail numbers must be finite")
+        return value
+    if isinstance(value, Mapping):
+        return _freeze_json_mapping(value)
+    if isinstance(value, list | tuple):
+        return tuple(_freeze_json_value(item) for item in value)
+    raise ValueError("diagnostic details must contain only JSON-compatible values")
+
+
 class Diagnostic(BaseModel):
     """One stable diagnostic without raw provider response data."""
 
@@ -55,7 +105,13 @@ class Diagnostic(BaseModel):
     code: DiagnosticCode | str
     message: str
     severity: DiagnosticSeverity = DiagnosticSeverity.warning
-    details: dict[str, Any] = Field(default_factory=dict)
+    details: dict[StrictStr, Any] = Field(default_factory=dict)
+
+    @field_validator("details", mode="after")
+    @classmethod
+    def freeze_json_details(cls, value: dict[str, Any]) -> dict[str, Any]:
+        """Detach and recursively freeze finite JSON-compatible details."""
+        return _freeze_json_mapping(value)
 
 
 class FailedBlock(BaseModel):
@@ -75,6 +131,7 @@ class ArtifactKind(StrEnum):
     sidecar = "sidecar"
     manifest = "manifest"
     legacy = "legacy"
+    projection = "projection"
     active_pointer = "active_pointer"
 
 
@@ -89,6 +146,53 @@ class ArtifactReference(BaseModel):
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
+Sha256 = Annotated[StrictStr, Field(pattern=r"^[0-9a-f]{64}$")]
+SemanticVersion = Annotated[
+    StrictStr,
+    Field(
+        pattern=(
+            r"^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
+            r"(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
+            r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
+        )
+    ),
+]
+
+
+class PromptArtifactProvenance(BaseModel):
+    """One routing prompt identity without prompt or questionnaire content."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
+
+    pass_kind: Literal["forward", "incoming_activation", "reviewer"]
+    version: SemanticVersion
+    prompt_sha256: Sha256
+
+
+class ArtifactProvenance(BaseModel):
+    """Digest-only provenance supplied to an artifact serializer."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
+
+    source_sha256: tuple[Sha256, ...]
+    model_response_sha256: tuple[Sha256, ...]
+    prompt_versions: tuple[PromptArtifactProvenance, ...]
+
+    @model_validator(mode="after")
+    def require_stable_unique_records(self) -> ArtifactProvenance:
+        """Reject duplicate digests and duplicate prompt identities."""
+        if len(set(self.source_sha256)) != len(self.source_sha256):
+            raise ValueError("source digests must be unique")
+        if len(set(self.model_response_sha256)) != len(self.model_response_sha256):
+            raise ValueError("model response digests must be unique")
+        prompt_keys = tuple(
+            (item.pass_kind, item.version, item.prompt_sha256) for item in self.prompt_versions
+        )
+        if len(set(prompt_keys)) != len(prompt_keys):
+            raise ValueError("prompt provenance records must be unique")
+        return self
+
+
 class ExtractionResult(BaseModel, Generic[T]):
     """Frozen result envelope; caller-owned output ``T`` can remain mutable."""
 
@@ -100,6 +204,11 @@ class ExtractionResult(BaseModel, Generic[T]):
     diagnostics: tuple[Diagnostic, ...] = ()
     failed_blocks: tuple[FailedBlock, ...] = ()
     artifacts: tuple[ArtifactReference, ...] = ()
+    artifact_provenance: ArtifactProvenance | None = Field(
+        default=None,
+        exclude=True,
+        repr=False,
+    )
 
     @model_validator(mode="after")
     def derive_survey_id(self) -> ExtractionResult[T]:
@@ -153,6 +262,7 @@ class ExtractionResult(BaseModel, Generic[T]):
         *,
         sidecar: bool = True,
         overwrite: bool = False,
+        serializer: ArtifactSerializer[T] | None = None,
     ) -> ExtractionResult[T]:
         """Publish one versioned generation and return its artifact references.
 
@@ -161,6 +271,8 @@ class ExtractionResult(BaseModel, Generic[T]):
             sidecar: Whether to include the diagnostic sidecar.
             overwrite: Whether to publish a new generation when stable artifacts
                 already exist.
+            serializer: Optional typed serializer. Exact ``SurveySVIS`` uses the
+                legacy v1 serializer; other output uses generic JSON by default.
 
         Returns:
             A new frozen result containing references and SHA-256 digests for the
@@ -173,9 +285,15 @@ class ExtractionResult(BaseModel, Generic[T]):
                 filesystem publication fails.
 
         Note:
-            Each file replacement is atomic, but publication is not crash-atomic
-            across the legacy projection and active pointer.
+            The process-owned survey lock covers recovery and publication. A
+            durable journal repairs a hard exit before another write proceeds.
         """
         from survey_scribe.serialization.artifacts import write_result
 
-        return write_result(self, Path(output_dir), sidecar=sidecar, overwrite=overwrite)
+        return write_result(
+            self,
+            Path(output_dir),
+            sidecar=sidecar,
+            overwrite=overwrite,
+            serializer=serializer,
+        )

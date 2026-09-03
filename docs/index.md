@@ -6,7 +6,8 @@
 
 Survey Scribe provides the Survey Variable Information Schema (SVIS), safe local
 document normalization, deterministic chunking, secure configuration resolution,
-and versioned artifact output for household-survey workflows.
+versioned artifact output, and source-grounded questionnaire routing for
+household-survey workflows.
 
 [Install Survey Scribe](getting-started/installation.md){ .md-button .md-button--primary }
 [Open the quickstart](getting-started/quickstart.md){ .md-button }
@@ -46,6 +47,15 @@ deterministic precedence.
 
 <div class="feature-card" markdown>
 
+### Questionnaire routing
+
+Represent accepted flow as a directed multigraph with separate source evidence,
+disputed candidates, activation conditions, repeat templates, and review history.
+
+</div>
+
+<div class="feature-card" markdown>
+
 ### Verifiable artifacts
 
 Write immutable generations with main output, sidecar diagnostics, manifests,
@@ -59,16 +69,17 @@ checksums, and an active pointer.
 
 Survey Scribe `0.1.x` is an alpha package. It includes:
 
-- Stable top-level imports for the seven SVIS model types.
-- Typed configuration, result, source, chunking, and serialization modules.
+- Stable legacy SVIS imports plus additive routed models and `QuestionnaireRouter`.
+- Typed configuration, result, source, routing, provider-contract, chunking, and serialization modules.
 - A PEP 561 `py.typed` marker for editors and type checkers.
-- A bootstrap `survey-scribe` command with `--help` and `--version`.
+- A `survey-scribe` command with help, version, and routing-schema export.
 
 !!! important "Extraction boundary"
 
-    The installed package does not yet include an end-to-end provider client or
-    a function that converts a `SourceDocument` into `SurveySVIS`. Source
-    normalization and SVIS modeling are separate supported APIs. The repository's
+    The installed package does not extract a new `SurveySVIS` from a source file.
+    `QuestionnaireRouter` accepts an existing `SurveySVIS` plus an exact source
+    binding and adds routing. Native XLSForm routing can require zero provider
+    calls. Document routing uses an injected `StructuredProvider`. The repository's
     legacy provider pipeline is not part of the wheel.
 
 ## Minimal example
@@ -108,3 +119,4 @@ assert restored == survey
 3. [Configure API keys without persisting them](guides/security.md).
 4. [Normalize local source documents](guides/sources.md).
 5. [Use the complete typed API reference](reference/index.md).
+6. [Interpret and validate routed output](routing.md).

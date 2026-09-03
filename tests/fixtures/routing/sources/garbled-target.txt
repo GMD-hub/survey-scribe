@@ -1,0 +1,8 @@
+SYNTHETIC QUESTIONNAIRE SOURCE: GARBLED TARGET
+SECTION Assets
+ITEM G1
+Question: Does the household own a refrigerator?
+Responses: 1 Yes; 2 No.
+Routing instruction: If response is 2, go to Q?? [target unreadable in synthetic scan].
+ITEM G2
+Question: How many refrigerators does the household own?

@@ -1,0 +1,10 @@
+SYNTHETIC QUESTIONNAIRE SOURCE: CORRECTION RETURN
+SECTION Interview review
+ITEM C1
+Question: What is the respondent's age?
+ITEM C2
+Question: In what year was the respondent born?
+ITEM C3
+Question: Are the reported age and birth year consistent?
+Responses: 1 Yes; 2 No.
+Routing instruction: If response is 2, return to C1 and correct the answers. If response is 1, complete the review.

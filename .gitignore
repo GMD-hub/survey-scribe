@@ -69,3 +69,4 @@ book/.quarto/
 .kilo/kilo.json
 .kilo/shared
 .kilo/skills
+tmp/

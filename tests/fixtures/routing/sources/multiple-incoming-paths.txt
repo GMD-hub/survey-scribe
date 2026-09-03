@@ -1,0 +1,14 @@
+SYNTHETIC QUESTIONNAIRE SOURCE: MULTIPLE INCOMING PATHS
+SECTION Education
+ITEM M1
+Question: Are you currently attending school?
+Responses: 1 Yes; 2 No.
+Routing instruction: Code 1 goes to M2. Code 2 goes to M3.
+ITEM M2
+Question: What grade are you attending?
+Routing instruction: Go to M4.
+ITEM M3
+Question: What was the highest grade completed?
+Routing instruction: Go to M4.
+ITEM M4
+Question: Can you read a short sentence?

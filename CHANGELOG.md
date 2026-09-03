@@ -11,6 +11,10 @@ project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - PyPI-ready project metadata and MIT license declaration.
 - MkDocs documentation with installation, usage, examples, and API reference.
 - Coverage enforcement and release-artifact validation in CI.
+- Additive routed SVIS models, deterministic directed-multigraph validation,
+  source-grounded evidence, and append-only discrepancy review.
+- `QuestionnaireRouter` with native XLSForm routing and structured-provider integration.
+- Deterministic routing-quality evaluation, routing-schema export, and routing documentation.
 
 ### Changed
 

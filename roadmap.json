@@ -38,6 +38,12 @@
           "title": "Complete Survey Scribe production package",
           "status": "active",
           "plan": ".cg-docs/plans/2026-08-28-survey-scribe-production-package-refined.md"
+        },
+        {
+          "id": "questionnaire-routing-graph-for-llm-readable-svis",
+          "title": "Questionnaire Routing Graph for LLM-Readable SVIS",
+          "status": "done",
+          "plan": ".cg-docs/plans/2026-08-31-questionnaire-routing-graph.md"
         }
       ]
     }

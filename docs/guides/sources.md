@@ -10,7 +10,7 @@ provenance without calling a model provider.
 | --- | --- | --- |
 | `.pdf` | Docling PDF conversion with local OCR artifacts | `pdf` |
 | `.docx` | Inert DOCX XML parsing | Base |
-| `.xlsx` | Read-only workbook parsing | `tabular` |
+| `.xlsx` | Read-only workbook parsing plus optional XLSForm native routing | `tabular` |
 | `.csv` | UTF-8 CSV parsing | Base |
 | `.html`, `.htm` | Visible text and table extraction | Base |
 | `.md`, `.markdown` | Markdown paragraphs and tables | Base |
@@ -34,6 +34,27 @@ assert tuple(block.order for block in document.blocks) == tuple(
 
 The registry verifies PDF, DOCX, and XLSX signatures against their suffixes.
 Unsupported, missing, remote, and malformed sources raise typed source errors.
+
+## Exact source binding and native routing
+
+Routing uses the additive `convert_with_native()` method. Existing `convert()`
+behavior is unchanged.
+
+```python
+conversion = registry.convert_with_native(
+    Path("questionnaire.xlsx"),
+    survey,
+)
+
+binding = conversion.source_binding
+native = conversion.native
+```
+
+The binding covers the validated primary snapshot and confined companions.
+`QuestionnaireRouter` requires this exact binding and fails before a provider
+call if the source name, format, digest, survey ID, or binding version differs.
+An XLSForm `survey` sheet can supply complete typed native routing and therefore
+make zero provider calls.
 
 ## Normalized model
 
@@ -60,6 +81,12 @@ Default `SourceLimits` protect local processing:
 | `max_pages` | 2,000 |
 | `max_archive_expanded_bytes` | 1 GiB |
 | `max_archive_ratio` | 100.0 |
+| `max_archive_entries` | 10,000 |
+| `max_archive_filename_chars` | 512 |
+| `max_archive_path_depth` | 20 |
+| `max_xml_part_bytes` | 64 MiB |
+| `max_xml_elements` | 2,000,000 |
+| `max_xml_depth` | 256 |
 | `max_cells` | 2,000,000 |
 | `max_companions` | 100 |
 | `deadline_seconds` | 1,800 seconds |
@@ -123,12 +150,13 @@ chunk_ids = tuple(chunk.id for chunk in chunked.chunks)
 repeated_rows = chunked.repeated_rows
 ```
 
-The default estimator budgets one token per three characters. You can inject an
-object with `estimate(text: str) -> int` for model-specific estimation.
+The default conservative estimator budgets one token per UTF-8 byte. You can
+inject an object with `estimate(text: str) -> int` for model-specific estimation.
 
-Chunking guarantees source order and keeps each table atomic. A complete table
-or one large text block can therefore exceed `max_tokens`. Overlap contains only
-complete prior text blocks.
+Chunking guarantees source order and a hard final `max_tokens` limit. It splits
+large text deterministically and rejects a table that cannot fit without losing
+cell structure. Overlap contains only complete prior text blocks and is included
+in the hard final budget.
 
 ## PDF and OCR setup
 
@@ -166,8 +194,9 @@ if invalid:
     raise RuntimeError("OCR cache validation failed")
 ```
 
-Cache validation is caller-enforced. The PDF adapter checks that the directory
-exists, but it does not call `validate_ocr_cache()` automatically.
+The PDF adapter validates the approved archives and the exact extracted model
+files before conversion. It rejects a missing, unsafe, or changed cache and
+configures EasyOCR for English-only offline use with downloads disabled.
 
 The PDF worker sets offline flags and blocks common Python socket calls during
 conversion. This is application-level protection, not an operating-system
@@ -178,6 +207,12 @@ sandbox. Use process isolation and network policy for hostile documents.
 The XLSX adapter opens workbooks in read-only mode and rejects formulas, macros,
 external links, malformed cell references, archive expansion violations, and
 excessive worksheet dimensions. It does not calculate workbook formulas.
+
+The XLSForm support matrix is version `1.0`. Groups become containment; repeats
+remain logical templates; reference comparisons, `selected()`, and Boolean
+`and`/`or`/`not` project exactly. Other functions and arithmetic remain typed
+native expressions with an `opaque` canonical projection. Constraints,
+calculations, and choice filters are preserved but are not treated as flow edges.
 
 ## Error handling
 

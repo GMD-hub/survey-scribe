@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from pathlib import Path
@@ -19,7 +20,7 @@ from survey_scribe.errors import (
     redact_text,
 )
 from survey_scribe.models import DataType, SurveySVIS, SurveyVariable
-from survey_scribe.results import Diagnostic, ExtractionResult, ResultStatus
+from survey_scribe.results import Diagnostic, ExtractionResult, FailedBlock, ResultStatus
 from survey_scribe.serialization import artifacts
 
 
@@ -54,7 +55,14 @@ def _result(
 
 
 def _active_pointer(output_dir: Path, survey_id: str = "TST_2024_SYNTH") -> Path:
-    return output_dir / ".survey-scribe" / survey_id / "active.json"
+    matches = list((output_dir / ".survey-scribe" / "surveys").glob("*/active.json"))
+    matching = [
+        path
+        for path in matches
+        if json.loads(path.read_text(encoding="utf-8"))["survey_id"] == survey_id
+    ]
+    assert len(matching) == 1
+    return matching[0]
 
 
 def test_write_creates_valid_generation_projection_and_new_frozen_result(tmp_path: Path) -> None:
@@ -67,9 +75,7 @@ def test_write_creates_valid_generation_projection_and_new_frozen_result(tmp_pat
     assert written.status is ResultStatus.success
     assert written.artifacts
     pointer = json.loads(_active_pointer(tmp_path).read_text(encoding="utf-8"))
-    generation = (
-        tmp_path / ".survey-scribe" / "TST_2024_SYNTH" / "generations" / pointer["generation_id"]
-    )
+    generation = _active_pointer(tmp_path).parent / pointer["path"]
     main_path = generation / "TST_2024_SYNTH_svis.json"
     sidecar_path = generation / "TST_2024_SYNTH_sidecar.json"
     manifest_path = generation / "manifest.json"
@@ -91,7 +97,7 @@ def test_default_collision_and_overwrite_create_a_new_generation(tmp_path: Path)
 
     second = _result(run_id="run-2").write(tmp_path, overwrite=True)
     second_pointer = json.loads(_active_pointer(tmp_path).read_text(encoding="utf-8"))
-    generations = tmp_path / ".survey-scribe" / "TST_2024_SYNTH" / "generations"
+    generations = _active_pointer(tmp_path).parent / "generations"
 
     assert first.artifacts != second.artifacts
     assert first_pointer["generation_id"] != second_pointer["generation_id"]
@@ -142,10 +148,13 @@ def test_write_failure_preserves_prior_active_generation(
         monkeypatch.setattr(artifacts, "_write_generation", fail_generation)
     else:
         original_atomic_write = artifacts._atomic_write_bytes
+        failed = False
 
         def fail_stage(path: Path, content: bytes) -> None:
+            nonlocal failed
             target_stage = "pointer" if path.name == "active.json" else "projection"
-            if target_stage == stage:
+            if target_stage == stage and not failed:
+                failed = True
                 raise OSError(f"{stage} failed with Authorization: Bearer should-not-leak")
             original_atomic_write(path, content)
 
@@ -243,6 +252,64 @@ def test_sidecar_redacts_diagnostics_and_questionnaire_text(tmp_path: Path) -> N
     assert "What is the private answer?" not in rendered
 
 
+def test_legacy_sidecar_uses_fixed_records_for_all_operational_prose(tmp_path: Path) -> None:
+    private_values = (
+        "Private diagnostic code",
+        "Private source label",
+        "Private raw reference",
+        "Private source quote",
+        "Private native expression",
+        "Private adapter error",
+        "Private failed block identifier",
+        "Private failed block message",
+    )
+    result = _result().model_copy(
+        update={
+            "diagnostics": (
+                Diagnostic(
+                    code=private_values[0],
+                    message=private_values[1],
+                    details={
+                        "raw_reference": private_values[2],
+                        "source_quote": private_values[3],
+                        "native_expression": private_values[4],
+                        "adapter_error": private_values[5],
+                    },
+                ),
+            ),
+            "failed_blocks": (
+                FailedBlock(
+                    block_id=private_values[6],
+                    message=private_values[7],
+                    source_order=4,
+                ),
+            ),
+        }
+    )
+
+    written = result.write(tmp_path)
+    sidecar = next(item.path for item in written.artifacts if item.kind == "sidecar")
+    rendered = sidecar.read_text(encoding="utf-8")
+    payload = json.loads(rendered)
+
+    assert all(private not in rendered for private in private_values)
+    assert payload["diagnostics"] == [
+        {
+            "code": "OPERATIONAL_DIAGNOSTIC",
+            "details": {},
+            "message": "Diagnostic content omitted from artifact sidecar.",
+            "severity": "warning",
+        }
+    ]
+    assert payload["failed_blocks"] == [
+        {
+            "block_id": "failed-block-000001",
+            "message": "Source block content omitted from artifact sidecar.",
+            "source_order": 4,
+        }
+    ]
+
+
 def test_failed_result_cannot_write_artifacts(tmp_path: Path) -> None:
     failed = ExtractionResult[SurveySVIS](output=None, survey_id="TST_2024_SYNTH")
 
@@ -250,3 +317,76 @@ def test_failed_result_cannot_write_artifacts(tmp_path: Path) -> None:
         failed.write(tmp_path)
 
     assert list(tmp_path.iterdir()) == []
+
+
+def test_required_directory_sync_failure_aborts_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail_directory_sync(path: Path) -> None:
+        raise OSError(f"directory sync failed for {path.name}")
+
+    monkeypatch.setattr(artifacts, "_fsync_directory", fail_directory_sync)
+
+    with pytest.raises(ArtifactWriteError, match="directory sync failed"):
+        _result().write(tmp_path)
+
+    assert not (tmp_path / "TST_2024_SYNTH_svis.json").exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX directory fsync failure contract")
+def test_projection_directory_sync_failure_rolls_back_prior_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _result(run_id="prior").write(tmp_path)
+    pointer_path = _active_pointer(tmp_path)
+    projection_path = tmp_path / "TST_2024_SYNTH_svis.json"
+    prior_pointer = pointer_path.read_bytes()
+    prior_projection = projection_path.read_bytes()
+    original_sync = artifacts.os.fsync
+    output_identity = os.stat(tmp_path)
+    failed = False
+
+    def fail_first_projection_sync(descriptor: int) -> None:
+        nonlocal failed
+        details = os.fstat(descriptor)
+        if (details.st_dev, details.st_ino) == (
+            output_identity.st_dev,
+            output_identity.st_ino,
+        ) and not failed:
+            failed = True
+            raise OSError("required projection directory sync failed")
+        original_sync(descriptor)
+
+    monkeypatch.setattr(artifacts.os, "fsync", fail_first_projection_sync)
+
+    with pytest.raises(ArtifactWriteError, match="required projection directory sync failed"):
+        _result(run_id="replacement").write(tmp_path, overwrite=True)
+
+    assert failed is True
+    assert pointer_path.read_bytes() == prior_pointer
+    assert projection_path.read_bytes() == prior_projection
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX hostile pathname replacement")
+def test_lock_identity_change_stops_before_public_transaction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    replaced = False
+
+    def replace_lock(stage: str) -> None:
+        nonlocal replaced
+        if stage != "before_generation_commit" or replaced:
+            return
+        lock_path = next((tmp_path / ".survey-scribe" / "aliases").glob("*.lock"))
+        lock_path.unlink()
+        lock_path.write_bytes(b"hostile replacement")
+        replaced = True
+
+    monkeypatch.setattr(artifacts, "_publication_checkpoint", replace_lock)
+
+    with pytest.raises(ArtifactWriteError, match="lock identity changed"):
+        _result().write(tmp_path)
+
+    assert not (tmp_path / "TST_2024_SYNTH_svis.json").exists()
+    assert not list((tmp_path / ".survey-scribe" / "surveys").glob("*/active.json"))

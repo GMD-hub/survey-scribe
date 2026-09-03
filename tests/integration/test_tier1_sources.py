@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import zipfile
 from pathlib import Path
 
@@ -9,9 +10,15 @@ import pytest
 
 from survey_scribe.sources.base import (
     DEFAULT_SOURCE_LIMITS,
+    ResolvedSource,
+    SourceBlock,
+    SourceDocument,
+    SourceLimits,
+    SourceProvenance,
     SourceSecurityError,
     resolve_local_source,
 )
+from survey_scribe.sources.chunking import chunk_document
 from survey_scribe.sources.docling import DoclingPdfAdapter, PdfConversion, PdfConversionBlock
 from survey_scribe.sources.registry import SourceRegistry
 from survey_scribe.sources.tabular import XlsxAdapter
@@ -100,11 +107,16 @@ def test_textual_tier1_formats_are_deterministic(
 
 
 def test_docx_pdf_and_xlsx_integrate_through_normalized_models(tmp_path: Path) -> None:
+    import pypdfium2 as pdfium
+
     docx = tmp_path / "questionnaire.docx"
     pdf = tmp_path / "questionnaire.pdf"
     xlsx = tmp_path / "questionnaire.xlsx"
     _write_docx(docx)
-    pdf.write_bytes(b"%PDF-1.7\n1 0 obj <</Type /Page>> endobj\n%%EOF")
+    pdf_document = pdfium.PdfDocument.new()
+    pdf_document.new_page(612, 792)
+    pdf_document.save(pdf)
+    pdf_document.close()
     _write_xlsx(xlsx)
 
     docx_document = SourceRegistry.default().convert(docx)
@@ -154,3 +166,56 @@ def test_workbook_formula_is_rejected_in_integration_path(tmp_path: Path) -> Non
         XlsxAdapter(workbook_loader=lambda _path, **_kwargs: FormulaWorkbook()).convert(
             resolve_local_source(path), limits=DEFAULT_SOURCE_LIMITS
         )
+
+
+def test_registry_converts_a_private_snapshot_when_source_is_replaced(tmp_path: Path) -> None:
+    path = tmp_path / "questionnaire.txt"
+    original = "Original questionnaire"
+    path.write_text(original, encoding="utf-8")
+    observed_snapshot: list[Path] = []
+
+    class ReplacingAdapter:
+        def convert(self, source: ResolvedSource, *, limits: SourceLimits) -> SourceDocument:
+            del limits
+            observed_snapshot.append(source.primary)
+            path.write_text("Replacement questionnaire", encoding="utf-8")
+            text = source.primary.read_text(encoding="utf-8")
+            provenance = SourceProvenance(source_name=source.primary.name)
+            return SourceDocument(
+                source_name=source.primary.name,
+                media_type="text/plain",
+                blocks=(
+                    SourceBlock(
+                        id="block-000001",
+                        order=0,
+                        kind="text",
+                        text=text,
+                        provenance=provenance,
+                    ),
+                ),
+            )
+
+    document = SourceRegistry({".txt": ReplacingAdapter()}).convert(path)
+
+    assert document.blocks[0].text == original
+    assert document.snapshot_sha256 == hashlib.sha256(original.encode()).hexdigest()
+    assert observed_snapshot[0] != path.resolve()
+    assert observed_snapshot[0].exists() is False
+
+
+def test_csv_cells_with_pipes_and_newlines_remain_typed_through_chunking(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "questionnaire.csv"
+    path.write_text(
+        'code,label\nQ1,"Choice | yes\nor no"\n',
+        encoding="utf-8",
+        newline="",
+    )
+
+    document = SourceRegistry.default().convert(path)
+    chunk = chunk_document(document, max_tokens=100)
+
+    assert document.tables[0].rows[1] == ("Q1", "Choice | yes\nor no")
+    assert chunk.chunks[0].parts[0].table is not None
+    assert chunk.chunks[0].parts[0].table.rows[1] == ("Q1", "Choice | yes\nor no")

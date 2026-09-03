@@ -3,9 +3,9 @@
 Survey Scribe uses Semantic Versioning and treats public serialized SVIS behavior
 as compatibility-sensitive.
 
-## Stable `0.1.x` imports
+## Stable legacy imports
 
-The supported top-level exports are:
+The legacy top-level model exports remain supported:
 
 ```python
 from survey_scribe import (
@@ -20,9 +20,10 @@ from survey_scribe import (
 )
 ```
 
-The package also includes tested secondary modules for configuration, results,
-serialization, and sources. Import those names from the module shown in the
-[API Overview](reference/index.md).
+Additive routed models, `QuestionnaireRouter`, and `RoutingConfig` are also
+available from `survey_scribe`. The package includes tested secondary modules for
+configuration, providers, results, routing, serialization, and sources. Import
+lower-level names from the module shown in the [API Overview](reference/index.md).
 
 ## Serialized SVIS contract
 
@@ -88,8 +89,16 @@ decision.
 
 ## Command-line boundary
 
-The `survey-scribe` command supports `--help` and `--version`. An extraction
-command is not part of `0.1.x`.
+The `survey-scribe` command supports `--help`, `--version`, and
+`schema export routing`. An extraction command is not part of `0.1.x`.
+
+## Additive routed contract
+
+`RoutedSurveyVariable` and `RoutedSurveySVIS` extend the legacy models without
+adding fields to `SurveyVariable` or `SurveySVIS`. The routed artifact has schema
+version `1.0`; its legacy projection preserves keys, nesting, JSON value types,
+defaults, enum values, field order, and variable order. Runtime interview
+execution is not part of this contract.
 
 ## Python and Pydantic
 

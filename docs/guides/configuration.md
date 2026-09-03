@@ -34,6 +34,7 @@ validation errors.
 | `retry` | `RetryConfig` | See below | Frozen nested model |
 | `max_concurrency` | `int` | `4` | From 1 through 128 |
 | `confidence_threshold` | `float` | `0.7` | From `0.0` through `1.0` |
+| `routing` | `RoutingConfig` | See below | Provider-neutral frozen limits |
 | `artifacts` | `ArtifactConfig` | See below | Frozen nested model |
 
 At most one credential form can be set. A credential is not required for local
@@ -63,6 +64,34 @@ schema and source operations.
 | --- | --- | --- | --- |
 | `sidecar` | `bool` | `True` | Strict Boolean |
 | `manifest` | `Literal[True]` | `True` | Manifests cannot be disabled |
+
+### Routing
+
+| Field | Default | Purpose |
+| --- | ---: | --- |
+| `max_source_quote_chars` | 2,000 | Maximum exact evidence quote |
+| `max_request_tokens` | 32,000 | Hard request ceiling before provider capability limits |
+| `max_inventory_items_per_call` | 250 | Stable inventory partition limit |
+| `max_candidate_targets_per_reference` | 10 | Ambiguity bound before review |
+| `max_discrepancies_per_review_call` | 25 | Bounded reviewer packet |
+| `max_source_spans_per_decision` | 8 | Citation bound per decision |
+| `max_condition_depth` | 6 | Condition AST depth limit |
+| `max_condition_nodes` | 100 | Condition AST node limit |
+| `low_confidence_threshold` | 0.70 | Adaptive incoming-pass trigger |
+| `unusual_in_degree_threshold` | 4 | Adaptive incoming-pass trigger |
+| `unusual_out_degree_threshold` | 3 | Adaptive incoming-pass trigger |
+| `max_concurrency` | 4 | Shared outbound-attempt ceiling |
+| `generation` | `GenerationConfig()` | Routing-provider generation settings |
+| `retry` | `RetryConfig()` | Routing-provider retry settings |
+
+Routing configuration contains no credentials and does not select or construct a
+provider. The top-level `generation` and `retry` values do not replace these
+routing-nested values. Production applications create a `StructuredProvider`
+from administrator-owned configuration and inject it with the nested settings:
+
+```python
+router = QuestionnaireRouter(provider, config=config.routing)
+```
 
 !!! note
 
@@ -94,6 +123,20 @@ max_delay_seconds = 8.0
 [artifacts]
 sidecar = true
 manifest = true
+
+[routing]
+max_request_tokens = 32000
+max_inventory_items_per_call = 250
+max_concurrency = 4
+
+[routing.generation]
+temperature = 0.0
+max_output_tokens = 4096
+
+[routing.retry]
+max_attempts = 3
+initial_delay_seconds = 0.5
+max_delay_seconds = 8.0
 ```
 
 Credentials are prohibited anywhere in TOML. The loader rejects credential-like
