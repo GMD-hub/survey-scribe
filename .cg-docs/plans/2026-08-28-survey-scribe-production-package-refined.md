@@ -9,8 +9,8 @@ estimated-effort: "large"
 deviation-policy: "ask"
 artifact-schema-version: 1
 phases: 6
-completed-phases: [1, 2]
-current-phase: 3
+completed-phases: [1, 2, 3]
+current-phase: 4
 execution-report: "../work-reports/2026-08-28-survey-scribe-production-package-refined.md"
 supersedes: "2026-08-26-survey-scribe-production-package.md"
 tags: [python, packaging, architecture, llm, docling, svis, providers, cli, testing, documentation, release]

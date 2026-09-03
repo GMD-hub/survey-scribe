@@ -1,31 +1,25 @@
 {
   "schemaVersion": "compound-gpid-active-state-v1",
-  "updatedAt": "2026-09-02T20:21:59Z",
-  "workflow": "/cg-work",
-  "status": "completed",
-  "branch": "feat/questionnaire-skip-pattern-graph",
-  "plan": ".cg-docs/plans/2026-08-31-questionnaire-routing-graph.md",
-  "executionReport": ".cg-docs/work-reports/2026-08-31-questionnaire-routing-graph.md",
-  "currentPhase": null,
+  "updatedAt": "2026-09-03T17:43:47Z",
+  "workflow": "/cg-review",
+  "status": "handoff",
+  "branch": "provider-runtime-phase3",
+  "plan": ".cg-docs/plans/2026-08-28-survey-scribe-production-package-refined.md",
+  "executionReport": ".cg-docs/work-reports/2026-08-28-survey-scribe-production-package-refined.md",
+  "currentPhase": 4,
   "evidenceStatus": [
-    {"id": "V1", "status": "passed", "artifact": ".cg-docs/work-reports/2026-08-31-questionnaire-routing-graph.md"},
-    {"id": "V2", "status": "passed", "artifact": "tests/fixtures/routing/manifest.toml"},
-    {"id": "V3", "status": "passed", "artifact": "tests/fixtures/routing/schema/questionnaire-routing-graph-v1.0.json"},
-    {"id": "V4", "status": "passed", "artifact": "tests/fixtures/routing_mechanics/inventory-identity-v1.json"},
-    {"id": "V5", "status": "passed", "artifact": "tests/unit/test_routing_reconcile.py"},
-    {"id": "V6", "status": "passed", "artifact": ".cg-docs/benchmarks/2026-09-01-routing-validation-scale.md"},
-    {"id": "V7", "status": "passed", "artifact": "tests/fixtures/routing_prompts/structured-responses-v1.json"},
-    {"id": "V8", "status": "passed", "artifact": "tests/integration/test_routing_extraction.py"},
-    {"id": "V9", "status": "passed", "artifact": "tests/contract/sources/test_xlsform.py"},
-    {"id": "V10", "status": "passed", "artifact": "tests/unit/test_routing_artifacts.py"},
-    {"id": "V11", "status": "passed", "artifact": ".cg-docs/work-reports/2026-08-31-questionnaire-routing-graph.md"},
-    {"id": "G6", "status": "not_run", "artifact": ".cg-docs/work-reports/2026-08-31-questionnaire-routing-graph.md"},
-    {"id": "V12", "status": "passed", "artifact": ".cg-docs/work-reports/2026-08-31-questionnaire-routing-graph.md"}
+    {"id": "V1", "status": "passed", "artifact": ".cg-docs/work-reports/2026-08-28-survey-scribe-production-package-refined.md"},
+    {"id": "V2", "status": "passed", "artifact": ".cg-docs/work-reports/2026-08-28-survey-scribe-production-package-refined.md"},
+    {"id": "V3", "status": "passed", "artifact": "tests/unit/test_config.py"},
+    {"id": "V4", "status": "passed", "artifact": "tests/contract/sources"},
+    {"id": "V5", "status": "passed", "artifact": "tests/contract/providers"},
+    {"id": "V6", "status": "passed", "artifact": "tests/integration/test_pipeline.py"}
   ],
   "unresolvedDecisions": [],
   "artifactRefs": [
-    {"kind": "plan", "path": ".cg-docs/plans/2026-08-31-questionnaire-routing-graph.md", "status": "completed"},
-    {"kind": "work-report", "path": ".cg-docs/work-reports/2026-08-31-questionnaire-routing-graph.md", "status": "completed"}
+    {"kind": "plan", "path": ".cg-docs/plans/2026-08-28-survey-scribe-production-package-refined.md", "status": "active"},
+    {"kind": "work-report", "path": ".cg-docs/work-reports/2026-08-28-survey-scribe-production-package-refined.md", "status": "active"},
+    {"kind": "review", "path": ".cg-docs/reviews/2026-08-31-questionnaire-routing-graph-verify-review.md", "status": "open"}
   ],
-  "nextCommand": "/cg-review full"
+  "nextCommand": "/cg-fix-triage"
 }

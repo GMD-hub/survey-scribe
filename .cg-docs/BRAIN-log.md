@@ -1,6 +1,13 @@
 # 🧠 Project Brain — Chronological Log
 
-_Generated 2026-09-02 · 15 artifacts (newest first) + 5 roadmap features_
+_Generated 2026-09-03 · 17 artifacts (newest first) + 5 roadmap features_
+
+## 2026-09-03
+
+- **[2026-08-31-questionnaire-routing-graph-verify-review](.cg-docs/reviews/2026-08-31-questionnaire-routing-graph-verify-review.md)** · `review` · _—_ · `2026-09-03`
+  > **Review mode**: light verification **Parent review**: `.cg-docs/reviews/2026-08-31-questionnaire-routing-graph-revie…
+- **[Bound Provider Retries and Preserve Chunk Provenance](.cg-docs/solutions/testing-patterns/2026-09-03-bound-provider-retries-and-chunk-provenance.md)** · `solution` · _—_ · `2026-09-03`
+  > Provider and pipeline tests passed, but verification found that production behavior could still violate the public co…
 
 ## 2026-09-02
 
