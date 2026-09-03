@@ -25,11 +25,11 @@ jobs:
         with:
           version: "0.8.11"
           enable-cache: true
-      - run: uv sync --locked --extra tabular --python 3.11
+      - run: uv sync --locked --extra openai --extra pdf --extra tabular --python 3.11
       - run: uv run --no-config --no-project --default-index https://pypi.org/simple --script scripts/validate_golden_manifest.py
-      - run: uv run ruff check .
-      - run: uv run ruff format --check .
-      - run: uv run pyright
+      - run: uv run --no-sync ruff check .
+      - run: uv run --no-sync ruff format --check .
+      - run: uv run --no-sync pyright
 
   test:
     name: Test (${{ matrix.os }}, Python ${{ matrix.python-version }})
@@ -47,8 +47,8 @@ jobs:
         with:
           version: "0.8.11"
           enable-cache: true
-      - run: uv sync --locked --extra tabular --python ${{ matrix.python-version }}
-      - run: uv run pytest tests/unit tests/characterization tests/contract tests/integration tests/test_schema.py --cov=survey_scribe --cov-branch --cov-report=term-missing --cov-report=xml
+      - run: uv sync --locked --extra openai --extra pdf --extra tabular --python ${{ matrix.python-version }}
+      - run: uv run --no-sync pytest tests/unit tests/characterization tests/contract tests/integration tests/test_schema.py --cov=survey_scribe --cov-branch --cov-report=term-missing --cov-report=xml
 
   package:
     name: Build and inspect distributions

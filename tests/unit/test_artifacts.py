@@ -333,6 +333,7 @@ def test_required_directory_sync_failure_aborts_publication(
     assert not (tmp_path / "TST_2024_SYNTH_svis.json").exists()
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX directory fsync failure contract")
 def test_projection_directory_sync_failure_rolls_back_prior_generation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

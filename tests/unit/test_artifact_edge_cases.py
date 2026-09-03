@@ -753,6 +753,7 @@ def test_validate_generation_rejects_record_digest_mismatch(tmp_path: Path) -> N
         artifacts._validate_generation(tmp_path, records, manifest_path)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX descriptor-relative lock contract")
 def test_lock_open_failure_is_classified_as_lock_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -780,6 +781,7 @@ def test_lock_open_failure_is_classified_as_lock_error(
     assert error.value.stage == "lock"
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX os.replace failure contract")
 def test_atomic_write_removes_temporary_file_after_replace_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -812,6 +814,7 @@ def test_read_rejects_file_that_changes_during_open(
         artifacts._read_bytes_no_follow(path)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX descriptor validation contract")
 def test_read_rejects_descriptor_that_is_not_regular(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -940,6 +943,7 @@ def test_reject_reparse_enforces_expected_path_type(tmp_path: Path) -> None:
         (0, "unexpected artifact path"),
     ],
 )
+@pytest.mark.skipif(os.name == "nt", reason="POSIX mode-bit removal contract")
 def test_safe_remove_tree_refuses_unsafe_entries(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -963,6 +967,7 @@ def test_safe_remove_tree_refuses_unsafe_entries(
         artifacts._safe_remove_tree(root)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX directory fsync contract")
 def test_remove_file_durable_handles_missing_and_existing_targets(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1009,6 +1014,7 @@ def test_posix_durable_replace_uses_atomic_os_replace(
     assert not source.exists()
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX directory fsync contract")
 def test_posix_directory_sync_closes_descriptor(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
