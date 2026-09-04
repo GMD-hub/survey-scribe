@@ -901,6 +901,33 @@ def load_evaluation_bundle(
     return bundle
 
 
+def evaluate_repository_bundle(
+    *,
+    repository_root: Path = REPOSITORY_ROOT,
+    source_manifest: Path = DEFAULT_SOURCE_MANIFEST,
+) -> tuple[EvaluationBundle, MechanicsManifest, EvaluationReport]:
+    """Evaluate the repository fixture with exact manifest and fixture digests."""
+    source_errors = validate_source_manifest(source_manifest, repository_root=repository_root)
+    if source_errors:
+        raise ValueError("; ".join(source_errors))
+    bundle = load_evaluation_bundle(
+        repository_root=repository_root,
+        source_manifest=source_manifest,
+    )
+    mechanics_content = (repository_root / DEFAULT_MECHANICS_MANIFEST).read_bytes()
+    mechanics = MechanicsManifest.model_validate(tomllib.loads(mechanics_content.decode()))
+    evaluation_content = _resolve_mechanics_path(
+        mechanics.evaluation.path,
+        repository_root,
+    ).read_bytes()
+    report = evaluate_bundle(
+        bundle,
+        mechanics_manifest_sha256=hashlib.sha256(mechanics_content).hexdigest(),
+        evaluation_fixture_sha256=hashlib.sha256(evaluation_content).hexdigest(),
+    )
+    return bundle, mechanics, report
+
+
 def _load_json_without_duplicates(content: bytes) -> object:
     def reject_duplicates(pairs: list[tuple[str, object]]) -> dict[str, object]:
         result: dict[str, object] = {}
@@ -1005,20 +1032,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         if source_errors:
             logger.error("Routing source manifest validation failed")
             return 1
-        bundle = load_evaluation_bundle(
+        bundle, _mechanics, report = evaluate_repository_bundle(
             repository_root=REPOSITORY_ROOT,
             source_manifest=args.manifest,
-        )
-        mechanics_content = (REPOSITORY_ROOT / DEFAULT_MECHANICS_MANIFEST).read_bytes()
-        mechanics_data = MechanicsManifest.model_validate(tomllib.loads(mechanics_content.decode()))
-        evaluation_content = _resolve_mechanics_path(
-            mechanics_data.evaluation.path,
-            REPOSITORY_ROOT,
-        ).read_bytes()
-        report = evaluate_bundle(
-            bundle,
-            mechanics_manifest_sha256=hashlib.sha256(mechanics_content).hexdigest(),
-            evaluation_fixture_sha256=hashlib.sha256(evaluation_content).hexdigest(),
         )
         scale = run_scale_evidence(node_count=1_000, edge_count=3_000)
         _write_reports(args.output, report, args.scale_output, scale)

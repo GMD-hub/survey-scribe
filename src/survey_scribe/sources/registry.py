@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import time
 import zipfile
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -23,6 +24,8 @@ from survey_scribe.sources.base import (
 )
 
 if TYPE_CHECKING:
+    from datetime import date
+
     from survey_scribe.models.routing import RoutingSourceBinding
     from survey_scribe.models.svis import SurveySVIS
     from survey_scribe.routing.native import NativeRoutingSemantics
@@ -34,6 +37,15 @@ class SourceConversionResult:
 
     document: SourceDocument
     source_binding: RoutingSourceBinding
+    native: NativeRoutingSemantics | None
+
+
+@dataclass(frozen=True, slots=True)
+class SourceSvisConversionResult:
+    """Normalized source plus optional package-native SVIS and routing semantics."""
+
+    document: SourceDocument
+    svis: SurveySVIS | None
     native: NativeRoutingSemantics | None
 
 
@@ -49,6 +61,54 @@ class NativeSourceAdapter(SourceAdapter, Protocol):
         limits: SourceLimits,
     ) -> NativeRoutingSemantics | None:
         """Return native semantics from the active private source snapshot."""
+        ...
+
+
+@runtime_checkable
+class DeadlineSourceAdapter(SourceAdapter, Protocol):
+    """Adapter extension that accepts one registry-owned conversion deadline."""
+
+    def convert_until(
+        self,
+        source: ResolvedSource,
+        *,
+        limits: SourceLimits,
+        deadline: float,
+    ) -> SourceDocument:
+        """Normalize a source before the absolute deadline."""
+        ...
+
+
+@runtime_checkable
+class DeadlineNativeSourceAdapter(NativeSourceAdapter, Protocol):
+    """Native-routing extension that shares the source conversion deadline."""
+
+    def convert_native_until(
+        self,
+        source: ResolvedSource,
+        document: SourceDocument,
+        *,
+        limits: SourceLimits,
+        deadline: float,
+    ) -> NativeRoutingSemantics | None:
+        """Parse native routing before the absolute deadline."""
+        ...
+
+
+@runtime_checkable
+class NativeSvisSourceAdapter(DeadlineSourceAdapter, Protocol):
+    """Source extension that emits authoritative package-native SVIS."""
+
+    def convert_svis_until(
+        self,
+        source: ResolvedSource,
+        document: SourceDocument,
+        *,
+        limits: SourceLimits,
+        deadline: float,
+        extraction_date: date,
+    ) -> tuple[SurveySVIS, NativeRoutingSemantics] | None:
+        """Parse typed SVIS and native routing before the absolute deadline."""
         ...
 
 
@@ -127,7 +187,7 @@ class SourceRegistry:
             raise SourceFormatError(f"Unsupported source format: {suffix or '<none>'}")
         with snapshot_resolved_source(resolved, limits=limits) as snapshot:
             _verify_signature(snapshot.primary, suffix)
-            document = adapter.convert(snapshot, limits=limits)
+            document = _convert_adapter(adapter, snapshot, limits)
             payload = document.model_dump(mode="python")
             payload["snapshot_sha256"] = snapshot.primary_sha256
             return SourceDocument.model_validate(payload)
@@ -149,19 +209,85 @@ class SourceRegistry:
             raise SourceFormatError(f"Unsupported source format: {suffix or '<none>'}")
         with snapshot_resolved_source(resolved, limits=limits) as snapshot:
             _verify_signature(snapshot.primary, suffix)
-            converted = adapter.convert(snapshot, limits=limits)
+            deadline = _adapter_deadline(adapter, limits)
+            converted = _convert_adapter(adapter, snapshot, limits, deadline=deadline)
             payload = converted.model_dump(mode="python")
             payload["snapshot_sha256"] = _routed_snapshot_sha256(snapshot)
             document = SourceDocument.model_validate(payload)
             source_binding = create_source_binding(document, svis)
             native: NativeRoutingSemantics | None = None
-            if isinstance(adapter, NativeSourceAdapter):
+            if isinstance(adapter, DeadlineNativeSourceAdapter):
+                assert deadline is not None
+                native = adapter.convert_native_until(
+                    snapshot,
+                    document,
+                    limits=limits,
+                    deadline=deadline,
+                )
+            elif isinstance(adapter, NativeSourceAdapter):
                 native = adapter.convert_native(snapshot, document, limits=limits)
             return SourceConversionResult(
                 document=document,
                 source_binding=source_binding,
                 native=native,
             )
+
+    def convert_for_svis(
+        self,
+        source: LocalSource | SourceBundle,
+        *,
+        extraction_date: date,
+        limits: SourceLimits = DEFAULT_SOURCE_LIMITS,
+    ) -> SourceSvisConversionResult:
+        """Normalize a source and parse package-native SVIS when available."""
+        resolved = resolve_local_source(source, limits=limits)
+        suffix = resolved.primary.suffix.lower()
+        adapter = self._adapters.get(suffix)
+        if adapter is None:
+            raise SourceFormatError(f"Unsupported source format: {suffix or '<none>'}")
+        with snapshot_resolved_source(resolved, limits=limits) as snapshot:
+            _verify_signature(snapshot.primary, suffix)
+            deadline = _adapter_deadline(adapter, limits)
+            converted = _convert_adapter(adapter, snapshot, limits, deadline=deadline)
+            payload = converted.model_dump(mode="python")
+            payload["snapshot_sha256"] = _routed_snapshot_sha256(snapshot)
+            document = SourceDocument.model_validate(payload)
+            parsed: tuple[SurveySVIS, NativeRoutingSemantics] | None = None
+            if isinstance(adapter, NativeSvisSourceAdapter):
+                assert deadline is not None
+                parsed = adapter.convert_svis_until(
+                    snapshot,
+                    document,
+                    limits=limits,
+                    deadline=deadline,
+                    extraction_date=extraction_date,
+                )
+            return SourceSvisConversionResult(
+                document=document,
+                svis=(parsed[0] if parsed is not None else None),
+                native=(parsed[1] if parsed is not None else None),
+            )
+
+
+def _convert_adapter(
+    adapter: SourceAdapter,
+    source: ResolvedSource,
+    limits: SourceLimits,
+    *,
+    deadline: float | None = None,
+) -> SourceDocument:
+    if isinstance(adapter, DeadlineSourceAdapter):
+        active_deadline = (
+            deadline if deadline is not None else time.monotonic() + limits.deadline_seconds
+        )
+        return adapter.convert_until(source, limits=limits, deadline=active_deadline)
+    return adapter.convert(source, limits=limits)
+
+
+def _adapter_deadline(adapter: SourceAdapter, limits: SourceLimits) -> float | None:
+    if isinstance(adapter, DeadlineSourceAdapter):
+        return time.monotonic() + limits.deadline_seconds
+    return None
 
 
 def _routed_snapshot_sha256(snapshot: ResolvedSource) -> str:
@@ -196,6 +322,9 @@ def _routed_snapshot_sha256(snapshot: ResolvedSource) -> str:
             digest.update(len(encoded).to_bytes(8, "big"))
             digest.update(encoded)
     return digest.hexdigest()
+
+
+__all__ = ["SourceConversionResult", "SourceRegistry", "SourceSvisConversionResult"]
 
 
 def _verify_signature(path: Path, suffix: str) -> None:

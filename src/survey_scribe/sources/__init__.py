@@ -23,6 +23,7 @@ from survey_scribe.sources.base import (
     SourceTimeoutError,
     resolve_local_source,
     snapshot_resolved_source,
+    validate_source_argument,
 )
 from survey_scribe.sources.registry import SourceRegistry
 
@@ -50,4 +51,5 @@ __all__ = [
     "SourceTimeoutError",
     "resolve_local_source",
     "snapshot_resolved_source",
+    "validate_source_argument",
 ]

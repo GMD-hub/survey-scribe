@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import re
+import time
 from collections.abc import Mapping
+from datetime import date
 from pathlib import Path, PurePosixPath
 from types import MappingProxyType
 
 from survey_scribe.models.routing import RepeatKind, TerminalKind
+from survey_scribe.models.svis import AnswerCategory, DataType, SurveySVIS, SurveyVariable
 from survey_scribe.routing.contracts import (
     ConditionOperator,
     ExtractedRoutingCondition,
@@ -33,6 +36,7 @@ from survey_scribe.sources.base import (
     SourceLimits,
     SourceSecurityError,
     SourceTable,
+    SourceTimeoutError,
     render_table,
 )
 from survey_scribe.sources.tabular import CsvAdapter, XlsxAdapter
@@ -40,6 +44,18 @@ from survey_scribe.sources.tabular import CsvAdapter, XlsxAdapter
 XLSFORM_SUPPORT_MATRIX_VERSION = "1.0"
 XLSFORM_SUPPORT_MATRIX: Mapping[str, str] = MappingProxyType(
     {
+        "tested_profile": "XLSForm 1.3 core; ODK-compatible workbook structure",
+        "question_types": (
+            "acknowledge,audio,barcode,calculate,date,dateTime,decimal,end,file,"
+            "geopoint,geoshape,geotrace,hidden,image,integer,note,range,"
+            "select_multiple,select_multiple_from_file,select_one,"
+            "select_one_from_file,start,text,time,today,username,video"
+        ),
+        "diagnostic_codes": (
+            "METADATA_INCOMPLETE,XLSFORM_CHOICE_LIST_MISSING,XLSFORM_FEATURE_UNSUPPORTED,"
+            "XLSFORM_FUNCTION_UNSUPPORTED,XLSFORM_EXPRESSION_UNSUPPORTED,"
+            "XLSFORM_REFERENCE_UNRESOLVED,XLSFORM_TYPE_UNSUPPORTED"
+        ),
         "survey_choices_settings": "preserved",
         "multilingual_labels": "preserved",
         "groups": "logical_containment",
@@ -54,6 +70,10 @@ XLSFORM_SUPPORT_MATRIX: Mapping[str, str] = MappingProxyType(
         "choice_filters": "preserved_not_flow",
         "excel_formulas_macros_external_links": "rejected",
         "external_choices": "confined_bundle_only",
+        "limitations": (
+            "no formula, macro, external-link, dynamic-instance, rank, or XML-external "
+            "evaluation; non-projected functions remain exact source text"
+        ),
     }
 )
 
@@ -66,6 +86,21 @@ _SELECTED = re.compile(
 _INTEGER = re.compile(r"^[+-]?[0-9]+$")
 _FLOAT = re.compile(r"^[+-]?(?:[0-9]+\.[0-9]*|[0-9]*\.[0-9]+)$")
 _REMOTE_REFERENCE = re.compile(r"^[a-z][a-z0-9+.-]*:", re.IGNORECASE)
+_FUNCTION = re.compile(r"(?<![-\w])([A-Za-z][\w.-]*)\s*\(")
+_SUPPORTED_FUNCTIONS = frozenset({"false", "not", "selected", "true"})
+_LOGIC_COLUMNS = (
+    "relevant",
+    "bind::relevant",
+    "constraint",
+    "bind::constraint",
+    "calculation",
+    "bind::calculate",
+    "choice_filter",
+    "repeat_count",
+)
+_UNSUPPORTED_FEATURE_COLUMNS = frozenset({"trigger"})
+_TableRecord = tuple[int, tuple[str, ...], dict[str, str]]
+_SourceRow = tuple[int, tuple[str, ...]]
 
 
 class XlsFormAdapter:
@@ -76,7 +111,21 @@ class XlsFormAdapter:
 
     def convert(self, source: ResolvedSource, *, limits: SourceLimits) -> SourceDocument:
         """Return the unchanged normalized XLSX document contract."""
-        return self._xlsx.convert(source, limits=limits)
+        return self.convert_until(
+            source,
+            limits=limits,
+            deadline=time.monotonic() + limits.deadline_seconds,
+        )
+
+    def convert_until(
+        self,
+        source: ResolvedSource,
+        *,
+        limits: SourceLimits,
+        deadline: float,
+    ) -> SourceDocument:
+        """Normalize the workbook under one source-owned deadline."""
+        return self._xlsx.convert_until(source, limits=limits, deadline=deadline)
 
     def convert_native(
         self,
@@ -86,6 +135,22 @@ class XlsFormAdapter:
         limits: SourceLimits,
     ) -> NativeRoutingSemantics | None:
         """Parse an XLSForm when a case-insensitive ``survey`` sheet is present."""
+        return self.convert_native_until(
+            source,
+            document,
+            limits=limits,
+            deadline=time.monotonic() + limits.deadline_seconds,
+        )
+
+    def convert_native_until(
+        self,
+        source: ResolvedSource,
+        document: SourceDocument,
+        *,
+        limits: SourceLimits,
+        deadline: float,
+    ) -> NativeRoutingSemantics | None:
+        """Parse native XLSForm semantics under the active source deadline."""
         tables = {
             table.provenance.sheet.casefold(): table
             for table in document.tables
@@ -94,7 +159,28 @@ class XlsFormAdapter:
         survey = tables.get("survey")
         if survey is None:
             return None
-        return _parse_xlsform(source, document, survey, tables, limits)
+        return _parse_xlsform(source, document, survey, tables, limits, deadline=deadline)
+
+    def convert_svis_until(
+        self,
+        source: ResolvedSource,
+        document: SourceDocument,
+        *,
+        limits: SourceLimits,
+        deadline: float,
+        extraction_date: date,
+    ) -> tuple[SurveySVIS, NativeRoutingSemantics] | None:
+        """Build authoritative SVIS and routing semantics from one XLSForm parse."""
+        tables = {
+            table.provenance.sheet.casefold(): table
+            for table in document.tables
+            if table.provenance.sheet
+        }
+        survey = tables.get("survey")
+        if survey is None:
+            return None
+        native = _parse_xlsform(source, document, survey, tables, limits, deadline=deadline)
+        return _native_svis(source, native, extraction_date, deadline=deadline), native
 
 
 def _parse_xlsform(
@@ -103,36 +189,66 @@ def _parse_xlsform(
     survey: SourceTable,
     tables: Mapping[str, SourceTable],
     limits: SourceLimits,
+    *,
+    deadline: float | None = None,
 ) -> NativeRoutingSemantics:
+    active_deadline = (
+        deadline if deadline is not None else time.monotonic() + limits.deadline_seconds
+    )
+    _check_deadline(active_deadline)
     survey_headers, survey_rows = _table_records(survey, required=("type", "name"))
     records = list(_preserved_records("survey", survey_headers, survey_rows))
     diagnostics: list[NativeRoutingDiagnostic] = []
-
     choices_by_list: dict[str, set[str]] = {}
     choices = tables.get("choices")
     if choices is not None:
+        _check_deadline(active_deadline)
         choice_headers, choice_rows = _table_records(
             choices,
             required=("list_name", "name"),
         )
-        records.extend(_preserved_records("choices", choice_headers, choice_rows))
-        for _row, values in choice_rows:
+        choice_identities: set[tuple[str, str]] = set()
+        for _row_number, _row, values in choice_rows:
+            _check_deadline(active_deadline)
             list_name = values.get("list_name", "").strip()
             name = values.get("name", "").strip()
             if list_name and name:
+                identity = (list_name, name)
+                if identity in choice_identities:
+                    raise SourceFormatError("XLSForm choice identities must be unique")
+                choice_identities.add(identity)
                 choices_by_list.setdefault(list_name, set()).add(name)
+        records.extend(_preserved_records("choices", choice_headers, choice_rows))
 
     settings = tables.get("settings")
+    setting_rows: list[_TableRecord] = []
     if settings is not None:
+        _check_deadline(active_deadline)
         setting_headers, setting_rows = _table_records(settings, required=())
+        if len(setting_rows) > 1:
+            raise SourceFormatError("XLSForm settings sheet must contain at most one data row")
         records.extend(_preserved_records("settings", setting_headers, setting_rows))
+    settings_values = setting_rows[0][2] if setting_rows else {}
+    if _metadata_uses_fallback(settings_values):
+        diagnostics.append(NativeRoutingDiagnostic(code="METADATA_INCOMPLETE"))
 
+    cell_count = sum(len(row) for table in document.tables for row in table.rows)
     referenced_external: list[str] = []
     referenced_lists: list[str] = []
-    parsed_rows: list[tuple[tuple[str, ...], dict[str, str], str]] = []
-    for row, values in survey_rows:
+    parsed_rows: list[tuple[int, tuple[str, ...], dict[str, str], str]] = []
+    survey_names = {
+        values.get("name", "").strip()
+        for _row_number, _row, values in survey_rows
+        if values.get("name", "").strip()
+    }
+    for row_number, row, values in survey_rows:
+        _check_deadline(active_deadline)
         row_type = values.get("type", "").strip()
-        parsed_rows.append((row, values, row_type))
+        parsed_rows.append((row_number, row, values, row_type))
+        _diagnose_row_features(row_type, values, diagnostics)
+        logic = " ".join(values.get(column, "") for column in _LOGIC_COLUMNS)
+        if any(reference not in survey_names for reference in _REFERENCE.findall(logic)):
+            diagnostics.append(NativeRoutingDiagnostic(code="XLSFORM_REFERENCE_UNRESOLVED"))
         choice_reference = _choice_reference(row_type)
         first_type_part = row_type.split(maxsplit=1)[0].casefold() if row_type else ""
         if choice_reference is None and first_type_part in {
@@ -151,13 +267,23 @@ def _parse_xlsform(
         if list_name not in choices_by_list:
             diagnostics.append(NativeRoutingDiagnostic(code="XLSFORM_CHOICE_LIST_MISSING"))
     for filename in dict.fromkeys(referenced_external):
-        records.extend(_external_choice_records(source, filename, limits))
+        external_records, external_cells = _external_choice_records(
+            source,
+            filename,
+            limits,
+            deadline=active_deadline,
+        )
+        records.extend(external_records)
+        cell_count += external_cells
+        if cell_count > limits.max_cells:
+            raise SourceLimitError("max_cells", "XLSForm exceeds the configured cell limit")
 
     items, relevant_by_local, row_by_local = _native_items(
         document,
         survey,
         parsed_rows,
         diagnostics,
+        deadline=active_deadline,
     )
     references = {
         item.source_item_id: item
@@ -174,9 +300,6 @@ def _parse_xlsform(
         for position, (local_id, expression) in enumerate(relevant_by_local, start=1)
     )
     transitions = _native_transitions(document, survey, items, row_by_local)
-    cell_count = sum(len(record.values) for record in records)
-    if cell_count > limits.max_cells:
-        raise SourceLimitError("max_cells", "XLSForm exceeds the configured cell limit")
     return NativeRoutingSemantics(
         schema_version="1.0",
         adapter=f"survey-scribe/xlsform/{XLSFORM_SUPPORT_MATRIX_VERSION}",
@@ -185,19 +308,21 @@ def _parse_xlsform(
         transitions=transitions,
         activations=activations,
         records=tuple(records),
-        diagnostics=tuple(diagnostics),
+        diagnostics=tuple(_unique_diagnostics(diagnostics)),
     )
 
 
 def _native_items(
     document: SourceDocument,
     survey: SourceTable,
-    parsed_rows: list[tuple[tuple[str, ...], dict[str, str], str]],
+    parsed_rows: list[tuple[int, tuple[str, ...], dict[str, str], str]],
     diagnostics: list[NativeRoutingDiagnostic],
+    *,
+    deadline: float,
 ) -> tuple[
     tuple[NativeRoutingItem, ...],
     tuple[tuple[str, str], ...],
-    dict[str, tuple[str, ...]],
+    dict[str, _SourceRow],
 ]:
     block_id = _table_block_id(document, survey)
     header_row = survey.rows[0]
@@ -225,16 +350,22 @@ def _native_items(
     names: set[str] = set()
     children_seen: set[str] = set()
     relevant: list[tuple[str, str]] = []
-    row_by_local: dict[str, tuple[str, ...]] = {"xlsform:entry": header_row}
+    first_row_number = survey.provenance.row_start or 1
+    row_by_local: dict[str, _SourceRow] = {"xlsform:entry": (first_row_number, header_row)}
     item_by_local: dict[str, NativeRoutingItem] = {items[0].local_id: items[0]}
 
-    for row, values, row_type in parsed_rows:
+    for row_number, row, values, row_type in parsed_rows:
+        _check_deadline(deadline)
         normalized_type = " ".join(row_type.casefold().split())
-        if normalized_type in {"end group", "end_group", "end repeat", "end_repeat"}:
+        closing_kind = _closing_kind(normalized_type)
+        if closing_kind is not None:
             if not stack:
                 raise SourceFormatError("XLSForm group or repeat endings are unbalanced")
-            closing = stack.pop()
-            if item_by_local[closing].kind is NodeKind.repeat_group:
+            closing = stack[-1]
+            if item_by_local[closing].kind is not closing_kind:
+                raise SourceFormatError("XLSForm group or repeat end marker does not match")
+            stack.pop()
+            if closing_kind is NodeKind.repeat_group:
                 repeat_stack.pop()
             continue
         if not row_type and not any(value.strip() for value in values.values()):
@@ -287,7 +418,7 @@ def _native_items(
             children_seen.add(parent)
         items.append(item)
         item_by_local[local_id] = item
-        row_by_local[local_id] = row
+        row_by_local[local_id] = (row_number, row)
         expression = values.get("relevant", "").strip() or values.get("bind::relevant", "").strip()
         if expression:
             relevant.append((local_id, expression))
@@ -324,7 +455,10 @@ def _native_items(
         repeat_kind=None,
     )
     items.append(terminal)
-    row_by_local[terminal.local_id] = terminal_row
+    row_by_local[terminal.local_id] = (
+        first_row_number + len(survey.rows) - 1,
+        terminal_row,
+    )
     return tuple(items), tuple(relevant), row_by_local
 
 
@@ -332,7 +466,7 @@ def _native_transitions(
     document: SourceDocument,
     survey: SourceTable,
     items: tuple[NativeRoutingItem, ...],
-    row_by_local: Mapping[str, tuple[str, ...]],
+    row_by_local: Mapping[str, _SourceRow],
 ) -> tuple[NativeTransition, ...]:
     by_local = {item.local_id: item for item in items}
     children: dict[str | None, list[str]] = {}
@@ -608,7 +742,7 @@ def _table_records(
     table: SourceTable,
     *,
     required: tuple[str, ...],
-) -> tuple[tuple[str, ...], list[tuple[tuple[str, ...], dict[str, str]]]]:
+) -> tuple[tuple[str, ...], list[_TableRecord]]:
     if not table.rows:
         raise SourceFormatError("XLSForm sheets must contain one header row")
     headers = tuple(_normalize_header(value) for value in table.rows[0])
@@ -617,22 +751,23 @@ def _table_records(
         raise SourceFormatError("XLSForm sheet headers must be unique")
     if any(name not in headers for name in required):
         raise SourceFormatError("XLSForm sheet is missing a required header")
-    rows: list[tuple[tuple[str, ...], dict[str, str]]] = []
-    for row in table.rows[1:]:
+    rows: list[_TableRecord] = []
+    first_row_number = table.provenance.row_start or 1
+    for row_number, row in enumerate(table.rows[1:], start=first_row_number + 1):
         values = {
             header: row[index] if index < len(row) else ""
             for index, header in enumerate(headers)
             if header
         }
         if any(value.strip() for value in values.values()):
-            rows.append((row, values))
+            rows.append((row_number, row, values))
     return headers, rows
 
 
 def _preserved_records(
     collection: str,
     headers: tuple[str, ...],
-    rows: list[tuple[tuple[str, ...], dict[str, str]]],
+    rows: list[_TableRecord],
 ) -> tuple[NativeSourceRecord, ...]:
     return tuple(
         NativeSourceRecord(
@@ -640,7 +775,7 @@ def _preserved_records(
             source_order=position,
             values=tuple((header, values.get(header, "")) for header in headers if header),
         )
-        for position, (_row, values) in enumerate(rows)
+        for position, (_row_number, _row, values) in enumerate(rows)
     )
 
 
@@ -648,7 +783,10 @@ def _external_choice_records(
     source: ResolvedSource,
     filename: str,
     limits: SourceLimits,
-) -> tuple[NativeSourceRecord, ...]:
+    *,
+    deadline: float,
+) -> tuple[tuple[NativeSourceRecord, ...], int]:
+    _check_deadline(deadline)
     normalized = filename.replace("\\", "/")
     path = PurePosixPath(normalized)
     if (
@@ -669,14 +807,33 @@ def _external_choice_records(
     )
     if companion is None:
         raise SourceFormatError("XLSForm external-choice companion is missing")
-    document = CsvAdapter().convert(
+    document = CsvAdapter().convert_until(
         ResolvedSource(root=source.root, primary=companion),
         limits=limits,
+        deadline=deadline,
     )
     if not document.tables:
-        return ()
+        return (), 0
     headers, rows = _table_records(document.tables[0], required=("name",))
-    return _preserved_records("external_choices", headers, rows)
+    identities: set[str] = set()
+    for _row_number, _row, values in rows:
+        name = values.get("name", "").strip()
+        if name and name in identities:
+            raise SourceFormatError("XLSForm external choice identities must be unique")
+        if name:
+            identities.add(name)
+    records = tuple(
+        NativeSourceRecord(
+            collection="external_choices",
+            source_order=position,
+            values=(
+                ("__source_file", normalized),
+                *((header, values.get(header, "")) for header in headers if header),
+            ),
+        )
+        for position, (_row_number, _row, values) in enumerate(rows)
+    )
+    return records, sum(len(row) for row in document.tables[0].rows)
 
 
 def _choice_reference(row_type: str) -> tuple[str, str] | None:
@@ -692,7 +849,7 @@ def _choice_reference(row_type: str) -> tuple[str, str] | None:
 
 
 def _supported_question_type(row_type: str) -> bool:
-    base = row_type.split(maxsplit=1)[0] if row_type else ""
+    base = row_type.split(maxsplit=1)[0].casefold() if row_type else ""
     return base in {
         "acknowledge",
         "audio",
@@ -706,6 +863,7 @@ def _supported_question_type(row_type: str) -> bool:
         "geoshape",
         "geotrace",
         "image",
+        "hidden",
         "integer",
         "note",
         "range",
@@ -719,10 +877,25 @@ def _supported_question_type(row_type: str) -> bool:
         "time",
         "today",
         "username",
+        "video",
     }
 
 
-def _preferred_label(values: Mapping[str, str]) -> str:
+def _preferred_label(values: Mapping[str, str], language: str | None = None) -> str:
+    if language:
+        wanted = _normalize_header(language)
+        localized = next(
+            (
+                value.strip()
+                for key, value in values.items()
+                if key.startswith("label::")
+                and _normalize_header(key.partition("::")[2]) == wanted
+                and value.strip()
+            ),
+            "",
+        )
+        if localized:
+            return localized
     direct = values.get("label", "").strip()
     if direct:
         return direct
@@ -749,20 +922,235 @@ def _table_block_id(document: SourceDocument, table: SourceTable) -> str:
 def _source_span(
     document: SourceDocument,
     table: SourceTable,
-    row: tuple[str, ...],
+    source_row: _SourceRow,
     position: int,
 ) -> SourceSpan:
     provenance = table.provenance
+    row_number, row = source_row
     return SourceSpan(
         span_id=f"xlsform:temporary:{position:06d}",
         block_id=_table_block_id(document, table),
         source_name=document.source_name,
         pages=provenance.pages,
         sheet=provenance.sheet,
-        row_start=provenance.row_start,
-        row_end=provenance.row_end,
+        row_start=row_number,
+        row_end=row_number,
         source_quote=render_table((row,))[:2_000],
     )
+
+
+def _native_svis(
+    source: ResolvedSource,
+    native: NativeRoutingSemantics,
+    extraction_date: date,
+    *,
+    deadline: float,
+) -> SurveySVIS:
+    records = tuple((record.collection, dict(record.values)) for record in native.records)
+    settings_rows = tuple(values for collection, values in records if collection == "settings")
+    settings = settings_rows[0] if settings_rows else {}
+    language = settings.get("default_language", "").strip() or None
+    choices: dict[str, list[AnswerCategory]] = {}
+    external_choices: dict[str, list[AnswerCategory]] = {}
+    for collection, values in records:
+        _check_deadline(deadline)
+        if collection == "choices":
+            list_name = values.get("list_name", "").strip()
+            category = _category(values, language)
+            if list_name and category is not None:
+                choices.setdefault(list_name, []).append(category)
+        elif collection == "external_choices":
+            filename = values.get("__source_file", "").strip()
+            category = _category(values, language)
+            if filename and category is not None:
+                external_choices.setdefault(filename, []).append(category)
+
+    sections: list[tuple[NodeKind, str]] = []
+    variables: list[SurveyVariable] = []
+    for collection, values in records:
+        _check_deadline(deadline)
+        if collection != "survey":
+            continue
+        row_type = " ".join(values.get("type", "").strip().split())
+        normalized_type = row_type.casefold()
+        closing_kind = _closing_kind(normalized_type)
+        if closing_kind is not None:
+            sections.pop()
+            continue
+        name = values.get("name", "").strip()
+        if normalized_type in {"begin group", "begin_group"}:
+            sections.append((NodeKind.section, name))
+            continue
+        if normalized_type in {"begin repeat", "begin_repeat"}:
+            sections.append((NodeKind.repeat_group, name))
+            continue
+        base = normalized_type.split(maxsplit=1)[0] if normalized_type else ""
+        if not name or base == "note":
+            continue
+        supported = _supported_question_type(normalized_type)
+        choice_reference = _choice_reference(row_type)
+        categories: list[AnswerCategory] | None = None
+        if choice_reference is not None:
+            kind, list_name = choice_reference
+            selected = external_choices if kind == "external" else choices
+            categories = list(selected.get(list_name, ())) or None
+        categorical_without_choices = (
+            base
+            in {
+                "select_one",
+                "select_one_from_file",
+                "select_multiple",
+                "select_multiple_from_file",
+            }
+            and categories is None
+        )
+        label = _preferred_label(values, language) or name
+        variables.append(
+            SurveyVariable(
+                raw_name=name,
+                label=label,
+                question_text=label,
+                data_type=_data_type(base) if supported else DataType.other,
+                categories=categories,
+                universe=None,
+                skip_condition_raw=(
+                    values.get("relevant", "").strip()
+                    or values.get("bind::relevant", "").strip()
+                    or None
+                ),
+                module=(sections[-1][1] if sections else None),
+                extraction_confidence=1.0,
+                needs_review=not supported or categorical_without_choices,
+                notes=_logic_notes(values),
+            )
+        )
+
+    stem = source.primary.stem
+    survey_id = settings.get("form_id", "").strip() or stem
+    survey_name = (
+        settings.get("form_title", "").strip() or re.sub(r"[_-]+", " ", stem).strip().title()
+    )
+    country_code = settings.get("country_code", "").strip().upper() or "UNK"
+    year_text = settings.get("year", "").strip()
+    year = int(year_text) if re.fullmatch(r"[0-9]{4}", year_text) else extraction_date.year
+    return SurveySVIS(
+        survey_id=survey_id,
+        country_code=country_code,
+        year=year,
+        survey_name=survey_name,
+        data_collection_mode=settings.get("data_collection_mode", "").strip() or None,
+        language=language,
+        variables=variables,
+        source_file=source.primary.name,
+        source_format="xlsform",
+        extraction_date=extraction_date,
+        extraction_notes=None,
+    )
+
+
+def _category(values: Mapping[str, str], language: str | None) -> AnswerCategory | None:
+    name = values.get("name", "").strip()
+    if not name:
+        return None
+    return AnswerCategory(
+        code=name,
+        label=_preferred_label(values, language) or name,
+    )
+
+
+def _data_type(base: str) -> DataType:
+    if base in {"integer", "decimal", "range"}:
+        return DataType.numeric
+    if base in {"select_one", "select_one_from_file"}:
+        return DataType.categorical_single
+    if base in {"select_multiple", "select_multiple_from_file"}:
+        return DataType.categorical_multi
+    if base == "text":
+        return DataType.text
+    if base in {"date", "datetime", "time", "start", "end", "today"}:
+        return DataType.date
+    return DataType.other
+
+
+def _logic_notes(values: Mapping[str, str]) -> str | None:
+    labels = (
+        (
+            "constraint",
+            values.get("constraint", "").strip() or values.get("bind::constraint", "").strip(),
+        ),
+        (
+            "calculation",
+            values.get("calculation", "").strip() or values.get("bind::calculate", "").strip(),
+        ),
+        ("choice_filter", values.get("choice_filter", "").strip()),
+        ("repeat_count", values.get("repeat_count", "").strip()),
+    )
+    parts = tuple(f"XLSForm {name}: {value}" for name, value in labels if value)
+    return "\n".join(parts) or None
+
+
+def _metadata_uses_fallback(settings: Mapping[str, str]) -> bool:
+    required_text = ("form_id", "form_title", "country_code")
+    year = settings.get("year", "").strip()
+    return any(not settings.get(name, "").strip() for name in required_text) or not re.fullmatch(
+        r"[0-9]{4}", year
+    )
+
+
+def _closing_kind(row_type: str) -> NodeKind | None:
+    if row_type in {"end group", "end_group"}:
+        return NodeKind.section
+    if row_type in {"end repeat", "end_repeat"}:
+        return NodeKind.repeat_group
+    return None
+
+
+def _diagnose_feature_columns(
+    headers: tuple[str, ...],
+    diagnostics: list[NativeRoutingDiagnostic],
+) -> None:
+    if any(header in _UNSUPPORTED_FEATURE_COLUMNS for header in headers):
+        diagnostics.append(NativeRoutingDiagnostic(code="XLSFORM_FEATURE_UNSUPPORTED"))
+
+
+def _diagnose_row_features(
+    row_type: str,
+    values: Mapping[str, str],
+    diagnostics: list[NativeRoutingDiagnostic],
+) -> None:
+    if any(values.get(column, "").strip() for column in _UNSUPPORTED_FEATURE_COLUMNS):
+        diagnostics.append(NativeRoutingDiagnostic(code="XLSFORM_FEATURE_UNSUPPORTED"))
+    for column in _LOGIC_COLUMNS:
+        expression = values.get(column, "").strip()
+        if any(
+            function.casefold() not in _SUPPORTED_FUNCTIONS
+            for function in _FUNCTION.findall(expression)
+        ):
+            diagnostics.append(NativeRoutingDiagnostic(code="XLSFORM_FUNCTION_UNSUPPORTED"))
+        if _contains_unsupported_arithmetic(expression):
+            diagnostics.append(NativeRoutingDiagnostic(code="XLSFORM_EXPRESSION_UNSUPPORTED"))
+    appearance = values.get("appearance", "").strip().casefold()
+    if row_type.casefold().startswith("xml-external ") or "search(" in appearance:
+        diagnostics.append(NativeRoutingDiagnostic(code="XLSFORM_FEATURE_UNSUPPORTED"))
+
+
+def _unique_diagnostics(
+    diagnostics: list[NativeRoutingDiagnostic],
+) -> tuple[NativeRoutingDiagnostic, ...]:
+    return tuple(dict.fromkeys(diagnostics))
+
+
+def _contains_unsupported_arithmetic(expression: str) -> bool:
+    without_references = _REFERENCE.sub("", expression)
+    without_quoted = re.sub(r"(['\"]).*?\1", "", without_references)
+    return any(symbol in without_quoted for symbol in ("+", "*", "/", "%")) or bool(
+        re.search(r"(?:\}|\)|[0-9])\s*-\s*(?:\$|\(|[0-9])", expression)
+    )
+
+
+def _check_deadline(deadline: float) -> None:
+    if time.monotonic() >= deadline:
+        raise SourceTimeoutError("Source conversion exceeded the configured deadline")
 
 
 __all__ = [
