@@ -10,7 +10,7 @@ provenance without calling a model provider.
 | --- | --- | --- |
 | `.pdf` | Docling PDF conversion with local OCR artifacts | `pdf` |
 | `.docx` | Inert DOCX XML parsing | Base |
-| `.xlsx` | Read-only workbook parsing plus optional XLSForm native routing | `tabular` |
+| `.xlsx` | Read-only XLSForm parsing with native SVIS and routing semantics | `tabular` |
 | `.csv` | UTF-8 CSV parsing | Base |
 | `.html`, `.htm` | Visible text and table extraction | Base |
 | `.md`, `.markdown` | Markdown paragraphs and tables | Base |
@@ -167,7 +167,9 @@ python -m pip install "survey-scribe[pdf]"
 ```
 
 PDF conversion requires a configured local Docling/EasyOCR artifact directory.
-Configure and validate it before constructing the default registry:
+Configure and validate it before constructing the default registry. The PDF
+adapter reads `DOCLING_ARTIFACTS_PATH`; the standalone validator also accepts
+`SURVEY_SCRIBE_OCR_CACHE`:
 
 === "Linux and macOS"
 
@@ -201,6 +203,10 @@ configures EasyOCR for English-only offline use with downloads disabled.
 The PDF worker sets offline flags and blocks common Python socket calls during
 conversion. This is application-level protection, not an operating-system
 sandbox. Use process isolation and network policy for hostile documents.
+
+OCR is currently configured for English. A validated cache proves artifact
+identity and offline availability; it does not prove recognition quality for a
+new document, language, scan condition, or layout.
 
 ## XLSX safety
 

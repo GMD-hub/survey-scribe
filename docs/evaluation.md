@@ -66,12 +66,111 @@ metadata can describe one observed dynamic response, but it does not pin the
 route. A missing or failed capture limits quality claims but does not weaken or
 block deterministic mechanics evidence.
 
+## Authoritative quality command
+
+Run the complete deterministic quality gate from a source checkout:
+
+```console
+uv run python scripts/evaluate_quality.py --manifest tests/fixtures/golden/manifest.toml --thresholds tests/fixtures/golden/quality-thresholds.toml --offline
+```
+
+The command blocks Python socket connections, validates both approved manifests,
+checks exact SVIS serialization, and reuses the routing evaluator. Its JSON report
+at `.cache/quality/evaluation.json` names every threshold, baseline, value,
+availability state, and result. The synthetic baseline can pass exact schema and
+routing mechanics only. `variable_recall`, `field_accuracy`, and
+`dense_repeated_table_recall` stay explicitly unavailable until an approved real
+corpus exists. An unavailable metric does not become a synthetic quality claim.
+
+## Security boundaries
+
+Security has two separate commands:
+
+```console
+uv run python scripts/run_security_gates.py collect --output-dir .cache/security
+uv run python scripts/run_security_gates.py verify --reports .cache/security --allowlist security/allowlist.toml
+```
+
+`collect` invokes `pip-audit`, Bandit, and detect-secrets. Only the dependency
+advisory lookup is network-enabled. Static and tracked-file secret scans are local.
+Collection writes machine-readable scanner envelopes even when a scanner reports
+findings; collection does not decide policy.
+
+Bandit and detect-secrets are labeled `tool-offline`, not `network-blocked`.
+Their selected modes have no network function, but the collection command does
+not install an operating-system sandbox around scanner child processes. The
+authoritative `verify` process still enforces its in-process socket boundary.
+
+`verify` blocks Python socket connections before it reads evidence. It rejects
+missing, malformed, stale, future-dated, incomplete, or wrong-boundary reports. It
+also requires every allowlist entry to name its scanner, exact finding fingerprint,
+owner, rationale, and future expiry. This command is the only authoritative
+security policy exit. `.secrets.baseline` separately records reviewed synthetic
+values and checksums with an owner, rationale, and expiry. The current dependency
+allowlist has short-lived entries for `diskcache` and `transformers`, which are
+transitive dependencies without a currently compatible fixed release.
+
+Workflow policy is also local and deterministic:
+
+```console
+uv run python scripts/check_workflow_policy.py .github/workflows
+```
+
+It requires reviewed immutable action SHAs, top-level `contents: read`, no tag
+trigger, and no package publication. The only deployment exception is the approved
+GitHub Pages workflow in `deploy-docs.yml`, with job-scoped `pages: write` and
+`id-token: write` as recorded in `docs/legal-disposition.md`.
+
+## Package and SBOM evidence
+
+After dependency and wheelhouse preparation, run the artifact checks offline:
+
+```console
+uv build
+uv run twine check --strict dist/*.whl dist/*.tar.gz
+uv run check-wheel-contents dist/*.whl
+uv run python scripts/build_wheel_sbom.py --wheel dist/survey_scribe-0.1.0-py3-none-any.whl --wheelhouse .cache/wheelhouse --output dist/sbom.cdx.json
+UV_OFFLINE=1 uv run pytest tests/package
+```
+
+The wheelhouse preparation step is the last package-job network boundary. SBOM
+generation and package tests then run with `UV_OFFLINE=1`. The SBOM command
+installs only the exact wheel and locked runtime wheels in a temporary environment.
+It validates CycloneDX 1.6, root name/version, direct dependency names, and the
+exact wheel SHA-256. Package tests verify the same artifact's contents and block
+network during import and CLI smoke checks.
+
+CI runs all required test categories with `pytest-socket --disable-socket
+--allow-unix-socket` and the configured 95 percent coverage floor. The
+Unix-socket exception is required by Python's local asyncio event loop and does
+not permit TCP provider traffic.
+
+Documentation and browser evidence use an explicit browser-install boundary:
+
+```console
+uv run playwright install chromium
+UV_OFFLINE=1 uv run mkdocs build --strict --clean
+UV_OFFLINE=1 uv run linkchecker --ignore-url='^https?://' site/
+UV_OFFLINE=1 uv run pytest --disable-socket --allow-unix-socket tests/docs tests/browser
+```
+
+The browser tests fulfill a virtual local origin only from generated `site/`
+files and reject every external route. The locally pinned
+`axe-playwright-python==0.1.8` package embeds axe-core 4.12.1. Browser checks fail on
+serious or critical WCAG 2 A/AA and WCAG 2.1 AA violations on every desktop and
+mobile route. Deterministic checks also cover one page heading, heading order,
+unique IDs, keyboard behavior, mobile overflow, and playground policy. No live
+provider call is part of these commands.
+
 ## Golden extraction manifest requirements
 
 Each fixture record must include path, kind, rights basis, restrictions,
 SHA-256, expected variable count, field-judgment status, provider/model identity,
-and prompt version. Validation fails on a missing file, checksum drift, unknown
-rights basis, or a missing required threshold.
+and prompt version. Approved sanitized source and output records must bind each
+other by ID and digest. The output stores a recorded `actual_output`, an expected
+variable-ID inventory, independent JSON-pointer field judgments, and explicit
+dense-table row-variable inventories. Validation fails on a missing pair, stale
+checksum, invalid judgment, unknown rights basis, or missing threshold.
 
 Routing source manifests instead declare source-only, benchmark-ineligible
 fixtures. The routing mechanics manifest declares repository-generated synthetic

@@ -49,8 +49,9 @@ Hatchling, build, and Twine.
 | `pdf` | Docling and OCR dependencies | `pip install "survey-scribe[pdf]"` |
 | `tabular` | Workbook parsing dependencies | `pip install "survey-scribe[tabular]"` |
 
-These extras prepare dependency boundaries for later package adapters. They do
-not install the repository-only `docling_pipeline.py` command.
+These extras supply optional provider and source dependencies. The installed
+`survey-scribe` command is in the base package; the deprecated repository-only
+`docling_pipeline.py` script is not included in the wheel.
 
 ## Verify the Install
 

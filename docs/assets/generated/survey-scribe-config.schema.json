@@ -1,0 +1,260 @@
+{
+  "$defs": {
+    "ArtifactConfig": {
+      "additionalProperties": false,
+      "description": "Default artifact publication settings.",
+      "properties": {
+        "manifest": {
+          "const": true,
+          "default": true,
+          "title": "Manifest",
+          "type": "boolean"
+        },
+        "sidecar": {
+          "default": true,
+          "title": "Sidecar",
+          "type": "boolean"
+        }
+      },
+      "title": "ArtifactConfig",
+      "type": "object"
+    },
+    "GenerationConfig": {
+      "additionalProperties": false,
+      "description": "Structured generation settings shared by provider adapters.",
+      "properties": {
+        "max_output_tokens": {
+          "default": 4096,
+          "minimum": 1,
+          "title": "Max Output Tokens",
+          "type": "integer"
+        },
+        "seed": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Seed"
+        },
+        "temperature": {
+          "default": 0.0,
+          "maximum": 2.0,
+          "minimum": 0.0,
+          "title": "Temperature",
+          "type": "number"
+        }
+      },
+      "title": "GenerationConfig",
+      "type": "object"
+    },
+    "RetryConfig": {
+      "additionalProperties": false,
+      "description": "Bounded retry settings.",
+      "properties": {
+        "initial_delay_seconds": {
+          "default": 0.5,
+          "minimum": 0.0,
+          "title": "Initial Delay Seconds",
+          "type": "number"
+        },
+        "max_attempts": {
+          "default": 3,
+          "maximum": 10,
+          "minimum": 1,
+          "title": "Max Attempts",
+          "type": "integer"
+        },
+        "max_delay_seconds": {
+          "default": 8.0,
+          "minimum": 0.0,
+          "title": "Max Delay Seconds",
+          "type": "number"
+        }
+      },
+      "title": "RetryConfig",
+      "type": "object"
+    },
+    "RoutingConfig": {
+      "additionalProperties": false,
+      "description": "Provider-neutral routing limits and thresholds.",
+      "properties": {
+        "generation": {
+          "$ref": "#/$defs/GenerationConfig"
+        },
+        "low_confidence_threshold": {
+          "default": 0.7,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Low Confidence Threshold",
+          "type": "number"
+        },
+        "max_candidate_targets_per_reference": {
+          "default": 10,
+          "maximum": 10,
+          "minimum": 1,
+          "title": "Max Candidate Targets Per Reference",
+          "type": "integer"
+        },
+        "max_concurrency": {
+          "default": 4,
+          "maximum": 128,
+          "minimum": 1,
+          "title": "Max Concurrency",
+          "type": "integer"
+        },
+        "max_condition_depth": {
+          "default": 6,
+          "maximum": 6,
+          "minimum": 1,
+          "title": "Max Condition Depth",
+          "type": "integer"
+        },
+        "max_condition_nodes": {
+          "default": 100,
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Max Condition Nodes",
+          "type": "integer"
+        },
+        "max_discrepancies_per_review_call": {
+          "default": 25,
+          "maximum": 25,
+          "minimum": 1,
+          "title": "Max Discrepancies Per Review Call",
+          "type": "integer"
+        },
+        "max_inventory_items_per_call": {
+          "default": 250,
+          "maximum": 250,
+          "minimum": 1,
+          "title": "Max Inventory Items Per Call",
+          "type": "integer"
+        },
+        "max_request_tokens": {
+          "default": 32000,
+          "maximum": 32000,
+          "minimum": 1,
+          "title": "Max Request Tokens",
+          "type": "integer"
+        },
+        "max_source_quote_chars": {
+          "default": 2000,
+          "maximum": 2000,
+          "minimum": 1,
+          "title": "Max Source Quote Chars",
+          "type": "integer"
+        },
+        "max_source_spans_per_decision": {
+          "default": 8,
+          "maximum": 8,
+          "minimum": 1,
+          "title": "Max Source Spans Per Decision",
+          "type": "integer"
+        },
+        "retry": {
+          "$ref": "#/$defs/RetryConfig"
+        },
+        "unusual_in_degree_threshold": {
+          "default": 4,
+          "minimum": 1,
+          "title": "Unusual In Degree Threshold",
+          "type": "integer"
+        },
+        "unusual_out_degree_threshold": {
+          "default": 3,
+          "minimum": 1,
+          "title": "Unusual Out Degree Threshold",
+          "type": "integer"
+        }
+      },
+      "title": "RoutingConfig",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Validated application configuration with non-serializable credentials.",
+  "properties": {
+    "api_version": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Api Version"
+    },
+    "artifacts": {
+      "$ref": "#/$defs/ArtifactConfig"
+    },
+    "base_url": {
+      "anyOf": [
+        {
+          "format": "uri",
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Base Url"
+    },
+    "confidence_threshold": {
+      "default": 0.7,
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Confidence Threshold",
+      "type": "number"
+    },
+    "config_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Config Version",
+      "type": "integer"
+    },
+    "generation": {
+      "$ref": "#/$defs/GenerationConfig"
+    },
+    "max_concurrency": {
+      "default": 4,
+      "maximum": 128,
+      "minimum": 1,
+      "title": "Max Concurrency",
+      "type": "integer"
+    },
+    "model": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Model"
+    },
+    "provider": {
+      "default": "openai",
+      "title": "Provider",
+      "type": "string"
+    },
+    "retry": {
+      "$ref": "#/$defs/RetryConfig"
+    },
+    "routing": {
+      "$ref": "#/$defs/RoutingConfig"
+    }
+  },
+  "title": "SurveyScribeConfig",
+  "type": "object"
+}

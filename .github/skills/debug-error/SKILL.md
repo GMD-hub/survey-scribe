@@ -20,11 +20,10 @@ If any are missing, ask before proceeding.
 ## Common error types and their fixes
 
 **AuthenticationError or API key not found**
-The Anthropic API key is missing or incorrect.
-Fix: Check that .env exists in the project root and contains:
-ANTHROPIC_API_KEY=sk-ant-...
-The key must not have quotes around it. The .env file must be in the
-same folder as pipeline.py, not inside a subfolder.
+The selected provider credential is missing or incorrect.
+Fix: Run `survey-scribe config check`. Set a supported environment variable,
+such as `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`, or use the matching non-echo
+CLI prompt. Survey Scribe does not load `.env` files automatically.
 
 **ModuleNotFoundError: No module named X**
 A required library is not installed, or the virtual environment is not active.
@@ -32,16 +31,16 @@ Fix: Check whether (.venv) appears in the terminal prompt.
 If not, activate the virtual environment:
   Mac/Linux: source .venv/bin/activate
   Windows: .venv\Scripts\activate
-Then run: pip install -r requirements.txt
+Then run: `uv sync --locked`, including the required optional extra.
 
 **FileNotFoundError**
 The PDF path is wrong.
 Fix: Check that the file exists and the path is spelled correctly.
 Run: ls tests/samples/   to see what files are actually there.
 
-**[SKIP] Scanned PDF**
-Not an error. The PDF has no readable text layer.
-This PDF cannot be processed. Use a different PDF.
+**Scanned PDF dependency or cache error**
+Install the `pdf` extra and verify the approved local OCR artifact cache. The
+packaged adapter processes scanned PDFs and does not silently skip them.
 
 **ValidationError from Pydantic**
 The LLM returned output that does not match the SVIS schema.
@@ -62,5 +61,5 @@ Always provide:
 2. Root cause: What specifically caused it?
 3. Exact fix: The command to run or the line to change.
 4. Verification step: How to confirm the fix worked.
-5. Scope check: Is this a setup problem or a code problem? Remind the user
-   that code changes outside agents/prompts.py require project lead approval.
+5. Scope check: State whether this is configuration, optional dependencies,
+   source validation, provider transport, extraction, or artifact publication.

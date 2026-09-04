@@ -38,23 +38,16 @@ Changes to these items can affect consumers:
 Pin a compatible package version when another system consumes generated JSON or
 JSON Schema.
 
-## Deprecated schema path
+## Removed source-tree schema path
 
-The wheel retains this compatibility import:
-
-```python
-from schemas.svis import SurveySVIS
-```
-
-New code must use `from survey_scribe import SurveySVIS`. The `schemas` path can
-be removed in a future major release after a documented deprecation period.
+The old repository-only `schemas.svis` path is not in the wheel. Import public
+models from `survey_scribe`.
 
 ## Legacy repository pipeline
 
-The repository contains `docling_pipeline.py` for characterization and migration.
-It is not included in the wheel, is not exposed by the installed command, and
-depends on internal provider authentication. Its behavior is a repository
-compatibility contract, not the installed SDK contract.
+The repository contains `docling_pipeline.py` for migration. It is not included
+in the wheel. It lazily uses the public package API and current configuration
+resolution while preserving the selected legacy entry points.
 
 For existing repository users, these entry points remain characterized through
 1.x:
@@ -65,22 +58,9 @@ For existing repository users, these entry points remain characterized through
 - Existing SVIS keys, nesting, JSON value types, enum values, defaults, nulls,
   and field order
 
-### Characterized outcomes
-
-| Condition | Repository-only legacy behavior |
-| --- | --- |
-| Missing input | Message on stdout and exit 1 |
-| Non-PDF suffix | Message on stdout and exit 1 |
-| Scanned input | Print skip message, write nothing, return `None` |
-| No converted chunks | Print skip message, write nothing, return `None` |
-| Metadata `InstructorError` | Write output with placeholder metadata |
-| One failed variable chunk | Omit that chunk and append extraction notes |
-| All variable chunks fail | Write an empty variable list |
-| Existing output | Unlink it and then replace it |
-| Successful `run()` | Return `None` |
-
-Uncaught import, authentication, provider, and write exceptions are
-characterized behavior, not recommended application behavior.
+The shim accepts only PDF input, writes the legacy projection without a sidecar,
+overwrites an existing projection, returns `None` from `run()`, and reports one
+actionable error for invalid input, configuration, conversion, or writing.
 
 Only corrections listed in
 `tests/fixtures/legacy/intentional-corrections.toml` can alter output values while
@@ -89,8 +69,9 @@ decision.
 
 ## Command-line boundary
 
-The `survey-scribe` command supports `--help`, `--version`, and
-`schema export routing`. An extraction command is not part of `0.1.x`.
+The `survey-scribe` command supports `convert`, `batch`, `providers`,
+`config check`, and `schema export routing`. See the [migration guide](migration.md)
+for differences from the root shim.
 
 ## Additive routed contract
 

@@ -38,7 +38,10 @@ validation errors.
 | `artifacts` | `ArtifactConfig` | See below | Frozen nested model |
 
 At most one credential form can be set. A credential is not required for local
-schema and source operations.
+schema and source operations. The current [configuration serialization
+schema](../reference/schemas.md) is generated from `SurveyScribeConfig` in
+serialization mode and checked for drift. It intentionally omits credential
+fields and `token_callback`.
 
 ## Nested settings
 
@@ -93,10 +96,8 @@ from administrator-owned configuration and inject it with the nested settings:
 router = QuestionnaireRouter(provider, config=config.routing)
 ```
 
-!!! note
-
-    `ArtifactConfig` records future application defaults. In `0.1.x`, pass
-    `sidecar` and `overwrite` directly to `ExtractionResult.write()`.
+The installed CLI uses `artifacts.sidecar` as its default. `--no-sidecar`
+overrides it for successful output only. Manifests cannot be disabled.
 
 ## Safe TOML
 
@@ -204,6 +205,10 @@ config = SurveyScribeConfig.resolve(
 `resolve_cli()` always resolves the supplied environment and gives flags the
 highest priority. Pass `environ={}` in controlled tests to prevent access to the
 process environment.
+
+Credential forms are one precedence group. A higher-rank prompted API key, for
+example, replaces a lower-rank bearer token. Multiple credential forms in the
+same rank remain invalid.
 
 ## Errors
 

@@ -1,0 +1,390 @@
+{
+  "$defs": {
+    "AnswerCategory": {
+      "description": "One answer option for a categorical variable.",
+      "properties": {
+        "code": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Value stored in the raw microdata file.",
+          "title": "Code"
+        },
+        "is_missing": {
+          "default": false,
+          "description": "Whether the code represents a non-substantive missing response.",
+          "title": "Is Missing",
+          "type": "boolean"
+        },
+        "label": {
+          "description": "Human-readable answer label.",
+          "title": "Label",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "label"
+      ],
+      "title": "AnswerCategory",
+      "type": "object"
+    },
+    "DataType": {
+      "description": "Simplified data type used for harmonization.",
+      "enum": [
+        "numeric",
+        "categorical_single",
+        "categorical_multi",
+        "text",
+        "date",
+        "other"
+      ],
+      "title": "DataType",
+      "type": "string"
+    },
+    "NumericRange": {
+      "description": "Valid value range for a numeric variable.",
+      "properties": {
+        "max_value": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Maximum valid value.",
+          "title": "Max Value"
+        },
+        "min_value": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Minimum valid value.",
+          "title": "Min Value"
+        },
+        "notes": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Context about range interpretation.",
+          "title": "Notes"
+        }
+      },
+      "title": "NumericRange",
+      "type": "object"
+    },
+    "StudyType": {
+      "description": "Survey instrument classification.",
+      "enum": [
+        "lsms",
+        "dhs",
+        "lfs",
+        "hhs",
+        "mics",
+        "cwiq",
+        "census",
+        "other"
+      ],
+      "title": "StudyType",
+      "type": "string"
+    },
+    "SurveyVariable": {
+      "description": "Structured description of one questionnaire variable.",
+      "properties": {
+        "categories": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/AnswerCategory"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Complete answer options for categorical variables.",
+          "title": "Categories"
+        },
+        "data_type": {
+          "$ref": "#/$defs/DataType",
+          "description": "Harmonization-oriented variable type."
+        },
+        "extraction_confidence": {
+          "description": "LLM self-assessed confidence in the accuracy of this extraction. Score the whole record, not individual fields. 1.0 = all fields clear and unambiguous. 0.9 = one minor uncertainty (e.g. label is slightly paraphrased). 0.7 = notable uncertainty but overall reliable. Below 0.7 = significant doubt; set needs_review=True. 0.0 = the LLM is guessing.",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Extraction Confidence",
+          "type": "number"
+        },
+        "label": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Short human-readable variable label.",
+          "title": "Label"
+        },
+        "module": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Questionnaire section or module.",
+          "title": "Module"
+        },
+        "needs_review": {
+          "default": false,
+          "description": "Whether human review is required.",
+          "title": "Needs Review",
+          "type": "boolean"
+        },
+        "notes": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Extraction uncertainty or context.",
+          "title": "Notes"
+        },
+        "numeric_range": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NumericRange"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Documented valid range for numeric variables."
+        },
+        "question_text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Question text preserved from the questionnaire.",
+          "title": "Question Text"
+        },
+        "raw_name": {
+          "description": "Variable name used in raw microdata.",
+          "title": "Raw Name",
+          "type": "string"
+        },
+        "skip_condition_raw": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Unmodified source routing or skip instruction.",
+          "title": "Skip Condition Raw"
+        },
+        "source_page": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Zero-indexed source page for review provenance.",
+          "title": "Source Page"
+        },
+        "unit_of_analysis": {
+          "$ref": "#/$defs/UnitLevel",
+          "default": "individual",
+          "description": "Entity described by the variable."
+        },
+        "universe": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Population asked the question.",
+          "title": "Universe"
+        }
+      },
+      "required": [
+        "raw_name",
+        "data_type",
+        "extraction_confidence"
+      ],
+      "title": "SurveyVariable",
+      "type": "object"
+    },
+    "UnitLevel": {
+      "description": "Unit of analysis described by a variable.",
+      "enum": [
+        "individual",
+        "household",
+        "other"
+      ],
+      "title": "UnitLevel",
+      "type": "string"
+    }
+  },
+  "description": "Complete SVIS for one survey instrument.",
+  "properties": {
+    "country_code": {
+      "description": "ISO3 survey country code.",
+      "title": "Country Code",
+      "type": "string"
+    },
+    "data_collection_mode": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Collection mode such as CAPI, paper, or mixed.",
+      "title": "Data Collection Mode"
+    },
+    "extraction_date": {
+      "description": "Date on which extraction ran.",
+      "format": "date",
+      "title": "Extraction Date",
+      "type": "string"
+    },
+    "extraction_notes": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Document-level extraction diagnostics.",
+      "title": "Extraction Notes"
+    },
+    "language": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Primary questionnaire language.",
+      "title": "Language"
+    },
+    "source_file": {
+      "description": "Original questionnaire filename.",
+      "title": "Source File",
+      "type": "string"
+    },
+    "source_format": {
+      "description": "Source format such as pdf or xlsx.",
+      "title": "Source Format",
+      "type": "string"
+    },
+    "study_type": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/StudyType"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Survey classification."
+    },
+    "survey_id": {
+      "description": "Stable COUNTRYISO3_YEAR_ACRONYM identifier.",
+      "title": "Survey Id",
+      "type": "string"
+    },
+    "survey_name": {
+      "description": "Official survey name.",
+      "title": "Survey Name",
+      "type": "string"
+    },
+    "variables": {
+      "description": "Variables in stable source-document order.",
+      "items": {
+        "$ref": "#/$defs/SurveyVariable"
+      },
+      "title": "Variables",
+      "type": "array"
+    },
+    "year": {
+      "description": "Survey reference year.",
+      "title": "Year",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "survey_id",
+    "country_code",
+    "year",
+    "survey_name",
+    "variables",
+    "source_file",
+    "source_format",
+    "extraction_date"
+  ],
+  "title": "SurveySVIS",
+  "type": "object"
+}

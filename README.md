@@ -4,17 +4,15 @@
 [![Python 3.11-3.13](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-Survey Scribe provides typed Pydantic models for the Survey Variable
-Information Schema (SVIS), safe local source normalization, deterministic
-chunking, questionnaire routing graphs, secure configuration resolution, and versioned artifacts for
-household survey questionnaire metadata. The repository also contains a legacy
-PDF extraction pipeline used by the World Bank Global Monitoring Database team.
+Survey Scribe converts local survey questionnaires to the typed Survey Variable
+Information Schema (SVIS). It provides synchronous, asynchronous, and batch APIs,
+provider adapters, safe local source normalization, deterministic chunking,
+questionnaire routing graphs, secure configuration, and versioned artifacts.
 
-> **Alpha status:** Version `0.1.0` ships typed models, configuration, results,
-> serialization, local source APIs, additive routed SVIS models, the
-> `QuestionnaireRouter`, and schema export. The legacy
-> extraction pipeline is not included in the wheel and depends on internal
-> authentication. Package publication remains subject to the approval recorded
+> **Alpha status:** Version `0.1.0` ships the public `SurveyScribe` API, installed
+> conversion CLI, typed models, source and provider adapters, transactional
+> artifacts, and the `QuestionnaireRouter`. The deprecated root script is not
+> included in the wheel. Package publication remains subject to the approval recorded
 > in [`docs/legal-disposition.md`](docs/legal-disposition.md).
 
 ## Features
@@ -29,7 +27,8 @@ PDF extraction pipeline used by the World Bank Global Monitoring Database team.
 - Source-grounded directed routing multigraphs with separate evidence and audit history.
 - Native XLSForm relevance and repeat routing without a provider call.
 - A PEP 561 `py.typed` marker for editor and type-checker support.
-- A dependency-light command for help, version, and deterministic routing-schema export.
+- An installed CLI for single and batch conversion, configuration checks,
+  provider discovery, and deterministic routing-schema export.
 
 ## Installation
 
@@ -54,8 +53,8 @@ pip install "survey-scribe[pdf]"
 pip install "survey-scribe[tabular]"
 ```
 
-Installing an extra does not expose the repository-only legacy pipeline as a
-wheel command.
+The base package includes the CLI. Install provider and source extras required by
+the selected conversion path.
 
 ## Quick Start
 
@@ -98,8 +97,18 @@ Inspect the installed command without loading optional providers:
 ```console
 survey-scribe --help
 survey-scribe --version
+survey-scribe providers
+survey-scribe config check
+survey-scribe convert questionnaire.pdf --output-dir output
+survey-scribe batch questionnaire-a.pdf questionnaire-b.xlsx --output-dir output
 survey-scribe schema export routing > questionnaire-routing-graph-v1.0.json
 ```
+
+Set credentials with environment variables or use `--prompt-api-key` /
+`--prompt-bearer-token`. The CLI writes sidecars and manifests by default,
+refuses existing artifacts unless `--overwrite` is present, and supports
+`--strict` when partial output must produce a nonzero exit. See the
+[CLI guide](docs/cli.md) and [migration guide](docs/migration.md).
 
 ## Documentation
 

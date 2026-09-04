@@ -1,7 +1,8 @@
 # Quickstart
 
 This guide creates a typed SVIS record, serializes it, validates it again, and
-writes a versioned artifact set.
+writes a versioned artifact set. For direct questionnaire conversion, install the
+required source and provider extras first.
 
 ## 1. Define variables
 
@@ -124,5 +125,102 @@ for block in document.blocks:
 ```
 
 Source conversion returns `SourceDocument`. It does not call a model provider and
-does not create `SurveySVIS`. See [Local Sources](../guides/sources.md) for format,
+is useful when you need to inspect normalized blocks. `SurveyScribe.convert()`
+continues from normalized content to `SurveySVIS`, or uses native XLSForm output
+without a provider call. See [Local Sources](../guides/sources.md) for format,
 resource, and security controls.
+
+## 6. Convert with `SurveyScribe`
+
+For a configured provider, use the synchronous facade outside an event loop:
+
+```python
+from pathlib import Path
+
+from survey_scribe import SurveyScribe
+
+with SurveyScribe.from_config(resolve_environment=True) as client:
+    result = client.convert(Path("questionnaire.pdf"))
+
+if result.output is None:
+    raise RuntimeError("Questionnaire conversion failed")
+```
+
+`from_config()` reads only `./survey-scribe.toml` unless a path is supplied.
+Environment access is explicit in the SDK. In async code, use `aconvert()` and
+`aclose()` instead.
+
+The following executable test example proves the same facade without a provider
+SDK, credential, or network route:
+
+```python
+# docs-exec: survey-scribe-fake
+import json
+from datetime import date
+
+from survey_scribe import DataType, ResultStatus, SurveyScribe, SurveyVariable
+from survey_scribe.pipeline import BlockExtraction, ExtractedMetadata, ExtractedVariable
+from survey_scribe.providers import CapabilityEvidence, ModelCapabilities
+from survey_scribe.providers.testing import DeterministicFakeProvider, FakeRequest
+
+
+def respond(request: FakeRequest) -> object:
+    if request.response_model is ExtractedMetadata:
+        return ExtractedMetadata(
+            survey_id="SYN_2026_HHS",
+            country_code="SYN",
+            year=2026,
+            survey_name="Synthetic Household Survey",
+        )
+    content = next(message.content for message in request.messages if message.role == "user")
+    chunk_id = content.split("CHUNK_ID: ", 1)[1].splitlines()[0]
+    block_ids = tuple(json.loads(content.split("SOURCE_BLOCK_IDS: ", 1)[1].splitlines()[0]))
+    return BlockExtraction(
+        block_id=chunk_id,
+        variables=(
+            ExtractedVariable(
+                variable=SurveyVariable(
+                    raw_name="age",
+                    label="Age in years",
+                    data_type=DataType.numeric,
+                    extraction_confidence=1.0,
+                ),
+                source_block_ids=(block_ids[0],),
+            ),
+        ),
+    )
+
+
+capabilities = ModelCapabilities(
+    provider="synthetic",
+    model="deterministic-fake",
+    structured_output=True,
+    strict_schema=True,
+    max_input_tokens=32_000,
+    max_output_tokens=4_096,
+    supported_generation_settings=frozenset(
+        {"temperature", "max_output_tokens", "seed"}
+    ),
+    evidence=CapabilityEvidence.configuration_only,
+    tested_sdk_version="synthetic-no-sdk",
+)
+provider = DeterministicFakeProvider(capabilities=capabilities, responder=respond)
+source = DOCS_TMP_PATH / "synthetic-questionnaire.txt"
+source.write_text("Age in years", encoding="utf-8")
+
+with SurveyScribe(provider, extraction_date=date(2026, 9, 4)) as client:
+    result = client.convert(source)
+
+assert result.status is ResultStatus.success
+assert result.output is not None
+assert result.output.variables[0].raw_name == "age"
+```
+
+## 7. Run the installed command
+
+```console
+survey-scribe convert questionnaire.txt --output-dir output
+```
+
+The [command-line guide](../cli.md) documents configuration, output files, batch
+runs, and default versus strict exit behavior.
