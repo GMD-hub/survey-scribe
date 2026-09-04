@@ -6,6 +6,12 @@ variable_recall = 0.95
 field_accuracy = 0.95
 dense_repeated_table_recall = 0.95
 
+[baselines]
+exact_schema_compatibility = "golden:manifest.toml#schema-contract-v1"
+variable_recall = "unavailable:approved-real-corpus"
+field_accuracy = "unavailable:approved-real-corpus"
+dense_repeated_table_recall = "unavailable:approved-real-corpus"
+
 [availability]
 synthetic_mechanics = true
 approved_real_corpus = false

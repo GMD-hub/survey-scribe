@@ -18,18 +18,19 @@ jobs:
     name: Quality
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: "0.8.11"
           enable-cache: true
-      - run: uv sync --locked --extra openai --extra pdf --extra tabular --python 3.11
-      - run: uv run --no-config --no-project --default-index https://pypi.org/simple --script scripts/validate_golden_manifest.py
+      - run: uv sync --locked --all-extras --python 3.11
       - run: uv run --no-sync ruff check .
       - run: uv run --no-sync ruff format --check .
       - run: uv run --no-sync pyright
+      - run: uv run --no-sync python scripts/evaluate_quality.py --manifest tests/fixtures/golden/manifest.toml --thresholds tests/fixtures/golden/quality-thresholds.toml --offline
+      - run: uv run --no-sync python scripts/check_workflow_policy.py .github/workflows
 
   test:
     name: Test (${{ matrix.os }}, Python ${{ matrix.python-version }})
@@ -40,34 +41,71 @@ jobs:
         python-version: ["3.11", "3.12", "3.13"]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: "0.8.11"
           enable-cache: true
-      - run: uv sync --locked --extra openai --extra pdf --extra tabular --python ${{ matrix.python-version }}
-      - run: uv run --no-sync pytest tests/unit tests/characterization tests/contract tests/integration tests/test_schema.py --cov=survey_scribe --cov-branch --cov-report=term-missing --cov-report=xml
+      - run: uv sync --locked --all-extras --python ${{ matrix.python-version }}
+      - name: Run offline test suite with coverage
+        env:
+          UV_OFFLINE: "1"
+        run: uv run --no-sync pytest --disable-socket --allow-unix-socket tests --ignore=tests/browser --ignore=tests/docs --ignore=tests/package --cov=survey_scribe --cov-branch --cov-report=term-missing --cov-report=xml
+
+  security:
+    name: Security evidence
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.8.11"
+          enable-cache: true
+      - name: Prepare locked security tools
+        run: uv sync --locked --all-extras --python 3.11
+      - name: Collect scanner reports (dependency advisory lookup is network-enabled)
+        run: uv run --no-sync python scripts/run_security_gates.py collect --output-dir .cache/security
+      - name: Verify scanner reports (network-blocked in process)
+        run: uv run --no-sync python scripts/run_security_gates.py verify --reports .cache/security --allowlist security/allowlist.toml
+      - name: Upload bounded security reports on failure
+        if: failure()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: security-reports
+          path: .cache/security/*.json
+          if-no-files-found: warn
+          retention-days: 7
 
   package:
     name: Build and inspect distributions
-    needs: [quality, test]
+    needs: [quality, test, security]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: "0.8.11"
           enable-cache: true
-      - run: uv sync --locked --python 3.11
+      - run: uv sync --locked --all-extras --python 3.11
       - run: uv build
-      - run: uv run twine check --strict dist/*
+      - run: uv run --no-sync twine check --strict dist/*.whl dist/*.tar.gz
+      - run: uv run --no-sync check-wheel-contents dist/*.whl
       - run: uv run --no-config --no-project --default-index https://pypi.org/simple --with pip==25.2 python -m pip download --dest .cache/wheelhouse --requirement tests/fixtures/package/constraints.txt
-      - run: uv run pytest tests/package
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - name: Test exact artifacts offline
+        env:
+          UV_OFFLINE: "1"
+        run: uv run --no-sync pytest tests/package
+      - name: Generate SBOM offline
+        env:
+          UV_OFFLINE: "1"
+        run: uv run --no-sync cyclonedx-py environment --output-file dist/sbom.cdx.json
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: survey-scribe-distributions
           path: dist/

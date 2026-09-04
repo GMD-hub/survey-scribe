@@ -20,7 +20,7 @@ def test_workflows_enforce_publication_boundary(repository_root: Path) -> None:
     ]
 
     assert all(value not in combined for value in prohibited)
-    assert "uv run twine check --strict dist/*" in combined
+    assert "uv run --no-sync twine check --strict dist/*.whl dist/*.tar.gz" in combined
     assert "uv run mkdocs build --strict" in combined
 
     deployment = (repository_root / ".github/workflows/deploy-docs.yml").read_text(encoding="utf-8")

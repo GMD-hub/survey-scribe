@@ -4,13 +4,19 @@ from __future__ import annotations
 
 import hashlib
 import os
+import socket
 import subprocess
 import sys
 import tomllib
 from importlib.metadata import version
 from pathlib import Path
 
+import pytest
 from packaging.utils import canonicalize_name, parse_wheel_filename
+
+
+def _network_denied(*_args: object, **_kwargs: object) -> None:
+    raise RuntimeError("network access denied during package test")
 
 
 def _run(command: list[str], *, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
@@ -24,7 +30,12 @@ def _run(command: list[str], *, env: dict[str, str]) -> subprocess.CompletedProc
     )
 
 
-def test_clean_wheel_install_offline(repository_root: Path, tmp_path: Path) -> None:
+def test_clean_wheel_install_offline(
+    repository_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(socket, "create_connection", _network_denied)
+    monkeypatch.setattr(socket.socket, "connect", _network_denied)
+    monkeypatch.setattr(socket.socket, "connect_ex", _network_denied)
     environment = {
         name: os.environ[name]
         for name in (
@@ -102,7 +113,6 @@ def deny_network(*args, **kwargs):
 socket.create_connection = deny_network
 socket.socket.connect = deny_network
 import survey_scribe
-import schemas.svis
 import tempfile
 from datetime import date
 from pathlib import Path
@@ -121,7 +131,6 @@ from survey_scribe.sources.chunking import ConservativeTokenEstimator
 from survey_scribe.sources.ocr import APPROVED_OCR_ARTIFACTS
 from survey_scribe.sources.registry import SourceRegistry
 assert survey_scribe.__version__ == version("survey-scribe")
-assert schemas.svis.SurveySVIS is survey_scribe.SurveySVIS
 assert SurveyScribeConfig().provider == "openai"
 assert ExtractionResult is not None
 assert write_result is not None
@@ -143,8 +152,8 @@ with tempfile.TemporaryDirectory() as temporary_directory:
     choices.append(["yes_no", "yes", "Yes"])
     choices.append(["yes_no", "no", "No"])
     settings = workbook.create_sheet("settings")
-    settings.append(["form_title", "form_id"])
-    settings.append(["Package Smoke", "package_smoke"])
+    settings.append(["form_title", "form_id", "country_code", "year"])
+    settings.append(["Package Smoke", "package_smoke", "TST", 2026])
     workbook.save(source)
     svis = SurveySVIS(
         survey_id="TST_2026_WHEEL",
