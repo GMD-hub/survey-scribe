@@ -36,6 +36,15 @@ def test_repository_workflows_pass_and_use_reviewed_action_pins(repository_root:
         assert f"{action}@{revision}" in combined
 
 
+def test_ci_network_guard_allows_only_cross_platform_event_loop_transports(
+    repository_root: Path,
+) -> None:
+    workflow = (repository_root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+
+    assert "pytest --allow-hosts=127.0.0.1,::1 --allow-unix-socket tests" in workflow
+    assert "pytest --disable-socket" not in workflow
+
+
 def test_mutable_action_tag_is_rejected(tmp_path: Path) -> None:
     path = _workflow(tmp_path, HEADER + "      - uses: actions/checkout@v7\n")
 

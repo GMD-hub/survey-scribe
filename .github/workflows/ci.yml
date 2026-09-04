@@ -52,7 +52,7 @@ jobs:
       - name: Run offline test suite with coverage
         env:
           UV_OFFLINE: "1"
-        run: uv run --no-sync pytest --disable-socket --allow-unix-socket tests --ignore=tests/browser --ignore=tests/docs --ignore=tests/package --cov=survey_scribe --cov-branch --cov-report=term-missing --cov-report=xml
+        run: uv run --no-sync pytest --allow-hosts=127.0.0.1,::1 --allow-unix-socket tests --ignore=tests/browser --ignore=tests/docs --ignore=tests/package --cov=survey_scribe --cov-branch --cov-report=term-missing --cov-report=xml
 
   security:
     name: Security evidence
