@@ -1,5 +1,5 @@
 {
-  "edge_count": 11,
+  "edge_count": 13,
   "edges": [
     {
       "edge_type": "reviews",
@@ -23,6 +23,18 @@
       "edge_type": "verifies",
       "source": ".cg-docs/reviews/2026-08-28-survey-scribe-production-package-refined-verify-review-3.md",
       "target": ".cg-docs/reviews/2026-08-28-survey-scribe-production-package-refined-review.md",
+      "target_missing": false
+    },
+    {
+      "edge_type": "reviews",
+      "source": ".cg-docs/reviews/2026-08-28-survey-scribe-production-package-refined-verify-review-4.md",
+      "target": ".cg-docs/plans/2026-08-28-survey-scribe-production-package-refined.md",
+      "target_missing": false
+    },
+    {
+      "edge_type": "verifies",
+      "source": ".cg-docs/reviews/2026-08-28-survey-scribe-production-package-refined-verify-review-4.md",
+      "target": ".cg-docs/reviews/2026-08-31-questionnaire-routing-graph-review.md",
       "target_missing": false
     },
     {
@@ -317,6 +329,28 @@
       ]
     },
     {
+      "date": "2026-09-04",
+      "entity_type": "review",
+      "path": ".cg-docs/reviews/2026-08-28-survey-scribe-production-package-refined-verify-review-4.md",
+      "slug": "2026-08-28-survey-scribe-production-package-refined-verify-review-4",
+      "status": "",
+      "summary": "**Review mode**: light verification **Parent review**: `.cg-docs/reviews/2026-08-31-questionnaire-routing-graph-review.md` **Files reviewed**: 106 current tracked and untracked Phase 4-5 implementation, test, documentation, workflow, and state files **Findings**: 17 (P0: 4, P1: 5, P2: 8, P3: 0)",
+      "tags": [],
+      "title": "2026-08-28-survey-scribe-production-package-refined-verify-review-4",
+      "top_keywords": [
+        "src",
+        "survey_scribe",
+        "evidence",
+        "xlsform",
+        "sources",
+        "scripts",
+        "custom",
+        "xlsform.py",
+        "verification",
+        "tests"
+      ]
+    },
+    {
       "date": "2026-08-28",
       "entity_type": "review",
       "path": ".cg-docs/reviews/2026-08-28-survey-scribe-production-package-refined-verify-review.md",
@@ -538,6 +572,37 @@
       ]
     },
     {
+      "date": "2026-09-04",
+      "entity_type": "solution",
+      "path": ".cg-docs/solutions/testing-patterns/2026-09-04-test-truth-across-publication-boundaries.md",
+      "slug": "2026-09-04-test-truth-across-publication-boundaries",
+      "status": "",
+      "summary": "The public SDK, CLI, package artifacts, security gates, and documentation passed large test suites. Verification still found cases where a valid-looking public output did not tell the full truth: - an XLSForm with missing required metadata reported success with placeholders; - calculation rows preserved as variables also became routing nodes; - row evidence cited a whole worksheet instead of the physical source row; - a deprecated shim wrote a partial projection without its diagnostic sidecar; - Azure bearer tokens entered the API-key path; - a batch manifest was checked before work but not reserved through publication; - a development-environment SBOM...",
+      "tags": [
+        "partial-results",
+        "metadata",
+        "provenance",
+        "authentication",
+        "cli",
+        "manifests",
+        "sbom",
+        "accessibility"
+      ],
+      "title": "Test Truth Across Publication Boundaries",
+      "top_keywords": [
+        "partial",
+        "test truth across publication boundaries",
+        "test",
+        "publication",
+        "truth",
+        "boundaries",
+        "across",
+        "success",
+        "failed",
+        "root"
+      ]
+    },
+    {
       "date": "",
       "entity_type": "feature",
       "path": "roadmap.json#independent-review-and-auto-fix-agents",
@@ -648,11 +713,47 @@
       ]
     }
   ],
-  "entity_count": 22,
+  "entity_count": 24,
   "generated": "2026-09-03",
   "schema_version": "0.2.0",
   "topic_count": 4,
   "topics": [
+    {
+      "entity_count": 6,
+      "entity_paths": [
+        ".cg-docs/solutions/bugs/2026-08-28-close-credential-redaction-boundaries.md",
+        ".cg-docs/solutions/build-errors/2026-08-26-bound-python-package-artifacts-and-evidence.md",
+        ".cg-docs/solutions/testing-patterns/2026-09-01-verify-cross-layer-invariants-beyond-coverage.md",
+        ".cg-docs/solutions/testing-patterns/2026-09-02-bind-routing-quality-evidence.md",
+        ".cg-docs/solutions/testing-patterns/2026-09-03-bound-provider-retries-and-chunk-provenance.md",
+        ".cg-docs/solutions/testing-patterns/2026-09-04-test-truth-across-publication-boundaries.md"
+      ],
+      "keywords": [
+        "root",
+        "cause",
+        "prevention"
+      ],
+      "label": "Root / Cause / Prevention",
+      "slug": "root-cause-prevention"
+    },
+    {
+      "entity_count": 6,
+      "entity_paths": [
+        ".cg-docs/reviews/2026-08-26-survey-scribe-production-package-review.md",
+        ".cg-docs/reviews/2026-08-28-survey-scribe-production-package-refined-review.md",
+        ".cg-docs/reviews/2026-08-28-survey-scribe-production-package-refined-verify-review-2.md",
+        ".cg-docs/reviews/2026-08-28-survey-scribe-production-package-refined-verify-review-3.md",
+        ".cg-docs/reviews/2026-08-28-survey-scribe-production-package-refined-verify-review-4.md",
+        ".cg-docs/reviews/2026-08-28-survey-scribe-production-package-refined-verify-review.md"
+      ],
+      "keywords": [
+        "survey_scribe",
+        "src",
+        "sources"
+      ],
+      "label": "Survey_Scribe / Src / Sources",
+      "slug": "survey-scribe-src-sources"
+    },
     {
       "entity_count": 5,
       "entity_paths": [
@@ -669,40 +770,6 @@
       ],
       "label": "Future Product Extensions\nObjective / Production Package Completion\nObjective / Survey Scribe",
       "slug": "future-product-extensions-objective-production-package-completion-objective-survey-scribe"
-    },
-    {
-      "entity_count": 5,
-      "entity_paths": [
-        ".cg-docs/solutions/bugs/2026-08-28-close-credential-redaction-boundaries.md",
-        ".cg-docs/solutions/build-errors/2026-08-26-bound-python-package-artifacts-and-evidence.md",
-        ".cg-docs/solutions/testing-patterns/2026-09-01-verify-cross-layer-invariants-beyond-coverage.md",
-        ".cg-docs/solutions/testing-patterns/2026-09-02-bind-routing-quality-evidence.md",
-        ".cg-docs/solutions/testing-patterns/2026-09-03-bound-provider-retries-and-chunk-provenance.md"
-      ],
-      "keywords": [
-        "root",
-        "cause",
-        "prevention"
-      ],
-      "label": "Root / Cause / Prevention",
-      "slug": "root-cause-prevention"
-    },
-    {
-      "entity_count": 5,
-      "entity_paths": [
-        ".cg-docs/reviews/2026-08-26-survey-scribe-production-package-review.md",
-        ".cg-docs/reviews/2026-08-28-survey-scribe-production-package-refined-review.md",
-        ".cg-docs/reviews/2026-08-28-survey-scribe-production-package-refined-verify-review-2.md",
-        ".cg-docs/reviews/2026-08-28-survey-scribe-production-package-refined-verify-review-3.md",
-        ".cg-docs/reviews/2026-08-28-survey-scribe-production-package-refined-verify-review.md"
-      ],
-      "keywords": [
-        "survey_scribe",
-        "src",
-        "sources"
-      ],
-      "label": "Survey_Scribe / Src / Sources",
-      "slug": "survey-scribe-src-sources"
     },
     {
       "entity_count": 3,
