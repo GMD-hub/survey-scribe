@@ -230,5 +230,4 @@ Examples: `BGD_2022_HIES`, `ETH_2021_ESS`, `COL_2020_GEIH`, `KEN_2019_KIHBS`
 | Value | Meaning |
 |---|---|
 | `pdf` | PDF questionnaire (current PoC scope) |
-| `xlsx` | Excel codebook (future scope) |
-| `ss_json` | Survey Solutions JSON export (future scope) |
+| `xlsx` | XLSForm workbook |

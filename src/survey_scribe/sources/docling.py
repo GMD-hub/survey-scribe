@@ -18,7 +18,9 @@ from multiprocessing.connection import wait
 from pathlib import Path
 from queue import Empty
 from typing import Any, Protocol, cast
-from xml.etree import ElementTree
+from xml.etree.ElementTree import Element
+
+from defusedxml import ElementTree
 
 from survey_scribe.sources.base import (
     ResolvedSource,
@@ -833,11 +835,11 @@ def _parse_bounded_xml(
     limits: SourceLimits,
     deadline: float,
     malformed_message: str,
-) -> ElementTree.Element:
+) -> Element:
     parser = ElementTree.iterparse(BytesIO(payload), events=("start", "end"))
     count = 0
     depth = 0
-    root: ElementTree.Element | None = None
+    root: Element | None = None
     try:
         for event, element in parser:
             if event == "start":
@@ -867,15 +869,15 @@ def _parse_bounded_xml(
     return root
 
 
-def _word_text(element: ElementTree.Element) -> str:
+def _word_text(element: Element) -> str:
     text = "".join(node.text or "" for node in element.iter(f"{{{_WORD_NAMESPACE}}}t"))
     return _normalize_text(text)
 
 
 def _word_body_blocks(
-    body: ElementTree.Element,
-) -> tuple[tuple[ElementTree.Element, ...], int]:
-    blocks: list[ElementTree.Element] = []
+    body: Element,
+) -> tuple[tuple[Element, ...], int]:
+    blocks: list[Element] = []
     unsupported = 0
 
     stack = [iter(body)]
@@ -900,7 +902,7 @@ def _word_local_name(tag: str) -> str:
     return tag[len(prefix) :] if tag.startswith(prefix) else tag
 
 
-def _word_element_is_nonempty(element: ElementTree.Element) -> bool:
+def _word_element_is_nonempty(element: Element) -> bool:
     return bool(
         element.attrib
         or len(element)
@@ -909,7 +911,7 @@ def _word_element_is_nonempty(element: ElementTree.Element) -> bool:
     )
 
 
-def _word_table_rows(table: ElementTree.Element) -> tuple[tuple[str, ...], ...]:
+def _word_table_rows(table: Element) -> tuple[tuple[str, ...], ...]:
     rows: list[tuple[str, ...]] = []
     for row in table.findall(f"{{{_WORD_NAMESPACE}}}tr"):
         cells = tuple(_word_text(cell) for cell in row.findall(f"{{{_WORD_NAMESPACE}}}tc"))
@@ -1155,7 +1157,7 @@ def _markdown_events(text: str, *, max_cells: int | None = None) -> list[tuple[s
     return events
 
 
-def _word_is_heading(paragraph: ElementTree.Element) -> bool:
+def _word_is_heading(paragraph: Element) -> bool:
     properties = paragraph.find(f"{{{_WORD_NAMESPACE}}}pPr")
     if properties is None:
         return False

@@ -37,8 +37,8 @@ Install only the extras that your application uses.
 | `openai` | OpenAI-compatible SDK dependencies for downstream integrations | `python -m pip install "survey-scribe[openai]"` |
 | `anthropic` | Anthropic SDK dependencies for downstream integrations | `python -m pip install "survey-scribe[anthropic]"` |
 
-The OpenAI and Anthropic extras install provider libraries. They do not add a
-packaged extraction client or extraction command.
+The base package includes the extraction client and command. The OpenAI and
+Anthropic extras add the SDKs used by their provider adapters.
 
 Multiple extras can be installed together:
 
@@ -90,8 +90,8 @@ survey-scribe --help
 python -c "from survey_scribe import SurveySVIS; print(SurveySVIS.__name__)"
 ```
 
-The last command prints `SurveySVIS`. The command-line interface currently
-provides package help and version output only.
+The last command prints `SurveySVIS`. The installed command also provides
+`convert`, `batch`, `providers`, `config check`, and `schema export`.
 
 ## Common installation issues
 

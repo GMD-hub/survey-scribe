@@ -9,6 +9,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from enum import StrEnum
 from importlib import import_module
 from typing import Literal, TypeVar, cast
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ValidationError, create_model
 
@@ -65,12 +66,15 @@ class InstructorOpenAIProvider:
             raise ValueError("provider model must not be empty")
         if capabilities.model != model:
             raise ValueError("capability row model must match the configured model")
+        if base_url is not None and urlsplit(base_url).scheme.casefold() != "https":
+            raise ValueError("provider base_url must use HTTPS")
         self._model = model
         self._api_key = api_key
         self._base_url = base_url
         self._default_headers = _validate_default_headers(default_headers)
         self.capabilities = capabilities
         self._completion = completion
+        self._client: object | None = None
 
     @classmethod
     def from_preset(
@@ -149,6 +153,7 @@ class InstructorOpenAIProvider:
                 completion = self._load_sdk_completion()
             except ImportError:
                 raise ProviderDependencyError(self._dependency_extra) from None
+            self._completion = completion
         materialized_messages = tuple(messages)
         transport_attempts = 0
         validation_attempts = 0
@@ -211,6 +216,18 @@ class InstructorOpenAIProvider:
             return response
         raise ProviderTransportError(retryable=False)
 
+    async def aclose(self) -> None:
+        """Close a lazily created SDK client when the adapter owns one."""
+        client, self._client = self._client, None
+        if client is None:
+            return
+        close = getattr(client, "aclose", None) or getattr(client, "close", None)
+        if not callable(close):
+            return
+        outcome = close()
+        if inspect.isawaitable(outcome):
+            await outcome
+
     def _load_sdk_completion(self) -> Completion:
         openai = import_module("openai")
         instructor = import_module("instructor")
@@ -223,6 +240,7 @@ class InstructorOpenAIProvider:
             client_kwargs["default_headers"] = dict(self._default_headers)
         client_kwargs["max_retries"] = 0
         client = openai.AsyncOpenAI(**client_kwargs)
+        self._client = client
         patched = instructor.from_openai(client, mode=instructor.Mode.TOOLS_STRICT)
 
         async def complete(**kwargs: object) -> object:

@@ -123,6 +123,24 @@ def test_cli_precedence_includes_current_directory_config(tmp_path: Path) -> Non
     )
 
 
+def test_higher_precedence_credential_form_replaces_lower_rank() -> None:
+    environment = {
+        "SURVEY_SCRIBE_BEARER_TOKEN": "environment-token",
+        "OPENAI_API_KEY": "provider-key",
+    }
+
+    environment_resolved = SurveyScribeConfig.resolve_cli(environ=environment)
+    flag_resolved = SurveyScribeConfig.resolve_cli(
+        flags={"api_key": "flag-key"},
+        environ=environment,
+    )
+
+    assert environment_resolved.api_key is None
+    assert environment_resolved.bearer_token == SecretStr("environment-token")
+    assert flag_resolved.api_key == SecretStr("flag-key")
+    assert flag_resolved.bearer_token is None
+
+
 def test_parent_and_home_configs_are_ignored(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -221,6 +239,20 @@ def test_base_url_rejects_embedded_credentials(base_url: str) -> None:
     assert "password" not in str(raised.value)
     assert "query-secret" not in str(raised.value)
     assert "fragment-secret" not in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "http://provider.example/v1",
+        "http://localhost:8000/v1",
+        "http://127.0.0.1:8000/v1",
+        "http://[::1]:8000/v1",
+    ],
+)
+def test_base_url_requires_https_including_loopback(base_url: str) -> None:
+    with pytest.raises(ValidationError, match="HTTPS"):
+        SurveyScribeConfig(provider="custom", base_url=base_url)
 
 
 def test_validation_errors_hide_invalid_credential_values() -> None:

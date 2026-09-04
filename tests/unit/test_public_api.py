@@ -49,7 +49,45 @@ def test_public_api_exports_models_and_version() -> None:
         "canonical_routing_schema_json",
     }
     expected_models = legacy | routed_models
-    expected = expected_models | {"QuestionnaireRouter", "RoutingConfig", "__version__"}
+    public_runtime = {
+        "AmbiguousCredentialError",
+        "ArtifactCollisionError",
+        "ArtifactWriteError",
+        "ChunkedStructuredPipeline",
+        "ClientClosedError",
+        "ConfigurationError",
+        "ConversionFailedError",
+        "Diagnostic",
+        "DiagnosticCode",
+        "ExtractionResult",
+        "FailedBlock",
+        "LocalSource",
+        "ProgrammerInputError",
+        "ResultStatus",
+        "RunningEventLoopError",
+        "SourceBundle",
+        "SourceConversionError",
+        "SourceDependencyError",
+        "SourceError",
+        "SourceFormatError",
+        "SourceInputError",
+        "SourceLimitError",
+        "SourceSecurityError",
+        "SourceTimeoutError",
+        "StructuredPipeline",
+        "SurveyScribe",
+        "SurveyScribeConfig",
+        "SurveyScribeError",
+    }
+    expected = (
+        expected_models
+        | public_runtime
+        | {
+            "QuestionnaireRouter",
+            "RoutingConfig",
+            "__version__",
+        }
+    )
 
     assert set(survey_scribe.__all__) == expected
     assert set(models.__all__) == expected_models
@@ -108,7 +146,7 @@ def test_source_package_contains_step_10_runtime_modules(repository_root) -> Non
     assert all((repository_root / relative).is_file() for relative in required)
     assert actual_routing_modules == expected_routing_modules
     pyproject = (repository_root / "pyproject.toml").read_text(encoding="utf-8")
-    assert 'packages = ["src/survey_scribe", "schemas"]' in pyproject
+    assert 'packages = ["src/survey_scribe"]' in pyproject
 
 
 def test_runtime_version_comes_from_distribution_metadata() -> None:

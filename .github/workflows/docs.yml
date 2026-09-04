@@ -8,7 +8,10 @@ on:
       - "docs/**"
       - "mkdocs.yml"
       - "pyproject.toml"
+      - "scripts/generate_docs_reference.py"
       - "src/**"
+      - "tests/browser/**"
+      - "tests/docs/**"
       - "uv.lock"
   push:
     branches: [main]
@@ -17,7 +20,10 @@ on:
       - "docs/**"
       - "mkdocs.yml"
       - "pyproject.toml"
+      - "scripts/generate_docs_reference.py"
       - "src/**"
+      - "tests/browser/**"
+      - "tests/docs/**"
       - "uv.lock"
 
 permissions:
@@ -32,16 +38,33 @@ jobs:
     name: Build documentation site
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: "0.8.11"
           enable-cache: true
       - run: uv sync --locked --python 3.11
-      - run: uv run mkdocs build --strict
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - name: Prepare Chromium browser
+        run: uv run --no-sync playwright install --with-deps chromium
+      - name: Check generated documentation references offline
+        env:
+          UV_OFFLINE: "1"
+        run: uv run --no-sync python scripts/generate_docs_reference.py --check
+      - name: Build strict documentation offline
+        env:
+          UV_OFFLINE: "1"
+        run: uv run --no-sync mkdocs build --strict --clean
+      - name: Check local documentation links offline
+        env:
+          UV_OFFLINE: "1"
+        run: uv run --no-sync linkchecker --ignore-url='^https?://' site/
+      - name: Run offline documentation and browser checks
+        env:
+          UV_OFFLINE: "1"
+        run: uv run --no-sync pytest --disable-socket --allow-unix-socket tests/docs tests/browser
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: documentation-site
           path: site/

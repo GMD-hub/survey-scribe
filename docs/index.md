@@ -11,6 +11,7 @@ household-survey workflows.
 
 [Install Survey Scribe](getting-started/installation.md){ .md-button .md-button--primary }
 [Open the quickstart](getting-started/quickstart.md){ .md-button }
+[Explore synthetic results](playground.md){ .md-button }
 
 </div>
 
@@ -72,15 +73,16 @@ Survey Scribe `0.1.x` is an alpha package. It includes:
 - Stable legacy SVIS imports plus additive routed models and `QuestionnaireRouter`.
 - Typed configuration, result, source, routing, provider-contract, chunking, and serialization modules.
 - A PEP 561 `py.typed` marker for editors and type checkers.
-- A `survey-scribe` command with help, version, and routing-schema export.
+- A `survey-scribe` command for conversion, batch runs, provider/configuration
+  inspection, and routing-schema export.
 
-!!! important "Extraction boundary"
+!!! important "Local-first boundary"
 
-    The installed package does not extract a new `SurveySVIS` from a source file.
-    `QuestionnaireRouter` accepts an existing `SurveySVIS` plus an exact source
-    binding and adds routing. Native XLSForm routing can require zero provider
-    calls. Document routing uses an injected `StructuredProvider`. The repository's
-    legacy provider pipeline is not part of the wheel.
+    The installed package converts local files only. It does not accept remote
+    URLs, store managed credentials, or expose a hosted inference service.
+    Native XLSForm conversion can require zero provider calls. Other extraction
+    sends normalized source content only to the provider endpoint that the user
+    explicitly configures. The package contains no telemetry client.
 
 ## Minimal example
 
@@ -120,3 +122,4 @@ assert restored == survey
 4. [Normalize local source documents](guides/sources.md).
 5. [Use the complete typed API reference](reference/index.md).
 6. [Interpret and validate routed output](routing.md).
+7. [Inspect precomputed result states without uploading data](playground.md).

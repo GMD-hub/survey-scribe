@@ -38,6 +38,7 @@ classifiers = [
   "Typing :: Typed",
 ]
 dependencies = [
+  "defusedxml>=0.7.1,<1",
   "pydantic>=2.11.7,<3",
 ]
 
@@ -53,7 +54,7 @@ anthropic = [
   "instructor>=1.10.0,<2",
 ]
 pdf = [
-  "docling>=2.54.0,<3",
+  "docling>=2.125.0,<3",
   "easyocr>=1.7.2,<2",
   "lingua-language-detector>=2.1.1,<3",
   "pymupdf>=1.26.4,<2",
@@ -69,28 +70,42 @@ Repository = "https://github.com/GMD-hub/survey-scribe.git"
 Issues = "https://github.com/GMD-hub/survey-scribe/issues"
 Changelog = "https://github.com/GMD-hub/survey-scribe/blob/main/CHANGELOG.md"
 
+[[tool.uv.index]]
+url = "https://pypi.org/simple"
+default = true
+
 [project.scripts]
 survey-scribe = "survey_scribe.cli:main"
 
 [dependency-groups]
 dev = [
+  "axe-playwright-python==0.1.8",
+  "bandit==1.9.4",
   "build==1.3.0",
+  "check-wheel-contents==0.6.3",
+  "cyclonedx-bom==7.3.1",
+  "detect-secrets==1.5.0",
   "hatchling==1.27.0",
   "loguru==0.7.3",
   "mkdocs==1.6.1",
-  "mkdocs-material==9.6.18",
+  "mkdocs-material==9.7.7",
   "mkdocstrings[python]==0.30.0",
+  "pip-audit==2.10.1",
+  "playwright==1.62.0",
   "pyright==1.1.404",
-  "pytest==8.4.1",
-  "pytest-asyncio==1.1.0",
+  "pytest==9.1.1",
+  "pytest-asyncio==1.4.0",
   "pytest-cov==6.2.1",
+  "pytest-socket==0.8.1",
+  "linkchecker==10.6.0",
+  "pyyaml==6.0.3",
   "ruff==0.12.8",
   "tomli==2.2.1",
   "twine==6.1.0",
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/survey_scribe", "schemas"]
+packages = ["src/survey_scribe"]
 
 [tool.hatch.build.targets.sdist]
 include = [
@@ -98,7 +113,6 @@ include = [
   "/LICENSE",
   "/README.md",
   "/pyproject.toml",
-  "/schemas",
   "/src/survey_scribe",
   "/uv.lock",
 ]
@@ -108,16 +122,12 @@ exclude = ["/.gitignore"]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers --strict-config"
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+asyncio_default_test_loop_scope = "function"
 
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-exclude = [
-  "agents",
-  "docling_pipeline.py",
-  "extractors",
-  "schemas",
-]
 
 [tool.ruff.lint]
 select = ["B", "E", "F", "I", "SIM", "UP", "W"]
@@ -132,21 +142,28 @@ typeCheckingMode = "basic"
 include = [
   "src",
   "tests/characterization",
+  "tests/cli",
+  "tests/compat",
   "tests/contract",
+  "tests/architecture",
+  "tests/browser",
+  "tests/docs",
   "tests/integration",
   "tests/package",
+  "tests/quality",
+  "tests/security",
   "tests/test_schema.py",
   "tests/unit",
+  "scripts/check_workflow_policy.py",
+  "scripts/build_wheel_sbom.py",
+  "scripts/generate_docs_reference.py",
+  "scripts/evaluate_quality.py",
   "scripts/evaluate_routing.py",
+  "scripts/run_security_gates.py",
   "scripts/validate_ocr_artifacts.py",
   "scripts/validate_routing_fixtures.py",
   "scripts/cg_pr_preflight.py",
-]
-exclude = [
-  "agents",
   "docling_pipeline.py",
-  "extractors",
-  "schemas",
 ]
 
 [tool.coverage.run]
@@ -162,3 +179,6 @@ exclude_also = [
   "if TYPE_CHECKING:",
   "raise NotImplementedError",
 ]
+
+[tool.check-wheel-contents]
+toplevel = ["survey_scribe"]

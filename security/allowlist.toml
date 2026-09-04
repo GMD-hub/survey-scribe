@@ -1,0 +1,45 @@
+schema_version = 1
+owner = "Survey Scribe maintainers"
+rationale = "No active exceptions. Any future entry requires security review."
+expires = "2027-09-03"
+[[entries]]
+scanner = "dependency"
+fingerprint = "46ce96b33fd236434d02ea61f041bc490291544f98a3cc0b55be94bc01981c02"
+owner = "Survey Scribe maintainers"
+rationale = "diskcache 5.6.3 is pulled by Instructor; no fixed release exists and Survey Scribe does not use diskcache-backed serialization."
+expires = "2026-10-03"
+
+[[entries]]
+scanner = "dependency"
+fingerprint = "a7c5ba6edcd18ff330a4e88f96e00c9f31265b658baa191782b7c751fb94630a"
+owner = "Survey Scribe maintainers"
+rationale = "Transformers 4.57.6 is constrained by the Docling stack; Survey Scribe does not load model archives from untrusted sources."
+expires = "2026-10-03"
+
+[[entries]]
+scanner = "dependency"
+fingerprint = "1d219123e1e0ac79a4683082f0d70318433ad7d3a8e749fe18f5bf0068c588bc"
+owner = "Survey Scribe maintainers"
+rationale = "Transformers 4.57.6 is constrained by the Docling stack; Survey Scribe does not load model archives from untrusted sources."
+expires = "2026-10-03"
+
+[[entries]]
+scanner = "dependency"
+fingerprint = "442917281e7bf957bdeee7e03a0948815a09dc99c30fe0c775e7611f63483d27"
+owner = "Survey Scribe maintainers"
+rationale = "Transformers 4.57.6 is constrained by the Docling stack; Survey Scribe does not load model archives from untrusted sources."
+expires = "2026-10-03"
+
+[[entries]]
+scanner = "dependency"
+fingerprint = "8b5d6f1955d6eafb4d5c2e566a52adb3f2d483217980d57f7bc98ea2fa71a357"
+owner = "Survey Scribe maintainers"
+rationale = "Transformers 4.57.6 is constrained by the Docling stack; Survey Scribe does not load model archives from untrusted sources."
+expires = "2026-10-03"
+
+[[entries]]
+scanner = "dependency"
+fingerprint = "2af5ead16deee0da069adb35b3553b7203746c73c2e7a9761e0b01dfd26b3098"
+owner = "Survey Scribe maintainers"
+rationale = "Transformers 4.57.6 is constrained by the Docling stack; Survey Scribe does not load model archives from untrusted sources."
+expires = "2026-10-03"

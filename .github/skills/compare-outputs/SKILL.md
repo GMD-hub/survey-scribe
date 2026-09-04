@@ -5,8 +5,8 @@ description: Compares two versions of an extracted SVIS variable (before and aft
 
 # Compare Before and After Extractions
 
-This skill assesses whether a prompt change in agents/prompts.py improved
-the extraction of a specific variable.
+This skill assesses whether a versioned extraction instruction change in
+`src/survey_scribe/pipeline.py` improved a specific variable.
 
 ## What to ask the user for
 
@@ -62,5 +62,5 @@ Always provide:
 
 ## Scope reminder
 
-Limit recommendations to changes in agents/prompts.py only, unless the
-project lead has approved changes to other files.
+Limit recommendations to the packaged extraction instructions and their tests.
+Do not restore the removed root `agents/` implementation.

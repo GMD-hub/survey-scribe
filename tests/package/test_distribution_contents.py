@@ -10,9 +10,8 @@ from pathlib import Path, PurePosixPath
 
 PACKAGE_FILES = frozenset(
     {
-        "schemas/__init__.py",
-        "schemas/svis.py",
         "survey_scribe/__init__.py",
+        "survey_scribe/client.py",
         "survey_scribe/cli.py",
         "survey_scribe/config.py",
         "survey_scribe/errors.py",
@@ -108,6 +107,7 @@ def test_wheel_metadata_is_publishable(repository_root: Path) -> None:
     assert metadata["Version"] == version("survey-scribe")
     assert metadata["License-Expression"] == "MIT"
     assert metadata["Requires-Python"] == "<3.14,>=3.11"
+    assert "defusedxml<1,>=0.7.1" in metadata.get_all("Requires-Dist", [])
     assert "pydantic<3,>=2.11.7" in metadata.get_all("Requires-Dist", [])
     assert "Typing :: Typed" in metadata.get_all("Classifier", [])
     assert any(

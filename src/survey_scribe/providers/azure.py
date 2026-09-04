@@ -69,6 +69,7 @@ class AzureOpenAIProvider(InstructorOpenAIProvider):
         if self._token_callback is not None:
             client_kwargs["azure_ad_token_provider"] = self._token_callback
         client = openai.AsyncAzureOpenAI(**client_kwargs)
+        self._client = client
         patched = instructor.from_openai(client, mode=instructor.Mode.TOOLS_STRICT)
 
         async def complete(**kwargs: object) -> object:

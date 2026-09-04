@@ -1,13 +1,12 @@
 ---
 name: improve-prompt
-description: Suggests new or improved instruction text for agents/prompts.py based on a specific extraction error observed in the SVIS output. Use this when asked to fix a prompt, improve an instruction, or address a recurring extraction error.
+description: Suggests a versioned extraction instruction change based on a specific error observed in SVIS output. Use this when asked to fix a prompt, improve an instruction, or address a recurring extraction error.
 ---
 
 # Improve a Prompt Instruction
 
-This skill helps draft new or improved instruction text for the
-VARIABLE_EXTRACTION_PROMPT in agents/prompts.py to fix a specific
-extraction error.
+This skill helps draft a versioned change to the packaged extraction
+instructions in `src/survey_scribe/pipeline.py` to fix a specific error.
 
 ## What to ask the user for
 
@@ -52,8 +51,8 @@ Always provide:
 1. The new instruction text: Formatted exactly as it should appear in the
    prompt, ready to copy and paste. Include a concrete example inside it.
 
-2. Where it goes: State which field section of VARIABLE_EXTRACTION_PROMPT
-   it belongs to, and whether it replaces existing text or adds to it.
+2. Where it goes: State which packaged instruction it belongs to and whether it
+   replaces existing text or adds to it.
 
 3. Comment to add above it: Write a one-line comment in this format:
    # CHANGED [date]: [what changed and why]
@@ -66,6 +65,5 @@ Always provide:
 
 ## Scope reminder
 
-The intern should only edit agents/prompts.py. Do not suggest changes to
-schemas/svis.py, extractors/pdf.py, agents/svis_agent.py, or pipeline.py
-unless the project lead has approved it.
+Update the packaged instruction and its deterministic tests together. Do not
+restore the removed root `agents/`, `extractors/`, or `schemas/` implementations.

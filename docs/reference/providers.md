@@ -21,6 +21,54 @@ source content is sent.
         - CapabilityEvidence
         - schema_descriptor
 
+## Supported adapters and evidence
+
+All shipped adapter paths have deterministic contract tests. No named live
+model/version has completed the protected verification process, so every model
+row created by the public facade is `configuration-only`. This label means the
+declared limits are used for validation; it is not a claim that the endpoint,
+model behavior, context window, or extraction quality was verified.
+
+| Provider value | Extra | Endpoint configuration | Credential | Evidence |
+| --- | --- | --- | --- | --- |
+| `openai` | `openai` | Reviewed OpenAI preset, or `OPENAI_BASE_URL` | `OPENAI_API_KEY` | configuration-only |
+| `openrouter` | `openai` | Reviewed OpenRouter preset | `OPENROUTER_API_KEY` | configuration-only |
+| `vercel` | `openai` | Reviewed Vercel AI Gateway preset | `AI_GATEWAY_API_KEY` | configuration-only |
+| `custom` | `openai` | Explicit `base_url` required; use HTTPS in production | `SURVEY_SCRIBE_API_KEY` | configuration-only |
+| `azure`, `azure_openai` | `openai` | Endpoint, API version, deployment | API key or token callback | configuration-only |
+| `anthropic` | `anthropic` | Dedicated Anthropic adapter | `ANTHROPIC_API_KEY` | configuration-only |
+
+Use `survey-scribe providers` to inspect this same evidence boundary. A
+`verified` row would require a protected contract run against the exact named
+provider, model/version, and SDK version. `unknown` evidence fails closed before
+transport.
+
+## Configuration examples
+
+```console
+# OpenAI
+SURVEY_SCRIBE_PROVIDER=openai SURVEY_SCRIBE_MODEL=model-id survey-scribe config check
+
+# OpenRouter
+SURVEY_SCRIBE_PROVIDER=openrouter SURVEY_SCRIBE_MODEL=model-id survey-scribe config check
+
+# Vercel AI Gateway
+SURVEY_SCRIBE_PROVIDER=vercel SURVEY_SCRIBE_MODEL=model-id survey-scribe config check
+
+# Custom OpenAI-compatible HTTPS gateway
+survey-scribe config check --provider custom --model model-id --base-url https://gateway.example/v1
+
+# Azure OpenAI or Foundry
+survey-scribe config check --provider azure --model deployment-name \
+  --base-url https://resource.example/ --api-version 2025-04-01-preview
+
+# Anthropic
+SURVEY_SCRIBE_PROVIDER=anthropic SURVEY_SCRIBE_MODEL=model-id survey-scribe config check
+```
+
+These commands require the matching credential environment variable. They
+validate adapter construction but do not make a model request.
+
 ## Adapter construction
 
 `InstructorOpenAIProvider` is the packaged OpenAI-compatible adapter. Applications
@@ -79,15 +127,6 @@ Survey Scribe disables each SDK's internal retry loop and applies only the
 configured package retry policy. Transport and structured-validation attempts
 are therefore bounded and reported consistently. Anthropic capability rows must
 not advertise `seed`; explicit unsupported settings fail before transport.
-
-| Adapter | Capability evidence | Credentials | Notes |
-| --- | --- | --- | --- |
-| OpenAI | configuration-only | API key | The application supplies named model rows |
-| OpenRouter | configuration-only | API key | Allowlisted attribution headers only |
-| Vercel AI Gateway | configuration-only | API key | OpenAI-compatible preset |
-| Custom gateway | configuration-only | API key | Explicit base URL required |
-| Azure OpenAI/Foundry | configuration-only | API key or token callback | Deployment is the model identifier |
-| Anthropic | configuration-only | API key | Requires the `anthropic` extra |
 
 No live model row is advertised as verified by this table. A row becomes
 `verified` only after a protected, named model/version contract run records that

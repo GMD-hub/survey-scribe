@@ -9,6 +9,12 @@ an injected `StructuredProvider`; the routing core does not read credentials or
 import a provider SDK. Use the same controls when an application constructs the
 optional provider adapter.
 
+Survey Scribe has no telemetry client. Local normalization and native XLSForm
+conversion do not send source content. Provider-backed extraction sends
+normalized content to the endpoint that you configure, subject to that
+provider's retention and logging policy. See [Privacy and Local-First
+Boundaries](privacy.md).
+
 ## Recommended order
 
 Use these options in decreasing order of preference:

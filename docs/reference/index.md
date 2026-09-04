@@ -1,8 +1,8 @@
 # API Overview
 
 Survey Scribe preserves its stable legacy SVIS API and adds routed models,
-`QuestionnaireRouter`, and typed modules for providers, configuration, results,
-serialization, and local sources.
+`SurveyScribe`, custom structured pipelines, `QuestionnaireRouter`, and typed
+modules for providers, configuration, results, serialization, and local sources.
 
 ## Stable top-level imports
 
@@ -13,6 +13,7 @@ from survey_scribe import (
     NumericRange,
     QuestionnaireRouter,
     QuestionnaireRoutingGraph,
+    SurveyScribe,
     RoutedSurveySVIS,
     RoutingConfig,
     StudyType,
@@ -40,6 +41,7 @@ from survey_scribe.sources.chunking import chunk_document
 
 | Section | Content |
 | --- | --- |
+| [Client and Pipelines](client.md) | `SurveyScribe` and custom structured extraction |
 | [SVIS Models](models.md) | Survey, variable, category, range, and enum models |
 | [Configuration](configuration.md) | Validated settings and resolution methods |
 | [Results](results.md) | Result status, diagnostics, and artifact references |
@@ -48,19 +50,21 @@ from survey_scribe.sources.chunking import chunk_document
 | [Routing](routing.md) | Routed models, graph contracts, and router API |
 | [Providers](providers.md) | `StructuredProvider` and capability contracts |
 | [Exceptions](exceptions.md) | Package exceptions and redaction helpers |
-| [Command Line](cli.md) | Help, version, and routing-schema export |
+| [Command Line](cli.md) | Conversion, configuration, providers, and schema export |
+| [JSON Schemas](schemas.md) | Generated SVIS, routing, and non-secret configuration schemas |
 
 Generated signatures show parameter annotations and return annotations from the
 source. The guide pages explain validation rules, defaults, side effects, and
 security boundaries that are not fully expressed by signatures.
 
-## Deprecated compatibility import
+## Removed source-tree import
 
-`from schemas.svis import SurveySVIS` remains available as a deprecated
-compatibility path. New code must import from `survey_scribe`.
+The old repository-only `schemas.svis` module is not part of the package. Import
+all public models from `survey_scribe`.
 
 ## Package boundary
 
-No packaged function currently extracts a new `SurveySVIS` from a source file.
-`QuestionnaireRouter` adds routing to an existing `SurveySVIS` and requires the
-exact validated source binding. This distinction preserves the legacy contract.
+`SurveyScribe` converts supported local sources to `SurveySVIS`. Native XLSForm
+conversion can complete without a provider. Other formats use the configured
+`StructuredProvider`. `QuestionnaireRouter` is a separate additive operation that
+adds source-grounded routing to an existing `SurveySVIS`.

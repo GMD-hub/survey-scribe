@@ -29,7 +29,7 @@ from survey_scribe.routing.normalization import (
     normalize_section_path_value,
     normalized_alias_value,
 )
-from survey_scribe.sources.base import SourceDocument
+from survey_scribe.sources.base import SourceDocument, render_table
 
 SOURCE_CONVERSION_SCHEMA_VERSION = "1.0"
 
@@ -352,16 +352,29 @@ def verify_source_quote(span: SourceSpan, document: SourceDocument) -> None:
     provenance = block.provenance
     if span.source_name != document.source_name or span.source_name != provenance.source_name:
         raise SourceEvidenceError("evidence source name does not match its normalized source block")
-    if (
-        span.pages != provenance.pages
-        or span.sheet != provenance.sheet
-        or span.row_start != provenance.row_start
-        or span.row_end != provenance.row_end
-    ):
+    if span.pages != provenance.pages or span.sheet != provenance.sheet:
+        raise SourceEvidenceError("evidence provenance does not match its normalized source block")
+    expected_text = block.text
+    if block.table is not None and span.row_start is not None and span.row_end is not None:
+        table_start = provenance.row_start
+        table_end = provenance.row_end
+        if (
+            table_start is None
+            or table_end is None
+            or span.row_start < table_start
+            or span.row_end > table_end
+        ):
+            raise SourceEvidenceError(
+                "evidence provenance does not match its normalized source block"
+            )
+        first = span.row_start - table_start
+        last = span.row_end - table_start + 1
+        expected_text = render_table(block.table.rows[first:last])
+    elif span.row_start != provenance.row_start or span.row_end != provenance.row_end:
         raise SourceEvidenceError("evidence provenance does not match its normalized source block")
     quote = _normalize_evidence_quote(span.source_quote)
-    block_text = _normalize_evidence_quote(block.text)
-    if not quote or quote not in block_text:
+    expected_quote = _normalize_evidence_quote(expected_text)
+    if not quote or quote not in expected_quote:
         raise SourceEvidenceError("evidence quote does not match its normalized source block")
 
 

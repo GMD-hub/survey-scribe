@@ -1,6 +1,13 @@
 # 🧠 Project Brain — Chronological Log
 
-_Generated 2026-09-03 · 17 artifacts (newest first) + 5 roadmap features_
+_Generated 2026-09-03 · 19 artifacts (newest first) + 5 roadmap features_
+
+## 2026-09-04
+
+- **[2026-08-28-survey-scribe-production-package-refined-verify-review-4](.cg-docs/reviews/2026-08-28-survey-scribe-production-package-refined-verify-review-4.md)** · `review` · _—_ · `2026-09-04`
+  > **Review mode**: light verification **Parent review**: `.cg-docs/reviews/2026-08-31-questionnaire-routing-graph-revie…
+- **[Test Truth Across Publication Boundaries](.cg-docs/solutions/testing-patterns/2026-09-04-test-truth-across-publication-boundaries.md)** · `solution` · _—_ · `2026-09-04`
+  > The public SDK, CLI, package artifacts, security gates, and documentation passed large test suites. Verification stil…
 
 ## 2026-09-03
 

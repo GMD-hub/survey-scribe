@@ -49,8 +49,8 @@ def _workbook(path: Path, *, opaque: bool = False) -> None:
     choices.append(["yes_no", "yes", "Yes"])
     choices.append(["yes_no", "no", "No"])
     settings = workbook.create_sheet("settings")
-    settings.append(["form_title", "form_id"])
-    settings.append(["Roster", "roster"])
+    settings.append(["form_title", "form_id", "country_code", "year"])
+    settings.append(["Roster", "roster", "TST", 2026])
     workbook.save(path)
 
 

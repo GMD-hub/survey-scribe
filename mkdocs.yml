@@ -1,9 +1,6 @@
 site_name: Survey Scribe
 site_description: Typed survey questionnaire metadata, safe local source normalization, and SVIS artifacts
 site_url: https://gmd-hub.github.io/survey-scribe/
-repo_url: https://github.com/GMD-hub/survey-scribe
-repo_name: GMD-hub/survey-scribe
-edit_uri: edit/main/docs/
 copyright: Copyright 2026 Survey Scribe contributors
 strict: true
 docs_dir: docs
@@ -25,8 +22,6 @@ theme:
   name: material
   language: en
   font: false
-  icon:
-    repo: fontawesome/brands/github
   features:
     - content.code.annotate
     - content.code.copy
@@ -42,20 +37,9 @@ theme:
     - search.share
     - search.suggest
   palette:
-    - media: "(prefers-color-scheme: light)"
-      scheme: default
-      primary: indigo
-      accent: cyan
-      toggle:
-        icon: material/brightness-7
-        name: Use dark mode
-    - media: "(prefers-color-scheme: dark)"
-      scheme: slate
-      primary: indigo
-      accent: cyan
-      toggle:
-        icon: material/brightness-4
-        name: Use light mode
+    scheme: default
+    primary: indigo
+    accent: cyan
 
 plugins:
   - search
@@ -86,8 +70,7 @@ markdown_extensions:
   - attr_list
   - md_in_html
   - pymdownx.details
-  - pymdownx.highlight:
-      anchor_linenums: true
+  - pymdownx.highlight
   - pymdownx.inlinehilite
   - pymdownx.superfences
   - pymdownx.tabbed:
@@ -99,28 +82,37 @@ markdown_extensions:
 extra_css:
   - assets/stylesheets/extra.css
 
-extra:
-  social:
-    - icon: fontawesome/brands/github
-      link: https://github.com/GMD-hub/survey-scribe
-      name: Survey Scribe on GitHub
+extra_javascript:
+  - assets/javascripts/playground.js
 
+extra:
+  analytics:
+    feedback: false
+  version:
+    provider: false
 nav:
   - Home: index.md
   - Getting Started:
       - Installation: getting-started/installation.md
       - Quickstart: getting-started/quickstart.md
+      - Command Line: cli.md
+      - Migration: migration.md
+      - Static Sample Explorer: playground.md
   - Guides:
       - SVIS Field Guide: guides/svis.md
       - Configuration: guides/configuration.md
       - Security and API Keys: guides/security.md
       - Local Sources: guides/sources.md
+      - XLSForm: sources/xlsform.md
       - Questionnaire Routing: routing.md
       - Evaluation Policy: evaluation.md
       - Results and Artifacts: guides/results.md
+      - Custom Structured Output: guides/custom-models.md
+      - Privacy and Local-First Boundaries: guides/privacy.md
       - Use Cases: guides/use-cases.md
   - API Reference:
       - API Overview: reference/index.md
+      - Client and Pipelines: reference/client.md
       - SVIS Models: reference/models.md
       - Configuration: reference/configuration.md
       - Results: reference/results.md
@@ -130,6 +122,7 @@ nav:
       - Providers: reference/providers.md
       - Exceptions: reference/exceptions.md
       - Command Line: reference/cli.md
+      - JSON Schemas: reference/schemas.md
   - Project:
       - Compatibility: compatibility.md
       - Documentation Site: contributing/documentation.md

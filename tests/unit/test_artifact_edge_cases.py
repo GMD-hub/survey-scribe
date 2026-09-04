@@ -1086,3 +1086,157 @@ def test_windows_directory_sync_propagates_handle_and_flush_failures(
 
     with pytest.raises(OSError):
         artifacts._fsync_directory(Path("directory"))
+
+
+class _WindowsApiFunction:
+    def __init__(self, callback: Any) -> None:
+        self.callback = callback
+        self.argtypes: Any = None
+        self.restype: Any = None
+
+    def __call__(self, *args: Any) -> Any:
+        return self.callback(*args)
+
+
+def test_windows_handle_helpers_validate_identity_and_close(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    close_calls: list[int] = []
+
+    def information(_handle: object, pointer: Any) -> bool:
+        pointer._obj.file_attributes = 0x10
+        pointer._obj.file_index_high = 2
+        pointer._obj.file_index_low = 3
+        return True
+
+    kernel32 = SimpleNamespace(
+        CreateFileW=_WindowsApiFunction(lambda *_args: 21),
+        GetFileInformationByHandle=_WindowsApiFunction(information),
+        CloseHandle=_WindowsApiFunction(lambda handle: close_calls.append(handle) or True),
+    )
+    monkeypatch.setattr(ctypes, "WinDLL", lambda *_args, **_kwargs: kernel32, raising=False)
+    monkeypatch.setattr(ctypes, "WinError", lambda code: OSError(code), raising=False)
+    monkeypatch.setattr(ctypes, "get_last_error", lambda: 5, raising=False)
+
+    assert artifacts._open_windows_handle(Path("directory"), require_directory=True) == (
+        21,
+        (2 << 32) | 3,
+    )
+    artifacts._close_windows_handle(21)
+    assert close_calls == [21]
+
+
+@pytest.mark.parametrize("failure", ["create", "information", "reparse", "type"])
+def test_windows_handle_helpers_reject_unsafe_or_failed_handles(
+    monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    from ctypes import wintypes
+
+    close_calls: list[int] = []
+
+    def information(_handle: object, pointer: Any) -> bool:
+        if failure == "information":
+            return False
+        pointer._obj.file_attributes = 0x400 if failure == "reparse" else 0
+        pointer._obj.file_index_high = 0
+        pointer._obj.file_index_low = 1
+        return True
+
+    handle = wintypes.HANDLE(-1).value if failure == "create" else 21
+    kernel32 = SimpleNamespace(
+        CreateFileW=_WindowsApiFunction(lambda *_args: handle),
+        GetFileInformationByHandle=_WindowsApiFunction(information),
+        CloseHandle=_WindowsApiFunction(lambda value: close_calls.append(value) or True),
+    )
+    monkeypatch.setattr(ctypes, "WinDLL", lambda *_args, **_kwargs: kernel32, raising=False)
+    monkeypatch.setattr(ctypes, "WinError", lambda code: OSError(code), raising=False)
+    monkeypatch.setattr(ctypes, "get_last_error", lambda: 5, raising=False)
+
+    expected = OSError if failure in {"create", "information"} else ArtifactWriteError
+    with pytest.raises(expected):
+        artifacts._open_windows_handle(Path("unsafe"), require_directory=True)
+    if failure in {"information", "reparse", "type"}:
+        assert close_calls == [21]
+
+
+def test_windows_handle_close_failure_is_propagated(monkeypatch: pytest.MonkeyPatch) -> None:
+    kernel32 = SimpleNamespace(CloseHandle=_WindowsApiFunction(lambda _handle: False))
+    monkeypatch.setattr(ctypes, "WinDLL", lambda *_args, **_kwargs: kernel32, raising=False)
+    monkeypatch.setattr(ctypes, "WinError", lambda code: OSError(code), raising=False)
+    monkeypatch.setattr(ctypes, "get_last_error", lambda: 5, raising=False)
+
+    with pytest.raises(OSError):
+        artifacts._close_windows_handle(21)
+
+
+def test_windows_file_descriptor_helpers_transfer_or_close_handles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sys
+
+    opened: list[tuple[int, int]] = []
+    closed: list[int] = []
+    fake_msvcrt = SimpleNamespace(
+        open_osfhandle=lambda handle, flags: opened.append((handle, flags)) or 31
+    )
+    monkeypatch.setitem(sys.modules, "msvcrt", fake_msvcrt)
+    monkeypatch.setattr(artifacts, "_open_windows_handle", lambda *_args, **_kwargs: (21, 1))
+    monkeypatch.setattr(artifacts, "_close_windows_handle", closed.append)
+
+    assert artifacts._open_windows_file_no_follow(Path("file")) == 31
+    assert artifacts._open_windows_lock_file(Path("lock")) == 31
+    assert opened == [(21, os.O_RDONLY), (21, os.O_RDWR)]
+
+    fake_msvcrt.open_osfhandle = lambda *_args: (_ for _ in ()).throw(OSError("failed"))
+    with pytest.raises(OSError):
+        artifacts._open_windows_file_no_follow(Path("file"))
+    assert closed == [21]
+
+
+def test_windows_remove_tree_handles_regular_nested_content_and_rejects_symlink(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "root"
+    nested = root / "nested"
+    nested.mkdir(parents=True)
+    (root / "file.json").write_text("{}", encoding="utf-8")
+    (nested / "child.json").write_text("{}", encoding="utf-8")
+
+    artifacts._safe_remove_tree_windows(root)
+    assert not root.exists()
+
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.write_text("safe", encoding="utf-8")
+    link = root / "link"
+    try:
+        link.symlink_to(outside)
+    except OSError:
+        pytest.skip("symlink creation is unavailable")
+    with pytest.raises(OSError, match="symlink or reparse"):
+        artifacts._safe_remove_tree_windows(root)
+
+
+def test_portable_windows_branches_use_handle_based_operations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source.tmp"
+    destination = tmp_path / "destination.json"
+    source.write_text("replacement", encoding="utf-8")
+    move = _WindowsApiFunction(lambda *_args: True)
+    kernel32 = SimpleNamespace(
+        MoveFileExW=move,
+        CreateFileW=_WindowsApiFunction(lambda *_args: 21),
+        FlushFileBuffers=_WindowsApiFunction(lambda _handle: True),
+        CloseHandle=_WindowsApiFunction(lambda _handle: True),
+    )
+    monkeypatch.setattr(ctypes, "WinDLL", lambda *_args, **_kwargs: kernel32, raising=False)
+    monkeypatch.setattr(ctypes, "WinError", lambda code: OSError(code), raising=False)
+    monkeypatch.setattr(ctypes, "get_last_error", lambda: 5, raising=False)
+    monkeypatch.setattr(artifacts.os, "name", "nt")
+
+    artifacts._durable_replace(source, destination)
+    artifacts._fsync_directory(tmp_path)
+
+    assert move.argtypes is not None
+    assert move.restype is not None

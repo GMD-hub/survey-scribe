@@ -10,7 +10,8 @@ from collections.abc import Callable
 from importlib import import_module
 from pathlib import Path
 from typing import Any, TypeAlias
-from xml.etree import ElementTree
+
+from defusedxml import ElementTree
 
 from survey_scribe.sources.base import (
     ResolvedSource,
@@ -43,7 +44,20 @@ class CsvAdapter:
     """Normalize UTF-8 CSV rows with physical one-based row provenance."""
 
     def convert(self, source: ResolvedSource, *, limits: SourceLimits) -> SourceDocument:
-        deadline = time.monotonic() + limits.deadline_seconds
+        return self.convert_until(
+            source,
+            limits=limits,
+            deadline=time.monotonic() + limits.deadline_seconds,
+        )
+
+    def convert_until(
+        self,
+        source: ResolvedSource,
+        *,
+        limits: SourceLimits,
+        deadline: float,
+    ) -> SourceDocument:
+        """Normalize CSV content under a caller-owned end-to-end deadline."""
         try:
             rows: list[tuple[str, ...]] = []
             cell_count = 0
@@ -97,7 +111,20 @@ class XlsxAdapter:
         self._workbook_loader = workbook_loader
 
     def convert(self, source: ResolvedSource, *, limits: SourceLimits) -> SourceDocument:
-        deadline = time.monotonic() + limits.deadline_seconds
+        return self.convert_until(
+            source,
+            limits=limits,
+            deadline=time.monotonic() + limits.deadline_seconds,
+        )
+
+    def convert_until(
+        self,
+        source: ResolvedSource,
+        *,
+        limits: SourceLimits,
+        deadline: float,
+    ) -> SourceDocument:
+        """Normalize workbook content under a caller-owned end-to-end deadline."""
         _inspect_xlsx(source.primary, limits, deadline)
         loader = self._workbook_loader or _load_openpyxl_workbook
         try:
@@ -111,6 +138,7 @@ class XlsxAdapter:
             raise
         except Exception as error:
             raise SourceFormatError("XLSX workbook could not be opened safely") from error
+        _check_deadline(deadline)
 
         blocks: list[SourceBlock] = []
         cell_count = 0
@@ -177,7 +205,7 @@ def _load_openpyxl_workbook(filename: Path, **kwargs: object) -> Any:
 
 
 def _inspect_xlsx(path: Path, limits: SourceLimits, deadline: float) -> None:
-    entries = inspect_zip_archive(path, limits)
+    entries = inspect_zip_archive(path, limits, deadline=deadline)
     normalized_names = {entry.filename.replace("\\", "/").lower() for entry in entries}
     if any(
         name.endswith("vbaproject.bin")
@@ -306,5 +334,5 @@ def _render_cell(value: object) -> str:
 
 
 def _check_deadline(deadline: float) -> None:
-    if time.monotonic() > deadline:
+    if time.monotonic() >= deadline:
         raise SourceTimeoutError("Source conversion exceeded the configured deadline")

@@ -13,9 +13,11 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from math import isfinite
 from pathlib import Path, PurePosixPath
-from typing import Literal, Protocol, TypeAlias
+from typing import Literal, Protocol, TypeAlias, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from survey_scribe.errors import SurveyScribeError
 
 LocalSource: TypeAlias = str | os.PathLike[str]
 
@@ -293,7 +295,7 @@ class SourceDocument(BaseModel):
         return tuple(block.table for block in self.blocks if block.table is not None)
 
 
-class SourceError(Exception):
+class SourceError(SurveyScribeError):
     """Base class for source-port errors with stable machine-readable codes."""
 
     code = "SOURCE_ERROR"
@@ -359,6 +361,18 @@ class SourceAdapter(Protocol):
 
 _REMOTE_PATH = re.compile(r"^[a-z][a-z0-9+.-]*:(?://|/)", re.IGNORECASE)
 _WINDOWS_DRIVE_PATH = re.compile(r"^[a-z]:[\\/]", re.IGNORECASE)
+
+
+def validate_source_argument(source: object) -> LocalSource | SourceBundle:
+    """Validate the public local-source argument without accessing the filesystem."""
+    if isinstance(source, SourceBundle):
+        _coerce_path(source.root, label="bundle root")
+        _coerce_path(source.primary, label="primary source")
+        for companion in source.companions:
+            _coerce_path(companion, label="companion")
+        return source
+    _coerce_path(source, label="source")
+    return cast(LocalSource, source)
 
 
 def resolve_local_source(
@@ -443,6 +457,8 @@ def inspect_zip_archive(
     deadline: float | None = None,
 ) -> tuple[zipfile.ZipInfo, ...]:
     """Inspect ZIP metadata without extraction and enforce archive ceilings."""
+    if deadline is not None and time.monotonic() >= deadline:
+        raise SourceTimeoutError("Source conversion exceeded the configured deadline")
     entry_count = _zip_entry_count(path)
     if entry_count > limits.max_archive_entries:
         raise SourceLimitError(
