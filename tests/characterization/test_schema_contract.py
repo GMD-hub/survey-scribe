@@ -8,7 +8,6 @@ from pathlib import Path
 
 import tomli
 
-from schemas import svis as legacy_svis
 from survey_scribe.models.svis import (
     AnswerCategory,
     DataType,
@@ -72,11 +71,6 @@ def test_exact_fixed_clock_serialization(repository_root: Path) -> None:
 def test_round_trip_preserves_complete_model() -> None:
     expected = _contract_model()
     assert SurveySVIS.model_validate_json(expected.model_dump_json()) == expected
-
-
-def test_legacy_import_reexports_packaged_models() -> None:
-    assert legacy_svis.SurveySVIS is SurveySVIS
-    assert legacy_svis.SurveyVariable is SurveyVariable
 
 
 def test_current_quality_rules_are_not_automatic() -> None:

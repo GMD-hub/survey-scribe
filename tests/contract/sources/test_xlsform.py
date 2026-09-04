@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
+import json
+import time
+import zipfile
 from dataclasses import replace
 from datetime import date
 from pathlib import Path
 
 import pytest
 
+from survey_scribe import SurveyScribe
 from survey_scribe.models.svis import DataType, SurveySVIS, SurveyVariable
+from survey_scribe.providers.capabilities import CapabilityEvidence, ModelCapabilities
+from survey_scribe.providers.testing import DeterministicFakeProvider
+from survey_scribe.results import DiagnosticCode, ResultStatus
 from survey_scribe.routing.contracts import ConditionOperator, NodeKind
 from survey_scribe.routing.native import NativeRoutingItem, prepare_native_routing
 from survey_scribe.sources.base import (
@@ -19,11 +26,13 @@ from survey_scribe.sources.base import (
     SourceProvenance,
     SourceSecurityError,
     SourceTable,
+    SourceTimeoutError,
 )
 from survey_scribe.sources.registry import SourceRegistry
 from survey_scribe.sources.xlsform import (
     XLSFORM_SUPPORT_MATRIX,
     XLSFORM_SUPPORT_MATRIX_VERSION,
+    XlsFormAdapter,
     _choice_reference,
     _parse_expression,
     _project_expression,
@@ -33,6 +42,8 @@ from survey_scribe.sources.xlsform import (
     _supported_question_type,
     _table_records,
 )
+
+_FIXTURES = Path(__file__).parents[2] / "fixtures" / "sources" / "xlsform"
 
 
 def _workbook(path: Path, survey_rows: list[list[object]]) -> None:
@@ -86,6 +97,39 @@ def _survey_only(path: Path, rows: list[list[object]], *, title: str = "survey")
     workbook.save(path)
 
 
+def _versioned_fixture(tmp_path: Path) -> tuple[Path, Path]:
+    from openpyxl import Workbook
+
+    fixture = json.loads((_FIXTURES / "core-v1.json").read_text(encoding="utf-8"))
+    workbook = Workbook()
+    initial = workbook.active
+    assert initial is not None
+    workbook.remove(initial)
+    for name, rows in fixture["sheets"].items():
+        sheet = workbook.create_sheet(name)
+        for row in rows:
+            sheet.append(row)
+    path = tmp_path / "core-v1.xlsx"
+    workbook.save(path)
+    companion = tmp_path / "places-v1.csv"
+    companion.write_bytes((_FIXTURES / companion.name).read_bytes())
+    return path, companion
+
+
+def _capabilities() -> ModelCapabilities:
+    return ModelCapabilities(
+        provider="fake",
+        model="xlsform-native-v1",
+        structured_output=True,
+        strict_schema=True,
+        max_input_tokens=200_000,
+        max_output_tokens=8_192,
+        supported_generation_settings=frozenset({"temperature", "max_output_tokens", "seed"}),
+        evidence=CapabilityEvidence.verified,
+        tested_sdk_version="fake-1",
+    )
+
+
 def test_support_matrix_is_versioned_and_names_exact_projection_boundaries() -> None:
     assert XLSFORM_SUPPORT_MATRIX_VERSION == "1.0"
     assert XLSFORM_SUPPORT_MATRIX["reference_comparisons"] == "exact"
@@ -96,6 +140,20 @@ def test_support_matrix_is_versioned_and_names_exact_projection_boundaries() -> 
     assert XLSFORM_SUPPORT_MATRIX["constraints"] == "preserved_not_flow"
     assert XLSFORM_SUPPORT_MATRIX["calculations"] == "preserved_not_flow"
     assert XLSFORM_SUPPORT_MATRIX["choice_filters"] == "preserved_not_flow"
+    assert XLSFORM_SUPPORT_MATRIX["tested_profile"] == (
+        "XLSForm 1.3 core; ODK-compatible workbook structure"
+    )
+    assert "select_one_from_file" in XLSFORM_SUPPORT_MATRIX["question_types"]
+    assert "XLSFORM_REFERENCE_UNRESOLVED" in XLSFORM_SUPPORT_MATRIX["diagnostic_codes"]
+    assert DiagnosticCode.xlsform_type_unsupported == "XLSFORM_TYPE_UNSUPPORTED"
+
+
+@pytest.mark.parametrize(
+    "question_type",
+    XLSFORM_SUPPORT_MATRIX["question_types"].split(","),
+)
+def test_support_matrix_question_types_match_parser(question_type: str) -> None:
+    assert _supported_question_type(question_type)
 
 
 def test_real_xlsform_preserves_sheets_groups_repeat_and_typed_relevance(
@@ -148,6 +206,14 @@ def test_real_xlsform_preserves_sheets_groups_repeat_and_typed_relevance(
     assert len(native.activations) == 2
     assert native.activations[0].expression.projection.operator is ConditionOperator.equals
     assert native.activations[1].expression.projection.operator is ConditionOperator.all
+    assert [
+        (activation.source_span.row_start, activation.source_span.row_end)
+        for activation in native.activations
+    ] == [(3, 3), (5, 5)]
+    assert [
+        (transition.source_span.row_start, transition.source_span.row_end)
+        for transition in native.transitions
+    ] == [(1, 1), (2, 2), (3, 3), (4, 4), (5, 5)]
     assert tuple(
         reference.source_item_id for reference in native.activations[1].expression.references
     ) == (
@@ -172,6 +238,12 @@ def test_real_xlsform_preserves_sheets_groups_repeat_and_typed_relevance(
     )
     assert dict(calculation.values)["calculation"] == "if(${age} >= 18, 1, 0)"
     assert all(item.raw_reference != "adult" for item in native.items)
+    age_transition = next(
+        transition
+        for transition in native.transitions
+        if transition.source_local_id == age.local_id
+    )
+    assert age_transition.target_local_id == "xlsform:terminal"
     local_ids = {item.local_id for item in native.items}
     assert all(
         transition.source_local_id in local_ids and transition.target_local_id in local_ids
@@ -179,6 +251,14 @@ def test_real_xlsform_preserves_sheets_groups_repeat_and_typed_relevance(
     )
     prepared = prepare_native_routing(native, converted.document, svis)
     assert prepared.inventory.variable_node_ids[-1] is None
+    assert {(span.row_start, span.row_end) for span in prepared.evidence.source_spans} == {
+        (1, 1),
+        (2, 2),
+        (3, 3),
+        (4, 4),
+        (5, 5),
+    }
+    assert all(span.source_quote.count("\n") == 0 for span in prepared.evidence.source_spans)
 
 
 def test_unsupported_function_and_arithmetic_stay_typed_and_opaque(tmp_path: Path) -> None:
@@ -214,6 +294,17 @@ def test_xlsform_rejects_excel_formulas_macros_and_escaped_external_choices(
     )
     with pytest.raises(SourceSecurityError, match="formula"):
         SourceRegistry.default().convert_with_native(formula, _svis(formula, "unsafe"))
+
+    for unsafe_name, member, message in (
+        ("macro.xlsx", "xl/vbaProject.bin", "macro"),
+        ("external-link.xlsx", "xl/externalLinks/externalLink1.xml", "external link"),
+    ):
+        unsafe = tmp_path / unsafe_name
+        _workbook(unsafe, [["type", "name"], ["text", "safe"]])
+        with zipfile.ZipFile(unsafe, "a") as archive:
+            archive.writestr(member, b"unsafe")
+        with pytest.raises(SourceSecurityError, match=message):
+            SourceRegistry.default().convert_with_native(unsafe, _svis(unsafe, "safe"))
 
     escaped = tmp_path / "escaped.xlsx"
     _workbook(
@@ -348,7 +439,8 @@ def test_xlsform_table_and_type_helpers_reject_ambiguous_shapes() -> None:
     )
     headers, rows = _table_records(short, required=("type", "name"))
     assert headers == ("type", "name", "")
-    assert rows[0][1] == {"type": "text", "name": ""}
+    assert rows[0][0] == 2
+    assert rows[0][2] == {"type": "text", "name": ""}
     assert _choice_reference("text") is None
     assert _choice_reference("select_multiple list") == ("internal", "list")
     assert _choice_reference("select_multiple_from_file list.csv") == (
@@ -403,6 +495,7 @@ def test_xlsform_diagnoses_missing_choices_unknown_types_and_bind_relevance(
     converted = SourceRegistry.default().convert_with_native(path, _svis(path, "q", "other"))
     assert converted.native is not None
     assert [item.code for item in converted.native.diagnostics] == [
+        "METADATA_INCOMPLETE",
         "XLSFORM_CHOICE_LIST_MISSING",
         "XLSFORM_TYPE_UNSUPPORTED",
     ]
@@ -410,6 +503,13 @@ def test_xlsform_diagnoses_missing_choices_unknown_types_and_bind_relevance(
     assert (
         converted.native.activations[0].expression.projection.operator is ConditionOperator.equals
     )
+    native_svis = SourceRegistry.default().convert_for_svis(
+        path,
+        extraction_date=date(2026, 9, 3),
+    )
+    assert native_svis.svis is not None
+    assert native_svis.svis.variables[0].categories is None
+    assert native_svis.svis.variables[0].needs_review is True
 
 
 @pytest.mark.parametrize("filename", ("/outside.csv", "https://host/choices.csv", ""))
@@ -457,6 +557,57 @@ def test_external_choice_missing_empty_and_aggregate_cell_limit(tmp_path: Path) 
         )
 
 
+def test_xlsform_rejects_duplicate_internal_choice_identities(tmp_path: Path) -> None:
+    path = tmp_path / "duplicate-internal.xlsx"
+    _workbook(path, [["type", "name"], ["select_one yes_no", "q"]])
+    from openpyxl import load_workbook
+
+    workbook = load_workbook(path)
+    workbook["choices"].append(["yes_no", "yes", "Duplicate", "Double"])
+    workbook.save(path)
+    workbook.close()
+
+    with pytest.raises(SourceFormatError, match="choice identities must be unique"):
+        SourceRegistry.default().convert_for_svis(path, extraction_date=date(2026, 9, 3))
+
+
+def test_xlsform_rejects_duplicate_external_choice_identities(tmp_path: Path) -> None:
+    path = tmp_path / "duplicate-external.xlsx"
+    companion = tmp_path / "choices.csv"
+    _survey_only(path, [["type", "name"], ["select_one_from_file choices.csv", "q"]])
+    companion.write_text("name,label\na,First\na,Duplicate\n", encoding="utf-8")
+
+    with pytest.raises(SourceFormatError, match="external choice identities must be unique"):
+        SourceRegistry.default().convert_for_svis(
+            SourceBundle(root=tmp_path, primary=path, companions=(companion,)),
+            extraction_date=date(2026, 9, 3),
+        )
+
+
+def test_xlsform_rejects_oversized_workbook_and_multiple_settings_rows(
+    tmp_path: Path,
+) -> None:
+    oversized = tmp_path / "oversized.xlsx"
+    _survey_only(oversized, [["type", "name"], ["text", "q"]])
+    with pytest.raises(SourceLimitError, match="cell limit"):
+        SourceRegistry.default().convert_with_native(
+            oversized,
+            _svis(oversized, "q"),
+            limits=replace(DEFAULT_SOURCE_LIMITS, max_cells=3),
+        )
+
+    settings = tmp_path / "settings.xlsx"
+    _workbook(settings, [["type", "name"], ["text", "q"]])
+    from openpyxl import load_workbook
+
+    workbook = load_workbook(settings)
+    workbook["settings"].append(["Other", "other", "20260902"])
+    workbook.save(settings)
+    workbook.close()
+    with pytest.raises(SourceFormatError, match="at most one"):
+        SourceRegistry.default().convert_with_native(settings, _svis(settings, "q"))
+
+
 def test_header_only_xlsform_routes_entry_directly_to_terminal(tmp_path: Path) -> None:
     path = tmp_path / "empty-form.xlsx"
     _survey_only(path, [["type", "name"]])
@@ -464,3 +615,231 @@ def test_header_only_xlsform_routes_entry_directly_to_terminal(tmp_path: Path) -
     assert converted.native is not None
     assert [item.kind for item in converted.native.items] == [NodeKind.entry, NodeKind.terminal]
     assert converted.native.transitions[0].target_local_id == "xlsform:terminal"
+
+
+def test_versioned_fixture_builds_authoritative_typed_svis_without_provider_calls(
+    tmp_path: Path,
+) -> None:
+    path, companion = _versioned_fixture(tmp_path)
+    provider = DeterministicFakeProvider(
+        capabilities=_capabilities(),
+        responder=lambda _request: {"malicious": "replacement"},
+    )
+
+    result = SurveyScribe(provider, extraction_date=date(2026, 9, 3)).convert(
+        SourceBundle(
+            root=tmp_path,
+            primary=Path(path.name),
+            companions=(Path(companion.name),),
+        )
+    )
+
+    assert result.output is not None
+    assert type(result.output) is SurveySVIS
+    assert provider.call_count == 0
+    assert result.output.survey_id == "TST_2026_XLSFORM"
+    assert result.output.survey_name == "Synthetic roster"
+    assert result.output.country_code == "TST"
+    assert result.output.year == 2026
+    assert result.output.language == "French (fr)"
+    assert result.output.data_collection_mode == "CAPI"
+    assert [variable.raw_name for variable in result.output.variables] == [
+        "consent",
+        "age",
+        "adult",
+        "birthplace",
+    ]
+    consent, age, adult, birthplace = result.output.variables
+    assert consent.label == "Consentement ?"
+    assert consent.data_type is DataType.categorical_single
+    assert [(category.code, category.label) for category in consent.categories or ()] == [
+        ("yes", "Oui"),
+        ("no", "Non"),
+    ]
+    assert age.module == "member"
+    assert age.skip_condition_raw == "${consent} = 'yes'"
+    assert age.notes == "XLSForm constraint: . >= 0"
+    assert adult.notes == "XLSForm calculation: if(${age} >= 18, 1, 0)"
+    assert [(category.code, category.label) for category in birthplace.categories or ()] == [
+        ("capital", "Capitale"),
+        ("rural", "Zone rurale"),
+    ]
+
+    bundle = SourceBundle(
+        root=tmp_path,
+        primary=Path(path.name),
+        companions=(Path(companion.name),),
+    )
+    first = SourceRegistry.default().convert_for_svis(
+        bundle,
+        extraction_date=date(2026, 9, 3),
+    )
+    second = SourceRegistry.default().convert_for_svis(
+        bundle,
+        extraction_date=date(2026, 9, 3),
+    )
+    assert first == second
+    assert first.native is not None
+    assert all(item.raw_reference != "adult" for item in first.native.items)
+    settings = next(record for record in first.native.records if record.collection == "settings")
+    assert dict(settings.values)["version"] == "20260901"
+
+
+@pytest.mark.parametrize(
+    "rows",
+    (
+        [["type", "name"], ["text", "q"]],
+        [["type", "name"]],
+    ),
+    ids=("missing-settings", "header-only"),
+)
+def test_public_xlsform_metadata_fallbacks_are_partial(
+    tmp_path: Path,
+    rows: list[list[object]],
+) -> None:
+    path = tmp_path / "fallback-form.xlsx"
+    _survey_only(path, rows)
+    provider = DeterministicFakeProvider(
+        capabilities=_capabilities(),
+        responder=lambda _request: {"malicious": "replacement"},
+    )
+
+    result = SurveyScribe(provider, extraction_date=date(2026, 9, 3)).convert(path)
+
+    assert result.output is not None
+    assert result.status is ResultStatus.partial
+    assert provider.call_count == 0
+    assert result.output.survey_id == "fallback-form"
+    assert result.output.survey_name == "Fallback Form"
+    assert result.output.country_code == "UNK"
+    assert result.output.year == 2026
+    assert [diagnostic.code for diagnostic in result.diagnostics] == [
+        DiagnosticCode.metadata_incomplete
+    ]
+
+
+@pytest.mark.parametrize(
+    "rows",
+    (
+        [["type", "name"], ["begin group", "g"], ["end repeat", ""]],
+        [["type", "name"], ["begin repeat", "r"], ["end group", ""]],
+    ),
+)
+def test_xlsform_rejects_mismatched_group_and_repeat_end_markers(
+    tmp_path: Path,
+    rows: list[list[object]],
+) -> None:
+    path = tmp_path / "mismatched.xlsx"
+    _survey_only(path, rows)
+    with pytest.raises(SourceFormatError, match="does not match"):
+        SourceRegistry.default().convert_with_native(path, _svis(path))
+
+
+def test_xlsform_emits_explicit_unsupported_and_unresolved_diagnostics(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "unsupported.xlsx"
+    _survey_only(
+        path,
+        [
+            ["type", "name", "relevant", "constraint", "appearance", "trigger"],
+            ["integer", "age", "", "", "", ""],
+            ["rank choices", "ranked", "count-selected(${age}) + 1 > 2", "", "", ""],
+            ["text", "other", "${missing} = 1", "", "search('items')", "yes"],
+        ],
+    )
+
+    converted = SourceRegistry.default().convert_with_native(
+        path,
+        _svis(path, "age", "ranked", "other"),
+    )
+
+    assert converted.native is not None
+    assert {diagnostic.code for diagnostic in converted.native.diagnostics} == {
+        "METADATA_INCOMPLETE",
+        "XLSFORM_EXPRESSION_UNSUPPORTED",
+        "XLSFORM_FEATURE_UNSUPPORTED",
+        "XLSFORM_FUNCTION_UNSUPPORTED",
+        "XLSFORM_REFERENCE_UNRESOLVED",
+        "XLSFORM_TYPE_UNSUPPORTED",
+    }
+    native_svis = SourceRegistry.default().convert_for_svis(
+        path,
+        extraction_date=date(2026, 9, 3),
+    )
+    assert native_svis.svis is not None
+    assert [variable.raw_name for variable in native_svis.svis.variables] == [
+        "age",
+        "ranked",
+        "other",
+    ]
+    assert native_svis.svis.variables[1].data_type is DataType.other
+    assert native_svis.svis.variables[1].needs_review is True
+
+    public = SurveyScribe(
+        DeterministicFakeProvider(
+            capabilities=_capabilities(),
+            responder=lambda _request: {"malicious": "replacement"},
+        ),
+        extraction_date=date(2026, 9, 3),
+    ).convert(path)
+    assert {diagnostic.code for diagnostic in public.diagnostics} == {
+        DiagnosticCode.metadata_incomplete,
+        DiagnosticCode.xlsform_expression_unsupported,
+        DiagnosticCode.xlsform_feature_unsupported,
+        DiagnosticCode.xlsform_function_unsupported,
+        DiagnosticCode.xlsform_reference_unresolved,
+        DiagnosticCode.xlsform_type_unsupported,
+    }
+
+
+def test_xlsform_rejects_corrupt_package(tmp_path: Path) -> None:
+    path = tmp_path / "corrupt.xlsx"
+    path.write_bytes(b"not an xlsx package")
+    with pytest.raises(SourceFormatError, match="extension does not match"):
+        SourceRegistry.default().convert_with_native(path, _svis(path))
+
+
+def test_xlsform_uses_one_deadline_for_workbook_and_external_csv(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path, companion = _versioned_fixture(tmp_path)
+    adapter = XlsFormAdapter()
+    resolved = SourceRegistry.default().convert(
+        path,
+        limits=replace(DEFAULT_SOURCE_LIMITS, deadline_seconds=10),
+    )
+    captured: list[float] = []
+
+    def expire_csv(
+        self: object,
+        source: object,
+        *,
+        limits: object,
+        deadline: float,
+    ) -> object:
+        del self, source, limits
+        captured.append(deadline)
+        raise SourceTimeoutError("Source conversion exceeded the configured deadline")
+
+    monkeypatch.setattr("survey_scribe.sources.xlsform.CsvAdapter.convert_until", expire_csv)
+    deadline = time.monotonic() + 10
+    from survey_scribe.sources.base import resolve_local_source
+
+    source = resolve_local_source(
+        SourceBundle(
+            root=tmp_path,
+            primary=Path(path.name),
+            companions=(Path(companion.name),),
+        )
+    )
+    with pytest.raises(SourceTimeoutError):
+        adapter.convert_svis_until(
+            source,
+            resolved,
+            limits=DEFAULT_SOURCE_LIMITS,
+            deadline=deadline,
+            extraction_date=date(2026, 9, 3),
+        )
+    assert captured == [deadline]

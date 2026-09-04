@@ -108,6 +108,13 @@ def test_openai_compatible_presets_set_only_reviewed_endpoints_and_headers() -> 
             model="configured-model",
             capabilities=_capabilities("custom", "configured-model"),
         )
+    with pytest.raises(ValueError, match="HTTPS"):
+        InstructorOpenAIProvider.from_preset(
+            OpenAICompatiblePreset.custom,
+            model="configured-model",
+            base_url="http://gateway.example/v1",
+            capabilities=_capabilities("custom", "configured-model"),
+        )
 
 
 @pytest.mark.asyncio

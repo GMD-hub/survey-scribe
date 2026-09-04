@@ -12,7 +12,7 @@ def test_parser_has_stable_program_name_and_description() -> None:
     parser = build_parser()
 
     assert parser.prog == "survey-scribe"
-    assert parser.description == "Inspect Survey Scribe and export public JSON schemas."
+    assert parser.description == "Convert local questionnaires and inspect Survey Scribe."
 
 
 def test_no_arguments_prints_help(capsys: pytest.CaptureFixture[str]) -> None:

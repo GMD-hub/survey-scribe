@@ -1,0 +1,26 @@
+{
+  "profile": "XLSForm 1.3 core",
+  "fixture_version": "1.0.0",
+  "sheets": {
+    "survey": [
+      ["type", "name", "label", "label::French (fr)", "relevant", "constraint", "calculation", "choice_filter", "repeat_count"],
+      ["select_one yes_no", "consent", "Consent?", "Consentement ?", "", "", "", "", ""],
+      ["begin group", "household", "Household", "Menage", "${consent} = 'yes'", "", "", "", ""],
+      ["begin repeat", "member", "Member", "Membre", "", "", "", "", "2"],
+      ["integer", "age", "Age", "Age", "${consent} = 'yes'", ". >= 0", "", "", ""],
+      ["calculate", "adult", "Adult flag", "Indicateur adulte", "", "", "if(${age} >= 18, 1, 0)", "", ""],
+      ["select_one_from_file places-v1.csv", "birthplace", "Birthplace", "Lieu de naissance", "", "", "", "country=${country}", ""],
+      ["end repeat", "", "", "", "", "", "", "", ""],
+      ["end group", "", "", "", "", "", "", "", ""]
+    ],
+    "choices": [
+      ["list_name", "name", "label", "label::French (fr)"],
+      ["yes_no", "yes", "Yes", "Oui"],
+      ["yes_no", "no", "No", "Non"]
+    ],
+    "settings": [
+      ["form_title", "form_id", "version", "default_language", "country_code", "year", "data_collection_mode"],
+      ["Synthetic roster", "TST_2026_XLSFORM", "20260901", "French (fr)", "TST", "2026", "CAPI"]
+    ]
+  }
+}

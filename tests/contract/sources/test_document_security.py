@@ -475,7 +475,11 @@ def test_xlsx_rejects_malformed_worksheet_and_package_io_errors(
     path = tmp_path / "unreadable.xlsx"
     path.write_bytes(b"package")
     entry = SimpleNamespace(filename="xl/worksheets/sheet1.xml")
-    monkeypatch.setattr(tabular_source, "inspect_zip_archive", lambda _path, _limits: (entry,))
+    monkeypatch.setattr(
+        tabular_source,
+        "inspect_zip_archive",
+        lambda _path, _limits, *, deadline=None: (entry,),
+    )
 
     class BrokenArchive:
         def __init__(self, _path: Path) -> None:
