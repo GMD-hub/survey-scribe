@@ -58,6 +58,12 @@ class DiagnosticCode(StrEnum):
     provider_truncated = "PROVIDER_TRUNCATED"
     validation_failed = "VALIDATION_FAILED"
     block_failed = "BLOCK_FAILED"
+    xlsform_choice_list_missing = "XLSFORM_CHOICE_LIST_MISSING"
+    xlsform_expression_unsupported = "XLSFORM_EXPRESSION_UNSUPPORTED"
+    xlsform_feature_unsupported = "XLSFORM_FEATURE_UNSUPPORTED"
+    xlsform_function_unsupported = "XLSFORM_FUNCTION_UNSUPPORTED"
+    xlsform_reference_unresolved = "XLSFORM_REFERENCE_UNRESOLVED"
+    xlsform_type_unsupported = "XLSFORM_TYPE_UNSUPPORTED"
 
 
 class _FrozenJsonDict(dict[str, Any]):

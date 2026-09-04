@@ -50,6 +50,7 @@ class InstructorAnthropicProvider(InstructorOpenAIProvider):
         if self._api_key is not None:
             client_kwargs["api_key"] = self._api_key
         client = anthropic.AsyncAnthropic(**client_kwargs)
+        self._client = client
         patched = instructor.from_anthropic(client, mode=instructor.Mode.ANTHROPIC_TOOLS)
 
         async def complete(**kwargs: object) -> object:

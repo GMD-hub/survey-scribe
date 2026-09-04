@@ -59,6 +59,30 @@ class SurveyScribeError(Exception):
     code = "SURVEY_SCRIBE_ERROR"
 
 
+class ProgrammerInputError(SurveyScribeError, TypeError):
+    """A caller supplied an invalid API object or argument shape."""
+
+    code = "PROGRAMMER_INPUT_INVALID"
+
+
+class RunningEventLoopError(SurveyScribeError, RuntimeError):
+    """A synchronous facade was called from a running event loop."""
+
+    code = "RUNNING_EVENT_LOOP"
+
+
+class ClientClosedError(SurveyScribeError, RuntimeError):
+    """A conversion was requested after its facade was closed."""
+
+    code = "CLIENT_CLOSED"
+
+
+class ConversionFailedError(SurveyScribeError, RuntimeError):
+    """A compatibility entry point cannot return a failed result envelope."""
+
+    code = "CONVERSION_FAILED"
+
+
 class ConfigurationError(SurveyScribeError, ValueError):
     """Configuration cannot be loaded or validated."""
 

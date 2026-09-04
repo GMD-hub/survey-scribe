@@ -146,6 +146,8 @@ class SurveyScribeConfig(BaseModel):
         """Reject credentials and non-routing fragments in provider base URLs."""
         if value is None:
             return None
+        if value.scheme != "https":
+            raise ValueError("base_url must use HTTPS")
         if value.username is not None or value.password is not None:
             raise ValueError("base_url must not contain user information")
         if value.fragment:
@@ -225,12 +227,12 @@ class SurveyScribeConfig(BaseModel):
                 _generic_environment(environment),
                 file_values,
             )
-            values = _deep_merge(
+            values = _merge_config_sources(
                 values,
                 _environment_values(environment, provider_hint=provider_hint),
             )
-        values = _deep_merge(values, explicit_config)
-        values = _deep_merge(values, constructor_values)
+        values = _merge_config_sources(values, explicit_config)
+        values = _merge_config_sources(values, constructor_values)
         return cls._validate_resolved(values)
 
     @classmethod
@@ -322,12 +324,12 @@ class SurveyScribeConfig(BaseModel):
             generic_environment,
             file_values,
         )
-        values = _deep_merge(
+        values = _merge_config_sources(
             file_values,
             _provider_environment(environment, provider_hint),
         )
-        values = _deep_merge(values, generic_environment)
-        values = _deep_merge(values, flag_values)
+        values = _merge_config_sources(values, generic_environment)
+        values = _merge_config_sources(values, flag_values)
         return cls._validate_resolved(values)
 
     @classmethod
@@ -395,6 +397,19 @@ def _deep_merge(base: Mapping[str, Any], override: Mapping[str, Any]) -> dict[st
     return merged
 
 
+def _merge_config_sources(
+    base: Mapping[str, Any],
+    override: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Merge precedence ranks while treating credential forms as one setting."""
+    credential_names = {"api_key", "bearer_token", "token_callback"}
+    merged_base = dict(base)
+    if credential_names.intersection(override):
+        for name in credential_names:
+            merged_base.pop(name, None)
+    return _deep_merge(merged_base, override)
+
+
 def _provider_hint(*sources: Mapping[str, Any]) -> str:
     for source in sources:
         provider = source.get("provider")
@@ -445,7 +460,7 @@ def _provider_environment(environ: Mapping[str, str], provider: str) -> dict[str
 
 
 def _environment_values(environ: Mapping[str, str], *, provider_hint: str) -> dict[str, Any]:
-    return _deep_merge(
+    return _merge_config_sources(
         _provider_environment(environ, provider_hint),
         _generic_environment(environ),
     )
