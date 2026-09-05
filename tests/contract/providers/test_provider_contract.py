@@ -27,6 +27,8 @@ from survey_scribe.providers.capabilities import (
 )
 from survey_scribe.providers.testing import DeterministicFakeProvider, FakeStep
 
+pytestmark = pytest.mark.allow_hosts(["127.0.0.1", "::1"])
+
 
 class Answer(BaseModel):
     model_config = ConfigDict(extra="forbid")

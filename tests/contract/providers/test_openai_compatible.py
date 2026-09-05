@@ -10,7 +10,7 @@ from types import SimpleNamespace
 from typing import cast
 
 import pytest
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_serializer, field_validator
 
 from survey_scribe.config import GenerationConfig, RetryConfig
 from survey_scribe.providers import openai_compatible as adapter_module
@@ -27,11 +27,33 @@ from survey_scribe.providers.base import (
 from survey_scribe.providers.capabilities import CapabilityEvidence, ModelCapabilities
 from survey_scribe.providers.openai_compatible import InstructorOpenAIProvider
 
+pytestmark = pytest.mark.allow_hosts(["127.0.0.1", "::1"])
+
 
 class Answer(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     value: int
+
+
+class AliasedAnswer(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    value: int = Field(validation_alias="wireValue", serialization_alias="serializedValue")
+
+    @field_validator("value")
+    @classmethod
+    def increment_once(cls, value: int) -> int:
+        return value + 1
+
+    @field_serializer("value")
+    def serialize_value(self, value: int) -> int:
+        return value + 100
+
+    @computed_field
+    @property
+    def doubled(self) -> int:
+        return self.value * 2
 
 
 def _capabilities() -> ModelCapabilities:
@@ -90,6 +112,35 @@ def test_adapter_rejects_empty_or_capability_mismatched_model() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "https://user:private@example.test",  # pragma: allowlist secret
+        "https://example.test/v1#private-fragment",
+        "https://example.test/v1?OcpApimSubscriptionKey=private-query",
+    ],
+)
+def test_generic_constructor_detaches_credential_bearing_base_urls(base_url: str) -> None:
+    with pytest.raises(ValueError) as error:
+        InstructorOpenAIProvider(
+            model="gpt-test",
+            api_key="private-primary",  # pragma: allowlist secret
+            base_url=base_url,
+            capabilities=_capabilities(),
+        )
+
+    provider_frames: list[str] = []
+    traceback = error.value.__traceback__
+    while traceback is not None:
+        if "/src/survey_scribe/providers/" in traceback.tb_frame.f_code.co_filename:
+            provider_frames.append(repr(traceback.tb_frame.f_locals))
+        traceback = traceback.tb_next
+
+    assert provider_frames
+    assert "private-primary" not in repr(provider_frames)
+    assert "private-query" not in repr(provider_frames)
+
+
 @pytest.mark.asyncio
 async def test_adapter_uses_injected_completion_without_importing_sdks() -> None:
     calls = 0
@@ -115,6 +166,48 @@ async def test_adapter_uses_injected_completion_without_importing_sdks() -> None
     assert response.usage is not None and response.usage.total_tokens == 10
     assert response.response_id == "response-1"
     assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_generic_adapter_keeps_explicit_completion_keyword_contract() -> None:
+    async def completion(
+        *,
+        model: str,
+        messages: tuple[ProviderMessage, ...],
+        response_model: type[BaseModel],
+        request_schema: object,
+        generation: GenerationConfig,
+    ) -> Answer:
+        assert model == "gpt-test"
+        assert messages
+        assert response_model is Answer
+        assert request_schema
+        assert generation.max_output_tokens == 4096
+        return Answer(value=9)
+
+    provider = InstructorOpenAIProvider(
+        model="gpt-test",
+        capabilities=_capabilities(),
+        completion=completion,
+    )
+
+    response = await _generate(provider)
+
+    assert response.output == Answer(value=9)
+
+
+def test_wire_output_preserves_validated_alias_and_serializer_values() -> None:
+    wire_model = adapter_module._strict_wire_response_model(
+        AliasedAnswer,
+        _capabilities().inspect_schema(AliasedAnswer).request_schema,
+    )
+    wire_output = wire_model.model_validate({"wireValue": 4})
+
+    output = adapter_module._normalize_wire_output(wire_output, AliasedAnswer)
+
+    assert isinstance(output, AliasedAnswer)
+    assert output.value == 5
+    assert output.doubled == 10
 
 
 @pytest.mark.asyncio
@@ -198,6 +291,43 @@ async def test_adapter_retries_generic_timeout_and_rejects_nonretryable_transpor
     )
     with pytest.raises(ProviderTransportError):
         await _generate(denied)
+
+
+@pytest.mark.asyncio
+async def test_mixed_failure_raises_final_validation_category_without_extra_delay(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+    delays: list[float] = []
+
+    async def no_wait(delay: float) -> None:
+        delays.append(delay)
+
+    async def mixed(**_kwargs: object) -> object:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise TimeoutError
+        return {"value": "invalid"}
+
+    monkeypatch.setattr(asyncio, "sleep", no_wait)
+    provider = InstructorOpenAIProvider(
+        model="gpt-test",
+        capabilities=_capabilities(),
+        completion=mixed,
+    )
+
+    with pytest.raises(ProviderValidationError):
+        await provider.generate(
+            messages=(ProviderMessage(role="user", content="questionnaire"),),
+            response_model=Answer,
+            generation=GenerationConfig(),
+            retry=RetryConfig(max_attempts=2, initial_delay_seconds=0.1),
+            limiter=ConcurrencyLimiter(1),
+        )
+
+    assert calls == 2
+    assert delays == [0.1]
 
 
 @pytest.mark.asyncio
@@ -319,6 +449,7 @@ async def test_lazy_sdk_path_converts_messages_settings_and_normalizes_metadata(
         messages=request_kwargs["messages"],
     )
     wire_function = wire_request["tools"][0]["function"]
+    assert wire_function["strict"] is True
     wire_schema_json = json.dumps(
         wire_function["parameters"],
         ensure_ascii=True,
@@ -326,10 +457,10 @@ async def test_lazy_sdk_path_converts_messages_settings_and_normalizes_metadata(
         separators=(",", ":"),
         sort_keys=True,
     )
-    assert wire_function["strict"] is True
     assert hashlib.sha256(wire_schema_json.encode("utf-8")).hexdigest() == (
         provider.inspect_schema(Answer).request_schema_sha256
     )
+    assert wire_function["parameters"]["title"] == "AnswerStrictWire"
     assert response.response_id == "sdk-response"
     assert response.usage is not None and response.usage.total_tokens == 15
 
