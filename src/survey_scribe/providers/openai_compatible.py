@@ -9,11 +9,12 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from enum import StrEnum
 from importlib import import_module
 from typing import Literal, TypeVar, cast
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlsplit
 
 from pydantic import BaseModel, ValidationError, create_model
 
 from survey_scribe.config import GenerationConfig, RetryConfig
+from survey_scribe.errors import is_sensitive_query_key
 from survey_scribe.providers.base import (
     ConcurrencyLimiter,
     NormalizedUsage,
@@ -66,11 +67,24 @@ class InstructorOpenAIProvider:
             raise ValueError("provider model must not be empty")
         if capabilities.model != model:
             raise ValueError("capability row model must match the configured model")
-        if base_url is not None and urlsplit(base_url).scheme.casefold() != "https":
-            raise ValueError("provider base_url must use HTTPS")
+        validated_base_url = base_url
+        if base_url is not None:
+            validation_message: str | None = None
+            try:
+                validated_base_url = _validate_provider_base_url(
+                    base_url,
+                    label="provider base_url",
+                )
+            except ValueError as error:
+                validation_message = str(error)
+            if validation_message is not None:
+                api_key = None
+                base_url = None
+                validated_base_url = None
+                raise ValueError(validation_message) from None
         self._model = model
         self._api_key = api_key
-        self._base_url = base_url
+        self._base_url = validated_base_url
         self._default_headers = _validate_default_headers(default_headers)
         self.capabilities = capabilities
         self._completion = completion
@@ -149,47 +163,114 @@ class InstructorOpenAIProvider:
         self.capabilities.validate_generation(generation)
         completion = self._completion
         if completion is None:
+            dependency_missing = False
+            setup_failed = False
+            setup_control: Literal["cancelled", "keyboard", "system-exit"] | None = None
             try:
                 completion = self._load_sdk_completion()
+            except asyncio.CancelledError:
+                setup_control = "cancelled"
+            except KeyboardInterrupt:
+                setup_control = "keyboard"
+            except SystemExit:
+                setup_control = "system-exit"
             except ImportError:
+                dependency_missing = True
+            except Exception:
+                setup_failed = True
+            if setup_control == "cancelled":
+                raise asyncio.CancelledError() from None
+            if setup_control == "keyboard":
+                raise KeyboardInterrupt() from None
+            if setup_control == "system-exit":
+                raise SystemExit(1) from None
+            if dependency_missing:
                 raise ProviderDependencyError(self._dependency_extra) from None
+            if setup_failed or completion is None:
+                raise ProviderTransportError(retryable=False) from None
             self._completion = completion
         materialized_messages = tuple(messages)
         transport_attempts = 0
         validation_attempts = 0
         while transport_attempts < retry.max_attempts:
             transport_attempts += 1
+            request_headers: Mapping[str, str] | None = None
+            failure: BaseException | None = None
+            retry_attempt: int | None = None
+            control_failure: Literal["cancelled", "keyboard", "system-exit"] | None = None
             try:
                 async with limiter.slot():
-                    result = completion(
-                        model=self.model,
-                        messages=materialized_messages,
-                        response_model=response_model,
-                        request_schema=descriptor.request_schema,
-                        generation=generation,
-                    )
+                    request_headers = self._request_extra_headers()
+                    if request_headers:
+                        result = completion(
+                            model=self.model,
+                            messages=materialized_messages,
+                            response_model=response_model,
+                            request_schema=descriptor.request_schema,
+                            generation=generation,
+                            extra_headers=dict(request_headers),
+                        )
+                    else:
+                        result = completion(
+                            model=self.model,
+                            messages=materialized_messages,
+                            response_model=response_model,
+                            request_schema=descriptor.request_schema,
+                            generation=generation,
+                        )
                     if inspect.isawaitable(result):
                         result = await cast(Awaitable[object], result)
-            except (asyncio.CancelledError, KeyboardInterrupt, SystemExit):
-                raise
+            except asyncio.CancelledError:
+                request_headers = None
+                result = None
+                control_failure = "cancelled"
+            except KeyboardInterrupt:
+                request_headers = None
+                result = None
+                control_failure = "keyboard"
+            except SystemExit:
+                request_headers = None
+                result = None
+                control_failure = "system-exit"
             except ProviderTransportError as error:
-                if not error.retryable or transport_attempts >= retry.max_attempts:
-                    raise
-                await _retry_delay(retry, transport_attempts)
-                continue
+                request_headers = None
+                result = None
+                if error.retryable and transport_attempts < retry.max_attempts:
+                    retry_attempt = transport_attempts
+                else:
+                    failure = _fresh_transport_error(error)
             except Exception as error:
+                request_headers = None
+                result = None
                 if _is_provider_truncation_error(error):
-                    raise ProviderTruncationError() from None
-                if _is_provider_validation_error(error):
+                    failure = ProviderTruncationError()
+                elif _is_provider_validation_error(error):
                     validation_attempts += 1
-                    if validation_attempts >= retry.max_attempts:
-                        raise ProviderValidationError() from None
-                    await _retry_delay(retry, validation_attempts)
-                    continue
-                normalized = _classify_transport_error(error)
-                if not normalized.retryable or transport_attempts >= retry.max_attempts:
-                    raise normalized from None
-                await _retry_delay(retry, transport_attempts)
+                    if (
+                        validation_attempts >= retry.max_attempts
+                        or transport_attempts >= retry.max_attempts
+                    ):
+                        failure = ProviderValidationError()
+                    else:
+                        retry_attempt = validation_attempts
+                else:
+                    normalized = _classify_transport_error(error)
+                    if normalized.retryable and transport_attempts < retry.max_attempts:
+                        retry_attempt = transport_attempts
+                    else:
+                        failure = normalized
+
+            request_headers = None
+            if control_failure == "cancelled":
+                raise asyncio.CancelledError() from None
+            if control_failure == "keyboard":
+                raise KeyboardInterrupt() from None
+            if control_failure == "system-exit":
+                raise SystemExit(1) from None
+            if failure is not None:
+                raise failure from None
+            if retry_attempt is not None:
+                await _retry_delay(retry, retry_attempt)
                 continue
 
             output_value, metadata = _split_result(result)
@@ -197,7 +278,10 @@ class InstructorOpenAIProvider:
             try:
                 output = response_model.model_validate(output_value)
             except ValidationError:
-                if validation_attempts >= retry.max_attempts:
+                if (
+                    validation_attempts >= retry.max_attempts
+                    or transport_attempts >= retry.max_attempts
+                ):
                     raise ProviderValidationError() from None
                 await _retry_delay(retry, validation_attempts)
                 continue
@@ -227,6 +311,9 @@ class InstructorOpenAIProvider:
         outcome = close()
         if inspect.isawaitable(outcome):
             await outcome
+
+    def _request_extra_headers(self) -> Mapping[str, str] | None:
+        return None
 
     def _load_sdk_completion(self) -> Completion:
         openai = import_module("openai")
@@ -268,7 +355,7 @@ class InstructorOpenAIProvider:
             )
             choice = completion_response.choices[0] if completion_response.choices else None
             usage = getattr(completion_response, "usage", None)
-            return output, {
+            return _normalize_wire_output(output, response_model), {
                 "finish_reason": getattr(choice, "finish_reason", None),
                 "response_id": getattr(completion_response, "id", None),
                 "usage": {
@@ -299,11 +386,26 @@ def _strict_wire_response_model(
     def model_json_schema(
         cls: type[BaseModel], *_args: object, **_kwargs: object
     ) -> dict[str, object]:
-        del cls
-        return copy.deepcopy(dict(request_schema))
+        schema = copy.deepcopy(dict(request_schema))
+        schema["title"] = cls.__name__
+        return schema
 
     wire_model.model_json_schema = classmethod(model_json_schema)  # type: ignore[method-assign]
     return cast(type[T], wire_model)
+
+
+def _normalize_wire_output(output: object, response_model: type[T]) -> T:
+    if isinstance(output, response_model):
+        return cast(T, output)
+    return response_model.model_validate(output)
+
+
+def _fresh_transport_error(error: ProviderTransportError) -> ProviderTransportError:
+    if isinstance(error, ProviderAuthenticationError):
+        return ProviderAuthenticationError()
+    if isinstance(error, ProviderRateLimitError):
+        return ProviderRateLimitError()
+    return ProviderTransportError(retryable=error.retryable)
 
 
 def _split_result(result: object) -> tuple[object, object]:
@@ -404,6 +506,27 @@ def _validate_default_headers(headers: Mapping[str, str] | None) -> dict[str, st
             raise ValueError("custom provider header values must not be empty")
         validated[name] = value
     return validated
+
+
+def _validate_provider_base_url(value: str, *, label: str) -> str:
+    try:
+        parsed = urlsplit(value)
+        if parsed.scheme.casefold() != "https":
+            raise ValueError(f"{label} must use HTTPS")
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError(f"{label} must not contain user information")
+        if parsed.fragment:
+            raise ValueError(f"{label} must not contain a fragment")
+        if any(
+            is_sensitive_query_key(key)
+            for key, _item in parse_qsl(parsed.query, keep_blank_values=True)
+        ):
+            raise ValueError(f"{label} must not contain sensitive query parameters")
+    except ValueError as error:
+        message = str(error)
+    else:
+        return value
+    raise ValueError(message) from None
 
 
 __all__ = ["InstructorOpenAIProvider", "OpenAICompatiblePreset"]

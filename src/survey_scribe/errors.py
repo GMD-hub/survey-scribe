@@ -5,12 +5,15 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping, Sequence
 from typing import Any
+from urllib.parse import unquote_plus
 
 REDACTED = "[REDACTED]"
 
 _SENSITIVE_QUERY_KEYS = frozenset(
     {
         "api_key",
+        "ocp_apim_subscription_key",
+        "subscription_key",
         "key",
         "token",
         "access_token",
@@ -22,9 +25,15 @@ _SENSITIVE_QUERY_KEYS = frozenset(
         "credential",
     }
 )
+_SENSITIVE_QUERY_KEY_COMPACT = frozenset(key.replace("_", "") for key in _SENSITIVE_QUERY_KEYS)
 
+_SUBSCRIPTION_KEY = r"(?:ocp[_-]?apim[_-]?)?subscription[_-]?key"
+_ASSIGNED_SECRET_KEY = (
+    rf"{_SUBSCRIPTION_KEY}|api[_-]?key|bearer[_-]?token|access[_-]?token|"
+    r"refresh[_-]?token|client[_-]?secret|password|secret|signature|credential"
+)
 _SECRET_KEY = re.compile(
-    r"(?:api[_-]?key|authorization|bearer[_-]?token|access[_-]?token|"
+    rf"(?:{_SUBSCRIPTION_KEY}|api[_-]?key|authorization|bearer[_-]?token|access[_-]?token|"
     r"refresh[_-]?token|client[_-]?secret|password|secret|signature|credential|"
     r"question[_-]?text)",
     re.IGNORECASE,
@@ -32,25 +41,21 @@ _SECRET_KEY = re.compile(
 _AUTHORIZATION_VALUE = re.compile(r"(?im)(\b(?:proxy-)?authorization\s*[:=]\s*)[^\r\n]+")
 _URL_USER_INFORMATION = re.compile(r"(?i)(\bhttps?://)[^/@\s]+@")
 _ESCAPED_QUOTED_ASSIGNED_SECRET = re.compile(
-    r"(?i)(\\[\"'](?:api[_-]?key|bearer[_-]?token|access[_-]?token|refresh[_-]?token|"
-    r"client[_-]?secret|password|secret|signature|credential)\\[\"']\s*[=:]\s*"
+    rf"(?i)(\\[\"'](?:{_ASSIGNED_SECRET_KEY})\\[\"']\s*[=:]\s*"
     r"\\[\"'])(.*?)(\\[\"'])"
 )
 _QUOTED_ASSIGNED_SECRET = re.compile(
-    r"(?i)([\"']?(?:api[_-]?key|bearer[_-]?token|access[_-]?token|refresh[_-]?token|"
-    r"client[_-]?secret|password|secret|signature|credential)[\"']?\s*[=:]\s*)"
+    rf"(?i)([\"']?(?:{_ASSIGNED_SECRET_KEY})[\"']?\s*[=:]\s*)"
     r"([\"'])(.*?)\2"
 )
 _ASSIGNED_SECRET = re.compile(
-    r"(?i)(\b(?:api[_-]?key|bearer[_-]?token|access[_-]?token|refresh[_-]?token|"
-    r"client[_-]?secret|password|secret|signature|credential)\b\s*[=:]\s*)"
+    rf"(?i)(\b(?:{_ASSIGNED_SECRET_KEY})\b\s*[=:]\s*)"
     r"[^\s,;&#}]+"
 )
-_QUERY_KEY_PATTERN = "|".join(
-    re.escape(key).replace("_", r"[_-]?")
-    for key in sorted(_SENSITIVE_QUERY_KEYS, key=len, reverse=True)
+_SUBSCRIPTION_HEADER_LINE = re.compile(
+    rf"(?im)(\b{_SUBSCRIPTION_KEY}\b\s*[=:]\s*)(?!\\?[\"'])([^\r\n]+)"
 )
-_QUERY_SECRET = re.compile(rf"(?i)([?&](?:{_QUERY_KEY_PATTERN})=)[^&#\s]+")
+_QUERY_ASSIGNMENT = re.compile(r"(?i)([?&])([^=&\s]+)=([^&#\s]*)")
 
 
 class SurveyScribeError(Exception):
@@ -118,7 +123,11 @@ class ArtifactWriteError(ArtifactError, OSError):
 
 
 def redact_text(value: str, *, sensitive_values: Sequence[str] = ()) -> str:
-    """Remove credentials and caller-identified private text from a string."""
+    """Redact recognized credentials and explicit sensitive values best-effort.
+
+    Arbitrary secret formats cannot be detected. Callers must provide known
+    values through ``sensitive_values`` and avoid recording raw request objects.
+    """
     redacted = value
     for sensitive in sorted((item for item in sensitive_values if item), key=len, reverse=True):
         redacted = redacted.replace(sensitive, REDACTED)
@@ -126,8 +135,9 @@ def redact_text(value: str, *, sensitive_values: Sequence[str] = ()) -> str:
     redacted = _URL_USER_INFORMATION.sub(rf"\1{REDACTED}@", redacted)
     redacted = _ESCAPED_QUOTED_ASSIGNED_SECRET.sub(rf"\1{REDACTED}\3", redacted)
     redacted = _QUOTED_ASSIGNED_SECRET.sub(rf"\1\2{REDACTED}\2", redacted)
+    redacted = _SUBSCRIPTION_HEADER_LINE.sub(rf"\1{REDACTED}", redacted)
     redacted = _ASSIGNED_SECRET.sub(rf"\1{REDACTED}", redacted)
-    return _QUERY_SECRET.sub(rf"\1{REDACTED}", redacted)
+    return _QUERY_ASSIGNMENT.sub(_redact_query_assignment, redacted)
 
 
 def is_sensitive_key(value: str) -> bool:
@@ -137,8 +147,16 @@ def is_sensitive_key(value: str) -> bool:
 
 def is_sensitive_query_key(value: str) -> bool:
     """Return whether an exact URL query key carries credentials."""
-    normalized = value.strip().lower().replace("-", "_")
-    return normalized in _SENSITIVE_QUERY_KEYS
+    normalized = re.sub(r"[-_.]+", "_", unquote_plus(value).strip().casefold())
+    compact = normalized.replace("_", "")
+    return normalized in _SENSITIVE_QUERY_KEYS or compact in _SENSITIVE_QUERY_KEY_COMPACT
+
+
+def _redact_query_assignment(match: re.Match[str]) -> str:
+    prefix, key, _value = match.groups()
+    if not is_sensitive_query_key(key):
+        return match.group(0)
+    return f"{prefix}{key}={REDACTED}"
 
 
 def redact_exception(error: BaseException, *, sensitive_values: Sequence[str] = ()) -> str:
