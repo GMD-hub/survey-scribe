@@ -35,6 +35,17 @@ class Answer(BaseModel):
     value: int
 
 
+def _provider_traceback_locals(error: BaseException) -> list[str]:
+    values: list[str] = []
+    traceback = error.__traceback__
+    while traceback is not None:
+        filename = traceback.tb_frame.f_code.co_filename.replace("\\", "/")
+        if "/src/survey_scribe/providers/" in f"/{filename}":
+            values.append(repr(traceback.tb_frame.f_locals))
+        traceback = traceback.tb_next
+    return values
+
+
 def _capabilities(
     provider: str,
     model: str,
@@ -284,12 +295,7 @@ def test_azure_rejects_credential_bearing_endpoints_without_traceback_leaks(
             api_key="credential-primary",  # pragma: allowlist secret
         )
 
-    provider_frames: list[str] = []
-    traceback = error.value.__traceback__
-    while traceback is not None:
-        if "/src/survey_scribe/providers/" in traceback.tb_frame.f_code.co_filename:
-            provider_frames.append(repr(traceback.tb_frame.f_locals))
-        traceback = traceback.tb_next
+    provider_frames = _provider_traceback_locals(error.value)
 
     assert provider_frames
     assert "credential" not in str(error.value).casefold()
@@ -341,12 +347,7 @@ def test_azure_static_header_failure_clears_provider_traceback_locals() -> None:
             },
         )
 
-    provider_frames: list[str] = []
-    traceback = error.value.__traceback__
-    while traceback is not None:
-        if "/src/survey_scribe/providers/" in traceback.tb_frame.f_code.co_filename:
-            provider_frames.append(repr(traceback.tb_frame.f_locals))
-        traceback = traceback.tb_next
+    provider_frames = _provider_traceback_locals(error.value)
 
     assert provider_frames
     assert "synthetic-primary-value" not in repr(provider_frames)
@@ -569,12 +570,7 @@ async def test_azure_callback_failure_detaches_secret_exception_and_traceback_lo
             limiter=ConcurrencyLimiter(1),
         )
 
-    provider_frames: list[str] = []
-    traceback = error.value.__traceback__
-    while traceback is not None:
-        if "/src/survey_scribe/providers/" in traceback.tb_frame.f_code.co_filename:
-            provider_frames.append(repr(traceback.tb_frame.f_locals))
-        traceback = traceback.tb_next
+    provider_frames = _provider_traceback_locals(error.value)
 
     assert callback_calls == 1
     assert completion_calls == 0
@@ -656,12 +652,7 @@ async def test_azure_sdk_failure_drops_request_headers_and_raw_exception(
     with pytest.raises(ProviderTransportError) as error:
         await _generate(provider)
 
-    provider_frames: list[str] = []
-    traceback = error.value.__traceback__
-    while traceback is not None:
-        if "/src/survey_scribe/providers/" in traceback.tb_frame.f_code.co_filename:
-            provider_frames.append(repr(traceback.tb_frame.f_locals))
-        traceback = traceback.tb_next
+    provider_frames = _provider_traceback_locals(error.value)
 
     assert error.value.__cause__ is None
     assert error.value.__context__ is None

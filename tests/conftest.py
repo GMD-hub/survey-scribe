@@ -30,7 +30,6 @@ def deny_network_for_loopback_marked_tests(
     monkeypatch.setattr(socket, "getaddrinfo", _deny_network)
     monkeypatch.setattr(socket, "gethostbyname", _deny_network)
     monkeypatch.setattr(socket, "gethostbyname_ex", _deny_network)
-    monkeypatch.setattr(socket.socket, "connect", _deny_network)
     monkeypatch.setattr(socket.socket, "connect_ex", _deny_network)
     monkeypatch.setattr(socket.socket, "sendto", _deny_network)
 

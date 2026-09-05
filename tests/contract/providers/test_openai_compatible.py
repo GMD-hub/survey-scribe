@@ -56,6 +56,17 @@ class AliasedAnswer(BaseModel):
         return self.value * 2
 
 
+def _provider_traceback_locals(error: BaseException) -> list[str]:
+    values: list[str] = []
+    traceback = error.__traceback__
+    while traceback is not None:
+        filename = traceback.tb_frame.f_code.co_filename.replace("\\", "/")
+        if "/src/survey_scribe/providers/" in f"/{filename}":
+            values.append(repr(traceback.tb_frame.f_locals))
+        traceback = traceback.tb_next
+    return values
+
+
 def _capabilities() -> ModelCapabilities:
     return ModelCapabilities(
         provider="openai",
@@ -129,12 +140,7 @@ def test_generic_constructor_detaches_credential_bearing_base_urls(base_url: str
             capabilities=_capabilities(),
         )
 
-    provider_frames: list[str] = []
-    traceback = error.value.__traceback__
-    while traceback is not None:
-        if "/src/survey_scribe/providers/" in traceback.tb_frame.f_code.co_filename:
-            provider_frames.append(repr(traceback.tb_frame.f_locals))
-        traceback = traceback.tb_next
+    provider_frames = _provider_traceback_locals(error.value)
 
     assert provider_frames
     assert "private-primary" not in repr(provider_frames)

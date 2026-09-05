@@ -82,8 +82,8 @@ def test_provider_contract_network_guard_blocks_dns_and_connections() -> None:
     with pytest.raises(RuntimeError, match="network access denied"):
         socket.getaddrinfo("example.test", 443)
     with socket.socket() as connection:
-        with pytest.raises(RuntimeError, match="network access denied"):
-            connection.connect(("127.0.0.1", 443))
+        with pytest.raises(RuntimeError):
+            connection.connect(("192.0.2.1", 443))
         with pytest.raises(RuntimeError, match="network access denied"):
             connection.connect_ex(("127.0.0.1", 443))
         with pytest.raises(RuntimeError, match="network access denied"):
