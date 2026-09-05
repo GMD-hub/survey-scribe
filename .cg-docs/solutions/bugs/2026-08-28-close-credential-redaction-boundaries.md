@@ -78,3 +78,4 @@ URL, free-text exception, nested mapping, and sidecar paths.
 - `.cg-docs/reviews/2026-08-28-survey-scribe-production-package-refined-review.md`
 - `.cg-docs/reviews/2026-08-28-survey-scribe-production-package-refined-verify-review.md`
 - `.cg-docs/plans/2026-08-28-survey-scribe-production-package-refined.md`
+- `.cg-docs/solutions/bugs/2026-09-05-detach-provider-secrets-and-preserve-wire-contracts.md`
