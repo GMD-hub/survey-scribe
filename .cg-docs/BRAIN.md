@@ -1,6 +1,6 @@
 # 🧠 Project Brain
 
-_Generated 2026-09-03 · 24 entities · 4 topics · 13 edges_
+_Generated 2026-09-05 · 29 entities · 4 topics · 15 edges_
 
 ## How to Use
 
@@ -13,28 +13,29 @@ _Generated 2026-09-03 · 24 entities · 4 topics · 13 edges_
 
 | # | Topic | Entities | File |
 |---|-------|----------|------|
-| 1 | [Root / Cause / Prevention](BRAIN-01.md#root-cause-prevention) | 6 | BRAIN-01.md |
-| 2 | [Survey_Scribe / Src / Sources](BRAIN-01.md#survey-scribe-src-sources) | 6 | BRAIN-01.md |
-| 3 | [Future Product Extensions Objective / Production Package Completion Objective / Survey Scribe](BRAIN-01.md#future-product-extensions-objective-production-package-completion-objective-survey-scribe) | 5 | BRAIN-01.md |
+| 1 | [Root / Cause / Prevention](BRAIN-01.md#root-cause-prevention) | 7 | BRAIN-01.md |
+| 2 | [Future Product Extensions Objective / Production Package Completion Objective / Survey Scribe](BRAIN-01.md#future-product-extensions-objective-production-package-completion-objective-survey-scribe) | 6 | BRAIN-01.md |
+| 3 | [Survey_Scribe / Src / Sources](BRAIN-01.md#survey-scribe-src-sources) | 6 | BRAIN-01.md |
 | 4 | [Test Scenarios / Contract / Itsai](BRAIN-01.md#test-scenarios-contract-itsai) | 3 | BRAIN-01.md |
 
 ## Entity Summary
 
 | Type | Count |
 |------|-------|
-| brainstorm | 2 |
-| feature | 5 |
-| plan | 3 |
-| review | 8 |
-| solution | 6 |
+| brainstorm | 3 |
+| feature | 6 |
+| plan | 4 |
+| review | 9 |
+| solution | 7 |
 
-_4 entities not assigned to any topic_
+_7 entities not assigned to any topic_
 
 ## Relationship Summary
 
 | Edge Type | Count |
 |-----------|-------|
+| decided_from | 1 |
 | implements | 2 |
 | references | 2 |
-| reviews | 4 |
+| reviews | 5 |
 | verifies | 5 |

@@ -34,15 +34,16 @@ def test_core_modules_do_not_import_optional_provider_sdks(
         for node in ast.walk(ast.parse(source))
         if isinstance(node, ast.ImportFrom) and node.module is not None
     )
-    assert imported.isdisjoint({"openai", "instructor", "tenacity", "tiktoken", "itsai"})
+    assert imported.isdisjoint({"openai", "instructor", "tenacity", "tiktoken", "itsai", "azure"})
 
 
 def test_provider_adapters_use_lazy_sdk_imports(repository_root: Path) -> None:
-    for relative_path in (
-        "src/survey_scribe/providers/openai_compatible.py",
-        "src/survey_scribe/providers/azure.py",
-        "src/survey_scribe/providers/anthropic.py",
-    ):
+    reviewed_dynamic_imports = {
+        "src/survey_scribe/providers/openai_compatible.py": {"openai", "instructor"},
+        "src/survey_scribe/providers/azure.py": {"openai", "instructor"},
+        "src/survey_scribe/providers/anthropic.py": {"anthropic", "instructor"},
+    }
+    for relative_path, expected_dynamic in reviewed_dynamic_imports.items():
         source = (repository_root / relative_path).read_text(encoding="utf-8")
         tree = ast.parse(source)
         imported = {
@@ -56,7 +57,18 @@ def test_provider_adapters_use_lazy_sdk_imports(repository_root: Path) -> None:
             for node in ast.walk(tree)
             if isinstance(node, ast.ImportFrom) and node.module is not None
         )
-        assert imported.isdisjoint({"openai", "instructor", "anthropic", "itsai"})
+        assert imported.isdisjoint({"openai", "instructor", "anthropic", "itsai", "azure"})
+        dynamic_imports = {
+            node.args[0].value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "import_module"
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)
+        }
+        assert dynamic_imports == expected_dynamic
 
 
 def test_routing_uses_provider_port_without_defining_a_duplicate_protocol(

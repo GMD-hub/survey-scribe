@@ -101,6 +101,7 @@ def schema_descriptor(response_model: type[BaseModel]) -> SchemaDescriptor:
     _reject_semantically_open_schema(canonical)
     request = copy.deepcopy(canonical)
     _transform_strict_schema(request)
+    request["title"] = f"{response_model.__name__}StrictWire"
     canonical_json = _canonical_json(canonical)
     request_json = _canonical_json(request)
     return SchemaDescriptor(

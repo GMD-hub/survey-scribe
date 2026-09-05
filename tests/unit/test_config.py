@@ -229,6 +229,8 @@ def test_secret_fields_never_serialize_or_appear_in_repr() -> None:
         "https://example.test/v1?token=query-secret",
         "https://example.test/v1?key=query-secret",
         "https://example.test/v1?sig=query-secret",
+        "https://example.test/v1?OcpApimSubscriptionKey=query-secret",
+        "https://example.test/v1?Ocp%2DApim%2DSubscription%2DKey=query-secret",
         "https://example.test/v1#fragment-secret",
     ],
 )

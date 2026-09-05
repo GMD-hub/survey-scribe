@@ -16,6 +16,8 @@ import yaml
 from scripts.generate_docs_reference import generated_artifacts
 from survey_scribe import ExtractionResult, SurveySVIS, cli
 
+pytestmark = pytest.mark.allow_hosts(["127.0.0.1", "::1"])
+
 _MARKDOWN_LINK = re.compile(r"!?\[[^]]*]\(([^)\s]+)(?:\s+['\"][^)]*['\"])?\)")
 _HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*$", re.MULTILINE)
 _EXPLICIT_ANCHOR = re.compile(r"\{#([A-Za-z][\w:.-]*)\}")
@@ -27,6 +29,11 @@ _OBVIOUS_SECRET = re.compile(
     r"(?:-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|"
     r"gh[pousr]_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9]{20,}|"
     r"AKIA[0-9A-Z]{16})"
+)
+_PRIVATE_GATEWAY_LABEL = re.compile(
+    r"(?:worldbank(?:group)?|mAI Factory|DesktopToken|itsai|artifactory|service-now|"
+    r"Ocp-Apim-Subscription-Key|\.default)",
+    re.IGNORECASE,
 )
 
 
@@ -136,6 +143,27 @@ def test_published_docs_have_no_secrets_or_stale_claims(repository_root: Path) -
         "from schemas.svis",
     ):
         assert stale not in text
+
+
+def test_gateway_pages_use_only_generic_public_configuration(repository_root: Path) -> None:
+    errors: list[str] = []
+    pages = (
+        repository_root / "docs/reference/providers.md",
+        repository_root / "docs/guides/security.md",
+    )
+    for page in pages:
+        for line_number, line in enumerate(page.read_text(encoding="utf-8").splitlines(), 1):
+            if _PRIVATE_GATEWAY_LABEL.search(line):
+                errors.append(f"{page.relative_to(repository_root)}:{line_number}")
+
+    providers = pages[0].read_text(encoding="utf-8")
+    security = pages[1].read_text(encoding="utf-8")
+    assert errors == []
+    assert "metadata_headers" in providers
+    assert "sensitive_headers_callback" in providers
+    assert "required_headers" in providers
+    assert "X-Synthetic-" in providers
+    assert "sensitive_headers_callback" in security
 
 
 def test_required_user_journey_and_evidence_boundaries_are_published(

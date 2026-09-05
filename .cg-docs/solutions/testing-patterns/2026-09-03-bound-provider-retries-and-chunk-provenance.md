@@ -80,5 +80,6 @@ branch coverage.
 - `.cg-docs/solutions/build-errors/2026-08-26-bound-python-package-artifacts-and-evidence.md`
 - `.cg-docs/reviews/2026-08-31-questionnaire-routing-graph-verify-review.md`
 - `.cg-docs/plans/2026-08-28-survey-scribe-production-package-refined.md`
+- `.cg-docs/solutions/bugs/2026-09-05-detach-provider-secrets-and-preserve-wire-contracts.md`
 - `src/survey_scribe/pipeline.py`
 - `src/survey_scribe/providers/openai_compatible.py`
