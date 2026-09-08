@@ -44,6 +44,12 @@
           "title": "Questionnaire Routing Graph for LLM-Readable SVIS",
           "status": "done",
           "plan": ".cg-docs/plans/2026-08-31-questionnaire-routing-graph.md"
+        },
+        {
+          "id": "public-foundry-and-mai-factory-compatibility",
+          "title": "Public Foundry and mAI Factory Compatibility",
+          "status": "done",
+          "plan": ".cg-docs/plans/2026-09-04-azure-gateway-header-compatibility.md"
         }
       ]
     }

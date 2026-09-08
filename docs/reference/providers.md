@@ -58,7 +58,7 @@ SURVEY_SCRIBE_PROVIDER=vercel SURVEY_SCRIBE_MODEL=model-id survey-scribe config 
 # Custom OpenAI-compatible HTTPS gateway
 survey-scribe config check --provider custom --model model-id --base-url https://gateway.example/v1
 
-# Azure OpenAI or Foundry
+# Azure OpenAI-compatible chat completions
 survey-scribe config check --provider azure --model deployment-name \
   --base-url https://resource.example/ --api-version 2025-04-01-preview
 
@@ -119,9 +119,75 @@ OpenRouter accepts only the non-secret `HTTP-Referer` and `X-Title` headers.
 Custom gateways require an explicit base URL and use the same header allowlist.
 
 Azure OpenAI uses `AzureOpenAIProvider`. Configure exactly one API key or
-refreshable token callback. Survey Scribe passes the callback to the Azure SDK
-without calling or persisting it. `InstructorAnthropicProvider` is available
+refreshable token callback. Survey Scribe retains and passes the callback to the
+Azure SDK without calling it during construction or persisting returned token
+values. `InstructorAnthropicProvider` is available
 through the optional `anthropic` extra. All SDK imports remain lazy.
+
+### Generic Azure-compatible gateway headers
+
+Applications that need caller-defined gateway headers construct
+`AzureOpenAIProvider` directly and inject it through the existing
+`StructuredProvider` boundary. The facade, CLI, TOML, and environment schema do
+not define gateway-specific fields.
+
+```python
+import os
+
+from survey_scribe import SurveyScribe
+from survey_scribe.providers import CapabilityEvidence, ModelCapabilities
+from survey_scribe.providers.azure import AzureOpenAIProvider
+
+
+def acquire_token() -> str:
+    return os.environ["SYNTHETIC_AZURE_RUNTIME_TOKEN"]
+
+
+def sensitive_headers() -> dict[str, str]:
+    return {
+        "X-Synthetic-Aux-Key": os.environ["SYNTHETIC_GATEWAY_AUX_KEY"],
+    }
+
+
+capabilities = ModelCapabilities(
+    provider="azure_openai",
+    model="deployment-name",
+    structured_output=True,
+    strict_schema=True,
+    max_input_tokens=32_000,
+    max_output_tokens=4_096,
+    supported_generation_settings=frozenset(
+        {"temperature", "max_output_tokens", "seed"}
+    ),
+    evidence=CapabilityEvidence.configuration_only,
+    tested_sdk_version="application-managed",
+)
+provider = AzureOpenAIProvider(
+    deployment=capabilities.model,
+    azure_endpoint="https://gateway.example/azure",
+    api_version="api-version",
+    token_callback=acquire_token,
+    metadata_headers={"X-Synthetic-Route": "questionnaire-extraction"},
+    sensitive_headers_callback=sensitive_headers,
+    required_headers={"X-Synthetic-Route", "X-Synthetic-Aux-Key"},
+    capabilities=capabilities,
+)
+client = SurveyScribe(provider)
+```
+
+`metadata_headers` is only for non-secret, static request metadata. The adapter
+copies it during construction. `sensitive_headers_callback` is a bounded,
+synchronous function invoked for each package-owned request attempt. The adapter
+copies its returned values into an attempt-local mapping; it does not store or
+serialize those values. `required_headers`
+fails safely before transport when a required name is absent.
+
+The application owns token and auxiliary-secret acquisition. Keep these
+callbacks non-blocking, and do not make a network request from them. A gateway
+route or header confirms only the configured route; it does not prove the exact
+backend model or service. Only Foundry endpoints that expose the Azure
+OpenAI-compatible chat-completions API are supported. See [Security and API
+Keys](../guides/security.md) for credential handling rules.
 
 Survey Scribe disables each SDK's internal retry loop and applies only the
 configured package retry policy. Transport and structured-validation attempts

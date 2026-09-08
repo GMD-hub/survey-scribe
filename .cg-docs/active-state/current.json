@@ -1,30 +1,24 @@
 {
   "schemaVersion": "compound-gpid-active-state-v1",
-  "updatedAt": "2026-09-04T01:56:15Z",
-  "workflow": "/cg-review",
-  "status": "handoff",
-  "branch": "production-package-phase4-5",
-  "plan": ".cg-docs/plans/2026-08-28-survey-scribe-production-package-refined.md",
-  "executionReport": ".cg-docs/work-reports/2026-08-28-survey-scribe-production-package-refined.md",
-  "currentPhase": 5,
+  "updatedAt": "2026-09-05T11:58:52Z",
+  "workflow": "/cg-fix-triage",
+  "status": "completed",
+  "branch": "mai-factory-integration",
+  "plan": ".cg-docs/plans/2026-09-04-azure-gateway-header-compatibility.md",
+  "executionReport": ".cg-docs/work-reports/2026-09-04-azure-gateway-header-compatibility.md",
+  "currentPhase": null,
   "evidenceStatus": [
-    {"id": "V1", "status": "passed", "artifact": ".cg-docs/work-reports/2026-08-28-survey-scribe-production-package-refined.md"},
-    {"id": "V2", "status": "passed", "artifact": ".cg-docs/work-reports/2026-08-28-survey-scribe-production-package-refined.md"},
-    {"id": "V3", "status": "passed", "artifact": "tests/unit/test_config.py"},
-    {"id": "V4", "status": "passed", "artifact": "tests/contract/sources"},
-    {"id": "V5", "status": "passed", "artifact": "tests/contract/providers"},
-    {"id": "V6", "status": "passed", "artifact": "tests/integration/test_pipeline.py"},
-    {"id": "V7", "status": "passed", "artifact": "tests/integration/test_public_api.py"},
-    {"id": "V8", "status": "passed", "artifact": "tests/contract/sources/test_xlsform.py"},
-    {"id": "V9", "status": "passed", "artifact": "tests/cli"},
-    {"id": "V10", "status": "local-passed", "artifact": "tests/security"},
-    {"id": "V11", "status": "passed", "artifact": "tests/docs"}
+    {"id": "V1", "status": "passed", "artifact": "tests/unit/test_errors.py tests/unit/test_artifacts.py"},
+    {"id": "V2", "status": "passed", "artifact": "tests/contract/providers/test_azure_sdk_headers.py"},
+    {"id": "V3", "status": "passed", "artifact": "tests/architecture/test_runtime_boundaries.py"},
+    {"id": "V4", "status": "passed", "artifact": "tests/docs/test_documentation.py"},
+    {"id": "V5", "status": "passed", "artifact": "dist/survey_scribe-0.1.0-py3-none-any.whl"},
+    {"id": "V6", "status": "passed", "artifact": "Python 3.11-3.13 isolated offline matrix"}
   ],
   "unresolvedDecisions": [],
   "artifactRefs": [
-    {"kind": "plan", "path": ".cg-docs/plans/2026-08-28-survey-scribe-production-package-refined.md", "status": "active"},
-    {"kind": "work-report", "path": ".cg-docs/work-reports/2026-08-28-survey-scribe-production-package-refined.md", "status": "active"},
-    {"kind": "review", "path": ".cg-docs/reviews/2026-08-28-survey-scribe-production-package-refined-verify-review-4.md", "status": "open"}
+    {"kind": "work-report", "path": ".cg-docs/work-reports/2026-09-04-azure-gateway-header-compatibility.md", "status": "completed"},
+    {"kind": "review", "path": ".cg-docs/reviews/2026-09-04-azure-gateway-header-compatibility-review.md", "status": "fixed"}
   ],
-  "nextCommand": "/cg-fix-triage"
+  "nextCommand": "/cg-compound"
 }

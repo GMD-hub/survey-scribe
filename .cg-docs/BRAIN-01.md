@@ -1,13 +1,15 @@
 # 🧠 Project Brain — Part 1
 
-_Generated 2026-09-03_
+_Generated 2026-09-05_
 
 ## Root / Cause / Prevention
 
-_Keywords: `root` · `cause` · `prevention`_ · 6 entities
+_Keywords: `root` · `cause` · `prevention`_ · 7 entities
 
 - **[Close Credential Redaction Boundaries](.cg-docs/solutions/bugs/2026-08-28-close-credential-redaction-boundaries.md)** · `solution` · _—_ · `2026-08-28`
   > Typed secret fields were excluded from configuration serialization, but equivalent credentials could still enter outp…
+- **[Detach Provider Secrets and Preserve Wire Contracts](.cg-docs/solutions/bugs/2026-09-05-detach-provider-secrets-and-preserve-wire-contracts.md)** · `solution` · _—_ · `2026-09-05`
+  > Request-level gateway credentials were absent from normal messages and object representations, but failure tracebacks…
 - **[Bound Python Package Artifacts and Evidence](.cg-docs/solutions/build-errors/2026-08-26-bound-python-package-artifacts-and-evidence.md)** · `solution` · _—_ · `2026-08-26`
   > The package worked in an editable checkout and its wheel built successfully, but review found several release-boundar…
 - **[Verify Cross-Layer Invariants Beyond Coverage](.cg-docs/solutions/testing-patterns/2026-09-01-verify-cross-layer-invariants-beyond-coverage.md)** · `solution` · _—_ · `2026-09-01`
@@ -18,6 +20,25 @@ _Keywords: `root` · `cause` · `prevention`_ · 6 entities
   > Provider and pipeline tests passed, but verification found that production behavior could still violate the public co…
 - **[Test Truth Across Publication Boundaries](.cg-docs/solutions/testing-patterns/2026-09-04-test-truth-across-publication-boundaries.md)** · `solution` · _—_ · `2026-09-04`
   > The public SDK, CLI, package artifacts, security gates, and documentation passed large test suites. Verification stil…
+
+## Future Product Extensions Objective / Production Package Completion Objective / Survey Scribe
+
+_Keywords: `future product extensions
+objective` · `production package completion
+objective` · `survey scribe`_ · 6 entities
+
+- **[Independent review and auto-fix agents](roadmap.json#independent-review-and-auto-fix-agents)** · `feature` · _idea_ · `—`
+  > Independent review and auto-fix agents
+- **[Hosted Survey Scribe service](roadmap.json#hosted-survey-scribe-service)** · `feature` · _idea_ · `—`
+  > Hosted Survey Scribe service
+- **[Remote URL questionnaire ingestion](roadmap.json#remote-url-questionnaire-ingestion)** · `feature` · _idea_ · `—`
+  > Remote URL questionnaire ingestion
+- **[Complete Survey Scribe production package](roadmap.json#complete-survey-scribe-production-package)** · `feature` · _active_ · `—`
+  > Complete Survey Scribe production package
+- **[Questionnaire Routing Graph for LLM-Readable SVIS](roadmap.json#questionnaire-routing-graph-for-llm-readable-svis)** · `feature` · _done_ · `—`
+  > Questionnaire Routing Graph for LLM-Readable SVIS
+- **[Public Foundry and mAI Factory Compatibility](roadmap.json#public-foundry-and-mai-factory-compatibility)** · `feature` · _done_ · `—`
+  > Public Foundry and mAI Factory Compatibility
 
 ## Survey_Scribe / Src / Sources
 
@@ -35,23 +56,6 @@ _Keywords: `survey_scribe` · `src` · `sources`_ · 6 entities
   > **Review mode**: light verification **Parent review**: `.cg-docs/reviews/2026-08-31-questionnaire-routing-graph-revie…
 - **[2026-08-28-survey-scribe-production-package-refined-verify-review](.cg-docs/reviews/2026-08-28-survey-scribe-production-package-refined-verify-review.md)** · `review` · _—_ · `2026-08-28`
   > **Review mode**: light verification **Parent review**: `.cg-docs/reviews/2026-08-28-survey-scribe-production-package-…
-
-## Future Product Extensions Objective / Production Package Completion Objective / Survey Scribe
-
-_Keywords: `future product extensions
-objective` · `production package completion
-objective` · `survey scribe`_ · 5 entities
-
-- **[Independent review and auto-fix agents](roadmap.json#independent-review-and-auto-fix-agents)** · `feature` · _idea_ · `—`
-  > Independent review and auto-fix agents
-- **[Hosted Survey Scribe service](roadmap.json#hosted-survey-scribe-service)** · `feature` · _idea_ · `—`
-  > Hosted Survey Scribe service
-- **[Remote URL questionnaire ingestion](roadmap.json#remote-url-questionnaire-ingestion)** · `feature` · _idea_ · `—`
-  > Remote URL questionnaire ingestion
-- **[Complete Survey Scribe production package](roadmap.json#complete-survey-scribe-production-package)** · `feature` · _active_ · `—`
-  > Complete Survey Scribe production package
-- **[Questionnaire Routing Graph for LLM-Readable SVIS](roadmap.json#questionnaire-routing-graph-for-llm-readable-svis)** · `feature` · _done_ · `—`
-  > Questionnaire Routing Graph for LLM-Readable SVIS
 
 ## Test Scenarios / Contract / Itsai
 

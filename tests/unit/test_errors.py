@@ -7,8 +7,11 @@ import pytest
 from survey_scribe.errors import (
     REDACTED,
     ArtifactWriteError,
+    is_sensitive_key,
+    is_sensitive_query_key,
     redact_data,
     redact_exception,
+    redact_text,
 )
 
 
@@ -65,3 +68,71 @@ def test_artifact_write_error_records_stage_and_redacts_its_message() -> None:
     assert error.stage == "commit"
     assert error.code == "ARTIFACT_WRITE_FAILED"
     assert str(error) == "Artifact commit stage failed: api_key=[REDACTED]"
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "subscription-key",
+        "Subscription_Key",
+        "ocp-apim-subscription-key",
+        "OCP_APIM_SUBSCRIPTION_KEY",
+    ],
+)
+def test_subscription_key_mapping_and_query_names_are_sensitive(key: str) -> None:
+    marker = "synthetic-mapping-value"
+
+    assert redact_data({key: marker, "subscription-name": "public-label"}) == {
+        key: REDACTED,
+        "subscription-name": "public-label",
+    }
+    assert is_sensitive_key(key) is True
+    assert is_sensitive_query_key(key) is True
+
+
+@pytest.mark.parametrize(
+    ("value", "secret"),
+    [
+        ("subscription-key=synthetic-assigned-secret", "synthetic-assigned-secret"),
+        (
+            "Ocp-Apim-Subscription-Key: synthetic secret,with;delimiters",
+            "synthetic secret,with;delimiters",
+        ),
+        ('{"subscription_key":"synthetic-quoted-secret"}', "synthetic-quoted-secret"),
+        (
+            r"{\"ocp-apim-subscription-key\":\"synthetic-escaped-secret\"}",
+            "synthetic-escaped-secret",
+        ),
+        (
+            "https://example.test/path?OCP_APIM_SUBSCRIPTION_KEY=synthetic-query-secret",
+            "synthetic-query-secret",
+        ),
+        (
+            "https://example.test/path?OcpApimSubscriptionKey=synthetic-compact-secret",
+            "synthetic-compact-secret",
+        ),
+        (
+            "https://example.test/path?Ocp%2DApim%2DSubscription%2DKey=synthetic-encoded-secret",
+            "synthetic-encoded-secret",
+        ),
+    ],
+)
+def test_subscription_key_text_forms_redact_complete_values(value: str, secret: str) -> None:
+    rendered = redact_text(value)
+
+    assert secret not in rendered
+    assert REDACTED in rendered
+
+
+def test_subscription_key_redaction_covers_nested_exceptions_but_not_nearby_metadata() -> None:
+    try:
+        try:
+            raise ValueError("subscription-key=synthetic-cause-secret")
+        except ValueError as cause:
+            raise RuntimeError("ocp_apim_subscription_key=synthetic-error-secret") from cause
+    except RuntimeError as error:
+        rendered = redact_exception(error)
+
+    assert "synthetic-cause-secret" not in rendered
+    assert "synthetic-error-secret" not in rendered
+    assert redact_text("subscription-name=public-label") == "subscription-name=public-label"

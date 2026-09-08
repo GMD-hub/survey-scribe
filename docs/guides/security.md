@@ -183,6 +183,26 @@ config = SurveyScribeConfig(
 The callback is excluded from configuration serialization. Keep the credential
 provider itself outside the serialized application state.
 
+## Gateway metadata and auxiliary secrets
+
+Direct `AzureOpenAIProvider` construction separates static request metadata from
+auxiliary secret headers. Put only non-secret values in `metadata_headers`. Put
+auxiliary credentials in `sensitive_headers_callback`, which is invoked
+immediately before each package-owned request attempt. Returned values are
+copied into an attempt-local mapping, are not retained on the provider, and are
+never added to serialized configuration.
+
+The sensitive callback must be synchronous, bounded, and non-blocking. Read from
+a host-managed in-memory cache, environment variable, or local secret provider;
+do not make a network request from the callback. Applications own credential
+acquisition, rotation, and access controls. Survey Scribe validates header names,
+values, collisions, reserved transport fields, and `required_headers` before the
+completion transport runs.
+
+Gateway headers do not replace the primary Azure credential. Configure exactly
+one API key or token callback, and keep that credential in the SDK-owned field.
+See the [generic adapter-only example](../reference/providers.md#generic-azure-compatible-gateway-headers).
+
 ## GitHub Actions secrets
 
 Current Survey Scribe repository tests are credential-free. A downstream

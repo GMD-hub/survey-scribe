@@ -1,6 +1,12 @@
 {
-  "edge_count": 13,
+  "edge_count": 15,
   "edges": [
+    {
+      "edge_type": "decided_from",
+      "source": ".cg-docs/plans/2026-09-04-azure-gateway-header-compatibility.md",
+      "target": ".cg-docs/brainstorms/2026-09-04-public-foundry-mai-factory-compatibility.md",
+      "target_missing": false
+    },
     {
       "edge_type": "reviews",
       "source": ".cg-docs/reviews/2026-08-26-survey-scribe-production-package-review.md",
@@ -53,6 +59,12 @@
       "edge_type": "verifies",
       "source": ".cg-docs/reviews/2026-08-31-questionnaire-routing-graph-verify-review.md",
       "target": ".cg-docs/reviews/2026-08-31-questionnaire-routing-graph-review.md",
+      "target_missing": false
+    },
+    {
+      "edge_type": "reviews",
+      "source": ".cg-docs/reviews/2026-09-04-azure-gateway-header-compatibility-review.md",
+      "target": ".cg-docs/plans/2026-09-04-azure-gateway-header-compatibility.md",
       "target_missing": false
     },
     {
@@ -141,6 +153,35 @@
         "surveyvariable",
         "approach",
         "design"
+      ]
+    },
+    {
+      "date": "2026-09-04",
+      "entity_type": "brainstorm",
+      "path": ".cg-docs/brainstorms/2026-09-04-public-foundry-mai-factory-compatibility.md",
+      "slug": "2026-09-04-public-foundry-mai-factory-compatibility",
+      "status": "decided",
+      "summary": "Survey Scribe is a public, provider-neutral Python package for extracting local survey questionnaires into SVIS. The immediate goal is to let the same package work with direct Microsoft Foundry model access and World Bank mAI Factory model access without adding institutional deployment or credential-discovery logic to the package.",
+      "tags": [
+        "providers",
+        "azure",
+        "foundry",
+        "mai-factory",
+        "security",
+        "public-package"
+      ],
+      "title": "Public Foundry and mAI Factory Compatibility",
+      "top_keywords": [
+        "approach",
+        "structuredprovider",
+        "survey scribe",
+        "mai",
+        "factory",
+        "azure",
+        "foundry",
+        "private",
+        "itsai-platform",
+        "mai_factory"
       ]
     },
     {
@@ -238,6 +279,34 @@
         "phase",
         "questionnairerouter",
         "modelcapabilities"
+      ]
+    },
+    {
+      "date": "2026-09-04",
+      "entity_type": "plan",
+      "path": ".cg-docs/plans/2026-09-04-azure-gateway-header-compatibility.md",
+      "slug": "2026-09-04-azure-gateway-header-compatibility",
+      "status": "completed",
+      "summary": "Extend the existing `AzureOpenAIProvider` so applications can use direct Microsoft Foundry endpoints and Azure-compatible institutional gateways that require caller-defined metadata and auxiliary secret headers. Keep Survey Scribe provider-neutral, keep all exact mAI Factory configuration outside the public package, and make no change to questionnaire extraction semantics.",
+      "tags": [
+        "providers",
+        "azure",
+        "foundry",
+        "gateway",
+        "security"
+      ],
+      "title": "Azure Gateway Header Compatibility",
+      "top_keywords": [
+        "test scenarios",
+        "azureopenaiprovider",
+        "extra_headers",
+        "test_provider_adapters.py",
+        "mai_factory",
+        "tests/contract/providers/test_provider_adapters.py",
+        "test_errors.py",
+        "test_runtime_boundaries.py",
+        "header",
+        "compatibility"
       ]
     },
     {
@@ -417,6 +486,28 @@
       ]
     },
     {
+      "date": "2026-09-04",
+      "entity_type": "review",
+      "path": ".cg-docs/reviews/2026-09-04-azure-gateway-header-compatibility-review.md",
+      "slug": "2026-09-04-azure-gateway-header-compatibility-review",
+      "status": "",
+      "summary": "**Review mode**: full (verification fallback; no prior fixed review existed) **Files reviewed**: 16 feature source, test, and documentation files **Findings**: 17 (P0: 5, P1: 4, P2: 7, P3: 1)",
+      "tags": [],
+      "title": "2026-09-04-azure-gateway-header-compatibility-review",
+      "top_keywords": [
+        "openai_compatible.py",
+        "azure.py",
+        "test_azure_sdk_headers.py",
+        "2026-09-04-azure-gateway-header-compatibility.md",
+        "azure",
+        "header",
+        "review",
+        "passed",
+        "report",
+        "gateway"
+      ]
+    },
+    {
       "date": "2026-08-28",
       "entity_type": "solution",
       "path": ".cg-docs/solutions/bugs/2026-08-28-close-credential-redaction-boundaries.md",
@@ -443,6 +534,37 @@
         "token",
         "sig",
         "proxy-authorization",
+        "problem"
+      ]
+    },
+    {
+      "date": "2026-09-05",
+      "entity_type": "solution",
+      "path": ".cg-docs/solutions/bugs/2026-09-05-detach-provider-secrets-and-preserve-wire-contracts.md",
+      "slug": "2026-09-05-detach-provider-secrets-and-preserve-wire-contracts",
+      "status": "",
+      "summary": "Request-level gateway credentials were absent from normal messages and object representations, but failure tracebacks could still retain the completion frame and its header mapping. Re-raising a provider exception or cancellation kept those frames available to debuggers and error collectors. The installed Instructor path also returned a validated temporary Pydantic subclass. Serializing that instance and validating it again could reject aliases, include computed fields, run validators twice, or apply serializers to the returned data. Separately, subscription-key text redaction stopped at spaces and some equivalent URL query spellings were not classified.",
+      "tags": [
+        "providers",
+        "azure",
+        "credentials",
+        "tracebacks",
+        "pydantic",
+        "retries",
+        "redaction",
+        "offline-testing"
+      ],
+      "title": "Detach Provider Secrets and Preserve Wire Contracts",
+      "top_keywords": [
+        "detach provider secrets",
+        "preserve wire contracts",
+        "preserve",
+        "wire",
+        "provider",
+        "secrets",
+        "detach",
+        "contracts",
+        "root",
         "problem"
       ]
     },
@@ -711,17 +833,40 @@
         "feature",
         "milestone"
       ]
+    },
+    {
+      "date": "",
+      "entity_type": "feature",
+      "path": "roadmap.json#public-foundry-and-mai-factory-compatibility",
+      "slug": "public-foundry-and-mai-factory-compatibility",
+      "status": "done",
+      "summary": "Public Foundry and mAI Factory Compatibility",
+      "tags": [],
+      "title": "Public Foundry and mAI Factory Compatibility",
+      "top_keywords": [
+        "public foundry",
+        "factory compatibility\nmilestone",
+        "production package completion\nobjective",
+        "survey scribe",
+        "public",
+        "foundry",
+        "mai",
+        "factory",
+        "compatibility",
+        "feature"
+      ]
     }
   ],
-  "entity_count": 24,
-  "generated": "2026-09-03",
+  "entity_count": 29,
+  "generated": "2026-09-05",
   "schema_version": "0.2.0",
   "topic_count": 4,
   "topics": [
     {
-      "entity_count": 6,
+      "entity_count": 7,
       "entity_paths": [
         ".cg-docs/solutions/bugs/2026-08-28-close-credential-redaction-boundaries.md",
+        ".cg-docs/solutions/bugs/2026-09-05-detach-provider-secrets-and-preserve-wire-contracts.md",
         ".cg-docs/solutions/build-errors/2026-08-26-bound-python-package-artifacts-and-evidence.md",
         ".cg-docs/solutions/testing-patterns/2026-09-01-verify-cross-layer-invariants-beyond-coverage.md",
         ".cg-docs/solutions/testing-patterns/2026-09-02-bind-routing-quality-evidence.md",
@@ -735,6 +880,24 @@
       ],
       "label": "Root / Cause / Prevention",
       "slug": "root-cause-prevention"
+    },
+    {
+      "entity_count": 6,
+      "entity_paths": [
+        "roadmap.json#independent-review-and-auto-fix-agents",
+        "roadmap.json#hosted-survey-scribe-service",
+        "roadmap.json#remote-url-questionnaire-ingestion",
+        "roadmap.json#complete-survey-scribe-production-package",
+        "roadmap.json#questionnaire-routing-graph-for-llm-readable-svis",
+        "roadmap.json#public-foundry-and-mai-factory-compatibility"
+      ],
+      "keywords": [
+        "future product extensions\nobjective",
+        "production package completion\nobjective",
+        "survey scribe"
+      ],
+      "label": "Future Product Extensions\nObjective / Production Package Completion\nObjective / Survey Scribe",
+      "slug": "future-product-extensions-objective-production-package-completion-objective-survey-scribe"
     },
     {
       "entity_count": 6,
@@ -753,23 +916,6 @@
       ],
       "label": "Survey_Scribe / Src / Sources",
       "slug": "survey-scribe-src-sources"
-    },
-    {
-      "entity_count": 5,
-      "entity_paths": [
-        "roadmap.json#independent-review-and-auto-fix-agents",
-        "roadmap.json#hosted-survey-scribe-service",
-        "roadmap.json#remote-url-questionnaire-ingestion",
-        "roadmap.json#complete-survey-scribe-production-package",
-        "roadmap.json#questionnaire-routing-graph-for-llm-readable-svis"
-      ],
-      "keywords": [
-        "future product extensions\nobjective",
-        "production package completion\nobjective",
-        "survey scribe"
-      ],
-      "label": "Future Product Extensions\nObjective / Production Package Completion\nObjective / Survey Scribe",
-      "slug": "future-product-extensions-objective-production-package-completion-objective-survey-scribe"
     },
     {
       "entity_count": 3,

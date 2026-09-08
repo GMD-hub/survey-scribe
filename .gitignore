@@ -60,13 +60,14 @@ book/.quarto/
 /.quarto/
 **/*.quarto_ipynb
 
+tmp/
+
 # Compound GPID managed items (junctions + copied file - do not commit)
 .compound-gpid/managed-files.json
-.kilo/agents
 .kilo/AGENTS.md
+.kilo/agents
 .kilo/commands
 .kilo/instructions
 .kilo/kilo.json
 .kilo/shared
 .kilo/skills
-tmp/

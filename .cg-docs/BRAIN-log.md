@@ -1,11 +1,22 @@
 # 🧠 Project Brain — Chronological Log
 
-_Generated 2026-09-03 · 19 artifacts (newest first) + 5 roadmap features_
+_Generated 2026-09-05 · 23 artifacts (newest first) + 6 roadmap features_
+
+## 2026-09-05
+
+- **[Detach Provider Secrets and Preserve Wire Contracts](.cg-docs/solutions/bugs/2026-09-05-detach-provider-secrets-and-preserve-wire-contracts.md)** · `solution` · _—_ · `2026-09-05`
+  > Request-level gateway credentials were absent from normal messages and object representations, but failure tracebacks…
 
 ## 2026-09-04
 
 - **[2026-08-28-survey-scribe-production-package-refined-verify-review-4](.cg-docs/reviews/2026-08-28-survey-scribe-production-package-refined-verify-review-4.md)** · `review` · _—_ · `2026-09-04`
   > **Review mode**: light verification **Parent review**: `.cg-docs/reviews/2026-08-31-questionnaire-routing-graph-revie…
+- **[2026-09-04-azure-gateway-header-compatibility-review](.cg-docs/reviews/2026-09-04-azure-gateway-header-compatibility-review.md)** · `review` · _—_ · `2026-09-04`
+  > **Review mode**: full (verification fallback; no prior fixed review existed) **Files reviewed**: 16 feature source, t…
+- **[Azure Gateway Header Compatibility](.cg-docs/plans/2026-09-04-azure-gateway-header-compatibility.md)** · `plan` · _completed_ · `2026-09-04`
+  > Extend the existing `AzureOpenAIProvider` so applications can use direct Microsoft Foundry endpoints and Azure-compat…
+- **[Public Foundry and mAI Factory Compatibility](.cg-docs/brainstorms/2026-09-04-public-foundry-mai-factory-compatibility.md)** · `brainstorm` · _decided_ · `2026-09-04`
+  > Survey Scribe is a public, provider-neutral Python package for extracting local survey questionnaires into SVIS. The …
 - **[Test Truth Across Publication Boundaries](.cg-docs/solutions/testing-patterns/2026-09-04-test-truth-across-publication-boundaries.md)** · `solution` · _—_ · `2026-09-04`
   > The public SDK, CLI, package artifacts, security gates, and documentation passed large test suites. Verification stil…
 
@@ -69,6 +80,8 @@ _Generated 2026-09-03 · 19 artifacts (newest first) + 5 roadmap features_
   > Hosted Survey Scribe service
 - **[Independent review and auto-fix agents](roadmap.json#independent-review-and-auto-fix-agents)** · `feature` · _idea_ · `—`
   > Independent review and auto-fix agents
+- **[Public Foundry and mAI Factory Compatibility](roadmap.json#public-foundry-and-mai-factory-compatibility)** · `feature` · _done_ · `—`
+  > Public Foundry and mAI Factory Compatibility
 - **[Questionnaire Routing Graph for LLM-Readable SVIS](roadmap.json#questionnaire-routing-graph-for-llm-readable-svis)** · `feature` · _done_ · `—`
   > Questionnaire Routing Graph for LLM-Readable SVIS
 - **[Remote URL questionnaire ingestion](roadmap.json#remote-url-questionnaire-ingestion)** · `feature` · _idea_ · `—`

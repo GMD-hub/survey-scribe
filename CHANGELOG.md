@@ -15,6 +15,8 @@ project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   source-grounded evidence, and append-only discrepancy review.
 - `QuestionnaireRouter` with native XLSForm routing and structured-provider integration.
 - Deterministic routing-quality evaluation, routing-schema export, and routing documentation.
+- Validated static metadata headers and per-attempt auxiliary secret headers for
+  direct `AzureOpenAIProvider` injection through compatible gateways.
 
 ### Changed
 

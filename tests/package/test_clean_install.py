@@ -105,6 +105,7 @@ def test_clean_wheel_install_offline(
         env=environment,
     )
     guarded_import = """
+import asyncio
 import socket
 
 def deny_network(*args, **kwargs):
@@ -118,10 +119,14 @@ from datetime import date
 from pathlib import Path
 from importlib.metadata import version
 from openpyxl import Workbook
+from pydantic import BaseModel, ConfigDict
 from survey_scribe import QuestionnaireRouter, RoutedSurveySVIS
 from survey_scribe.cli import main
-from survey_scribe.config import SurveyScribeConfig
+from survey_scribe.config import GenerationConfig, RetryConfig, SurveyScribeConfig
 from survey_scribe.models import DataType, SurveySVIS, SurveyVariable
+from survey_scribe.providers.azure import AzureOpenAIProvider
+from survey_scribe.providers.base import ConcurrencyLimiter, ProviderMessage
+from survey_scribe.providers.capabilities import CapabilityEvidence, ModelCapabilities
 from survey_scribe.results import ExtractionResult, ResultStatus
 from survey_scribe.serialization.artifacts import write_result
 from survey_scribe.serialization import legacy_json_bytes, legacy_payload
@@ -138,6 +143,53 @@ assert legacy_payload({"safe": True}) == {"safe": True}
 assert SourceLimits().max_pages == 2000
 assert ConservativeTokenEstimator().estimate("abc") == 3
 assert len(APPROVED_OCR_ARTIFACTS) == 2
+
+class WheelAnswer(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    value: int
+
+captured_headers = []
+def completion(**kwargs):
+    captured_headers.append(dict(kwargs["extra_headers"]))
+    return WheelAnswer(value=7)
+
+capabilities = ModelCapabilities(
+    provider="azure_openai",
+    model="wheel-deployment",
+    structured_output=True,
+    strict_schema=True,
+    max_input_tokens=4096,
+    max_output_tokens=1024,
+    supported_generation_settings=frozenset({"temperature", "max_output_tokens", "seed"}),
+    evidence=CapabilityEvidence.configuration_only,
+    tested_sdk_version="wheel-smoke",
+)
+azure_provider = AzureOpenAIProvider(
+    deployment=capabilities.model,
+    azure_endpoint="https://gateway.example/azure",
+    api_version="api-version",
+    metadata_headers={"X-Synthetic-Route": "wheel-smoke"},
+    sensitive_headers_callback=lambda: {"X-Synthetic-Aux-Key": "aux-value"},
+    required_headers=("X-Synthetic-Route", "X-Synthetic-Aux-Key"),
+    capabilities=capabilities,
+    completion=completion,
+)
+azure_response = asyncio.run(
+    azure_provider.generate(
+        messages=(ProviderMessage(role="user", content="synthetic"),),
+        response_model=WheelAnswer,
+        generation=GenerationConfig(max_output_tokens=1024),
+        retry=RetryConfig(max_attempts=1),
+        limiter=ConcurrencyLimiter(1),
+    )
+)
+assert azure_response.output.value == 7
+assert captured_headers == [{
+    "X-Synthetic-Route": "wheel-smoke",
+    "X-Synthetic-Aux-Key": "aux-value",
+}]
+asyncio.run(azure_provider.aclose())
+
 with tempfile.TemporaryDirectory() as temporary_directory:
     output_directory = Path(temporary_directory)
     source = output_directory / "questionnaire.xlsx"
