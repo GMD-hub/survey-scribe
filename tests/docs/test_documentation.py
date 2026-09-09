@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import re
 import socket
+import sys
+from collections.abc import Callable, Iterator
 from datetime import date
+from io import BytesIO
 from pathlib import Path
-from types import TracebackType
-from typing import Self
+from types import ModuleType, TracebackType
+from typing import BinaryIO, Self, cast
 from urllib.parse import unquote, urlsplit
 
 import pytest
@@ -19,21 +22,35 @@ from survey_scribe import ExtractionResult, SurveySVIS, cli
 pytestmark = pytest.mark.allow_hosts(["127.0.0.1", "::1"])
 
 _MARKDOWN_LINK = re.compile(r"!?\[[^]]*]\(([^)\s]+)(?:\s+['\"][^)]*['\"])?\)")
+_PUBLIC_URI = re.compile(r"\b(?:https?|api)://[^\s)>\"']+", re.IGNORECASE)
+_HEADER_NAME = re.compile(r"\bX-[A-Za-z0-9-]+\b", re.IGNORECASE)
+_ENVIRONMENT_NAME = re.compile(r"\b[A-Z][A-Z0-9]*_[A-Z0-9_]+\b")
 _HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*$", re.MULTILINE)
 _EXPLICIT_ANCHOR = re.compile(r"\{#([A-Za-z][\w:.-]*)\}")
 _EXECUTABLE_BLOCK = re.compile(
     r"```python\n# docs-exec: (?P<name>[a-z0-9-]+)\n(?P<code>.*?)```",
     re.DOTALL,
 )
+_PYTHON_BLOCK = re.compile(r"```python\n(?P<code>.*?)```", re.DOTALL)
 _OBVIOUS_SECRET = re.compile(
     r"(?:-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|"
     r"gh[pousr]_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9]{20,}|"
     r"AKIA[0-9A-Z]{16})"
 )
 _PRIVATE_GATEWAY_LABEL = re.compile(
-    r"(?:worldbank(?:group)?|mAI Factory|DesktopToken|itsai|artifactory|service-now|"
-    r"Ocp-Apim-Subscription-Key|\.default)",
+    r"(?:DesktopToken|itsai|artifactory|service-now|"
+    r"Ocp-Apim-Subscription-Key|/\.default\b)",
     re.IGNORECASE,
+)
+_APPROVED_PUBLIC_HOSTS = frozenset(
+    {
+        "github.com",
+        "gmd-hub.github.io",
+        "img.shields.io",
+        "127.0.0.1",
+        "www.palantir.com",
+        "www.python.org",
+    }
 )
 
 
@@ -127,11 +144,11 @@ def test_internal_document_links_and_anchors_resolve(repository_root: Path) -> N
 
 def test_published_docs_have_no_secrets_or_stale_claims(repository_root: Path) -> None:
     docs = repository_root / "docs"
-    text = "\n".join(
-        path.read_text(encoding="utf-8")
-        for path in docs.rglob("*")
-        if path.suffix in {".css", ".js", ".json", ".md"}
-    )
+    public_files = [
+        path for path in docs.rglob("*") if path.suffix in {".css", ".js", ".json", ".md"}
+    ]
+    public_files.append(repository_root / "README.md")
+    text = "\n".join(path.read_text(encoding="utf-8") for path in public_files)
 
     assert _OBVIOUS_SECRET.search(text) is None
     assert "Survey Solutions" not in text
@@ -147,23 +164,78 @@ def test_published_docs_have_no_secrets_or_stale_claims(repository_root: Path) -
 
 def test_gateway_pages_use_only_generic_public_configuration(repository_root: Path) -> None:
     errors: list[str] = []
-    pages = (
-        repository_root / "docs/reference/providers.md",
-        repository_root / "docs/guides/security.md",
+    docs = repository_root / "docs"
+    pages = tuple(docs / relative for relative in _navigation_targets(repository_root)) + (
+        repository_root / "README.md",
     )
     for page in pages:
         for line_number, line in enumerate(page.read_text(encoding="utf-8").splitlines(), 1):
             if _PRIVATE_GATEWAY_LABEL.search(line):
                 errors.append(f"{page.relative_to(repository_root)}:{line_number}")
 
-    providers = pages[0].read_text(encoding="utf-8")
-    security = pages[1].read_text(encoding="utf-8")
+    providers = (docs / "reference/providers.md").read_text(encoding="utf-8")
+    security = (docs / "guides/security.md").read_text(encoding="utf-8")
     assert errors == []
     assert "metadata_headers" in providers
     assert "sensitive_headers_callback" in providers
     assert "required_headers" in providers
     assert "X-Synthetic-" in providers
     assert "sensitive_headers_callback" in security
+
+
+def test_public_urls_use_approved_or_reserved_hosts(repository_root: Path) -> None:
+    docs = repository_root / "docs"
+    pages = [docs / relative for relative in _navigation_targets(repository_root)]
+    pages.append(repository_root / "README.md")
+
+    errors: list[str] = []
+    for page in pages:
+        for raw_url in _PUBLIC_URI.findall(page.read_text(encoding="utf-8")):
+            parsed = urlsplit(raw_url)
+            hostname = parsed.hostname
+            approved_https_host = parsed.scheme.casefold() == "https" and (
+                hostname in _APPROVED_PUBLIC_HOSTS
+                or (hostname is not None and hostname.endswith(".example"))
+            )
+            approved_local_http = parsed.scheme.casefold() == "http" and hostname == "127.0.0.1"
+            if parsed.scheme.casefold() == "api" or not (
+                approved_https_host or approved_local_http
+            ):
+                errors.append(f"{page.relative_to(repository_root)}: {raw_url}")
+    assert errors == []
+
+
+def test_gateway_examples_use_only_generic_headers_and_environment_names(
+    repository_root: Path,
+) -> None:
+    docs = repository_root / "docs"
+    pages = (
+        docs / "integrations/mai-factory.md",
+        docs / "reference/providers.md",
+    )
+    approved_headers = {
+        "x-application-aux-key",
+        "x-application-route",
+        "x-synthetic-aux-key",
+        "x-synthetic-route",
+        "x-title",
+    }
+    approved_m_ai_environment = {
+        "APPLICATION_AZURE_TOKEN",
+        "APPLICATION_GATEWAY_AUX_KEY",
+    }
+
+    errors: list[str] = []
+    for page in pages:
+        text = page.read_text(encoding="utf-8")
+        for header in _HEADER_NAME.findall(text):
+            if header.casefold() not in approved_headers:
+                errors.append(f"{page.relative_to(repository_root)}: {header}")
+    m_ai_text = pages[0].read_text(encoding="utf-8")
+    for name in _ENVIRONMENT_NAME.findall(m_ai_text):
+        if name not in approved_m_ai_environment:
+            errors.append(f"{pages[0].relative_to(repository_root)}: {name}")
+    assert errors == []
 
 
 def test_required_user_journey_and_evidence_boundaries_are_published(
@@ -189,6 +261,11 @@ def test_required_user_journey_and_evidence_boundaries_are_published(
         "ChunkedStructuredPipeline",
         "no telemetry",
         "quality",
+        "Palantir Foundry",
+        "Microsoft Foundry",
+        "mAI Factory",
+        "completed questionnaire",
+        "respondent microdata",
     ):
         assert required in corpus
 
@@ -208,6 +285,7 @@ def test_tagged_python_examples_execute_with_fakes_and_no_network(
         )
 
     assert {name for name, _code in examples} == {
+        "completed-answer-contract",
         "structured-pipeline-fake",
         "survey-scribe-fake",
     }
@@ -215,6 +293,107 @@ def test_tagged_python_examples_execute_with_fakes_and_no_network(
         namespace = {"DOCS_TMP_PATH": tmp_path / name}
         namespace["DOCS_TMP_PATH"].mkdir()
         exec(compile(code, f"<docs:{name}>", "exec"), namespace)
+
+
+def test_published_python_examples_compile(repository_root: Path) -> None:
+    docs = repository_root / "docs"
+    for relative in _navigation_targets(repository_root):
+        text = (docs / relative).read_text(encoding="utf-8")
+        for index, match in enumerate(_PYTHON_BLOCK.finditer(text), 1):
+            compile(match.group("code"), f"<docs:{relative}:{index}>", "exec")
+
+
+def test_palantir_transform_example_runs_with_fake_filesystems(
+    repository_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from openpyxl import Workbook
+
+    page = (repository_root / "docs/platforms/palantir-foundry.md").read_text(encoding="utf-8")
+    examples = tuple(_PYTHON_BLOCK.finditer(page))
+    assert len(examples) == 1
+
+    class FakeTransform:
+        @staticmethod
+        def using(**_resources: object) -> Callable[[Callable[..., object]], Callable[..., object]]:
+            return lambda function: function
+
+    transforms = ModuleType("transforms")
+    transforms_api = ModuleType("transforms.api")
+    transforms_api.__dict__.update(
+        {
+            "Input": lambda value: value,
+            "Output": lambda value: value,
+            "transform": FakeTransform(),
+        }
+    )
+    monkeypatch.setitem(sys.modules, "transforms", transforms)
+    monkeypatch.setitem(sys.modules, "transforms.api", transforms_api)
+
+    workbook_stream = BytesIO()
+    workbook = Workbook()
+    survey = workbook.active
+    assert survey is not None
+    survey.title = "survey"
+    survey.append(["type", "name", "label", "relevant"])
+    survey.append(["integer", "age", "Age", ""])
+    settings = workbook.create_sheet("settings")
+    settings.append(["form_title", "form_id", "country_code", "year"])
+    settings.append(["Synthetic", "palantir-native", "SYN", 2026])
+    workbook.save(workbook_stream)
+    workbook.close()
+    workbook_bytes = workbook_stream.getvalue()
+
+    class FakeFileStatus:
+        path = "questionnaire.xlsx"
+        size = len(workbook_bytes)
+
+    class FakeInputFileSystem:
+        def ls(self, *, glob: str) -> Iterator[FakeFileStatus]:
+            assert glob == "*.xlsx"
+            return iter((FakeFileStatus(),))
+
+        def open(self, path: str, mode: str) -> BinaryIO:
+            assert path == FakeFileStatus.path
+            assert mode == "rb"
+            return BytesIO(workbook_bytes)
+
+    output_files: dict[str, bytes] = {}
+
+    class CapturedOutput(BytesIO):
+        def __init__(self, path: str) -> None:
+            super().__init__()
+            self.path = path
+
+        def close(self) -> None:
+            output_files[self.path] = self.getvalue()
+            super().close()
+
+    class FakeOutputFileSystem:
+        def open(self, path: str, mode: str) -> BinaryIO:
+            assert mode == "wb"
+            return CapturedOutput(path)
+
+    class FakeInput:
+        @staticmethod
+        def filesystem() -> FakeInputFileSystem:
+            return FakeInputFileSystem()
+
+    class FakeOutput:
+        @staticmethod
+        def filesystem() -> FakeOutputFileSystem:
+            return FakeOutputFileSystem()
+
+    namespace: dict[str, object] = {}
+    code = examples[0].group("code")
+    exec(compile(code, "<docs:palantir-foundry>", "exec"), namespace)
+    compute = cast(Callable[[object, object], None], namespace["compute"])
+    compute(FakeInput(), FakeOutput())
+
+    assert any(path.endswith("_svis.json") for path in output_files)
+    assert any(path.endswith("_routed_svis.json") for path in output_files)
+    assert any(path.endswith("manifest.json") for path in output_files)
+    assert any(path.endswith("active.json") for path in output_files)
 
 
 def test_documented_safe_cli_examples_execute_without_network(

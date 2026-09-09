@@ -63,6 +63,9 @@ A `SourceDocument` contains:
 - `source_name: str`
 - `media_type: str`
 - `blocks: tuple[SourceBlock, ...]`
+- `coverage: SourceCoverage`
+- `diagnostics: tuple[SourceDiagnostic, ...]`
+- `snapshot_sha256: str`
 - `trust: Literal["untrusted"]`
 
 Each block has a stable ID, zero-based order, text or table kind, rendered text,
@@ -132,8 +135,11 @@ bundle = SourceBundle(
 resolved = resolve_local_source(bundle)
 ```
 
-The resolver rejects paths that escape the root. Current adapters validate the
-companion paths but do not merge companion content into the normalized document.
+The resolver rejects paths that escape the root. Most adapters validate companion
+paths without merging their content. The XLSForm adapter is the exception: a
+declared external choice CSV can become native source records and answer
+categories when the workbook refers to it with `select_one_from_file` or
+`select_multiple_from_file`.
 
 ## Chunk a document
 

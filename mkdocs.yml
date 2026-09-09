@@ -94,25 +94,33 @@ nav:
   - Home: index.md
   - Getting Started:
       - Installation: getting-started/installation.md
-      - Quickstart: getting-started/quickstart.md
+      - Extract Your First Questionnaire: getting-started/quickstart.md
       - Command Line: cli.md
-      - Migration: migration.md
-      - Static Sample Explorer: playground.md
-  - Guides:
+  - Questionnaire Extraction:
+      - Extraction Guide: guides/extraction.md
+      - Completed Questionnaires: guides/completed-questionnaires.md
+      - Questionnaire Sources: guides/sources.md
+      - XLSForm: sources/xlsform.md
+      - Skip Patterns: guides/skip-patterns.md
+      - Routing Model: routing.md
+      - Results and Artifacts: guides/results.md
       - SVIS Field Guide: guides/svis.md
+  - AI and Deployment:
+      - Palantir Foundry: platforms/palantir-foundry.md
+      - Microsoft Foundry: platforms/microsoft-foundry.md
+      - mAI Factory: integrations/mai-factory.md
+      - AI Providers: guides/ai-providers.md
       - Configuration: guides/configuration.md
       - Security and API Keys: guides/security.md
-      - Local Sources: guides/sources.md
-      - XLSForm: sources/xlsform.md
-      - Questionnaire Routing: routing.md
-      - Evaluation Policy: evaluation.md
-      - Results and Artifacts: guides/results.md
-      - Custom Structured Output: guides/custom-models.md
       - Privacy and Local-First Boundaries: guides/privacy.md
+  - Advanced Guides:
+      - Custom Structured Output: guides/custom-models.md
+      - Evaluation Policy: evaluation.md
       - Use Cases: guides/use-cases.md
+      - Static Sample Explorer: playground.md
   - API Reference:
       - API Overview: reference/index.md
-      - Client and Pipelines: reference/client.md
+      - Extraction Client and Pipelines: reference/client.md
       - SVIS Models: reference/models.md
       - Configuration: reference/configuration.md
       - Results: reference/results.md
@@ -124,5 +132,7 @@ nav:
       - Command Line: reference/cli.md
       - JSON Schemas: reference/schemas.md
   - Project:
+      - Features and Limitations: project/features.md
       - Compatibility: compatibility.md
+      - Migration: migration.md
       - Documentation Site: contributing/documentation.md

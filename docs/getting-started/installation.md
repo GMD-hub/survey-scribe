@@ -4,27 +4,38 @@ Survey Scribe supports CPython 3.11, 3.12, and 3.13 on Linux, macOS, and Windows
 Use a virtual environment so that optional document libraries do not affect other
 projects.
 
-## Install from PyPI
+## Release and publication status
 
-=== "pip"
+Survey Scribe is alpha software. The repository declares version `0.1.0`, but no
+approved PyPI release is currently available. Production deployments must use an
+approved wheel, Conda artifact, or pinned source revision.
 
-    ```console
-    python -m pip install survey-scribe
-    ```
+## Install an approved wheel
 
-=== "uv"
+Build the repository revision in a controlled build environment:
 
-    ```console
-    uv add survey-scribe
-    ```
+```console
+uv build
+python -m pip install dist/survey_scribe-0.1.0-py3-none-any.whl
+```
 
-The base installation contains the typed package and Pydantic. It does not load
-provider SDKs, OCR models, or document converters at import time.
+Do not use an artifact from an untrusted pull request or local directory. Record
+the source commit and wheel digest in your deployment manifest.
 
-!!! note "Alpha releases"
+The base installation contains Pydantic, `defusedxml`, the typed package, and the
+CLI. It does not load provider SDKs, OCR models, or document converters at import
+time.
 
-    If the requested release is not yet available from your package index,
-    install a built wheel or the Git repository as shown below.
+## Future package-index installation
+
+After publication approval and release verification, package-index installation
+will use:
+
+```console
+python -m pip install survey-scribe
+```
+
+Do not use this command until your approved package index contains the release.
 
 ## Install optional features
 
@@ -46,25 +57,19 @@ Multiple extras can be installed together:
 python -m pip install "survey-scribe[pdf,tabular]"
 ```
 
-## Install a local wheel
-
-Build and install the project in a clean environment:
-
-```console
-uv build
-python -m pip install dist/survey_scribe-0.1.0-py3-none-any.whl
-```
-
 ## Install from Git
 
 Use a tagged revision or commit hash for reproducible deployments:
 
 ```console
+APPROVED_COMMIT="<full-reviewed-commit-sha>"
 python -m pip install \
-  "survey-scribe @ git+https://github.com/GMD-hub/survey-scribe.git@305769db22d8471d722e075bc32f79113b4d8efc"
+  "survey-scribe @ git+https://github.com/GMD-hub/survey-scribe.git@${APPROVED_COMMIT}"
 ```
 
 Avoid an unpinned branch URL in production.
+Replace the placeholder with the full commit SHA that your deployment review
+approved.
 
 ## Set up a development environment
 
@@ -92,6 +97,10 @@ python -c "from survey_scribe import SurveySVIS; print(SurveySVIS.__name__)"
 
 The last command prints `SurveySVIS`. The installed command also provides
 `convert`, `batch`, `providers`, `config check`, and `schema export`.
+
+For hosted deployments, also review [Palantir Foundry](../platforms/palantir-foundry.md),
+[Microsoft Foundry](../platforms/microsoft-foundry.md), and
+[mAI Factory](../integrations/mai-factory.md).
 
 ## Common installation issues
 

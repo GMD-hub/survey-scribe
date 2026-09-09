@@ -7,6 +7,8 @@ containment, terminals, and bounded loop definitions.
 
 Routing output is not an interview engine. It does not evaluate respondent data,
 unroll repeat instances, guarantee JSON Logic, or choose the next runtime screen.
+Start with the practical [Skip Patterns](guides/skip-patterns.md) guide when you
+need common branch, jump, terminal, and repeat examples.
 
 ## Routing and activation
 
@@ -157,7 +159,7 @@ else:
     loop_classes = tuple(loop.kind for loop in graph.loops)
     human_review_items = tuple(
         candidate
-        for candidate in audit.candidates
+        for candidate in audit.candidate_edges
         if candidate.status.value == "needs_human_review"
     )
 ```
@@ -216,19 +218,16 @@ The graph algorithms and evaluator have deterministic 1,000-node/3,000-edge
 evidence. Duration and peak memory are recorded as evidence, not enforced as a
 fragile cross-platform microbenchmark.
 
-## Test capture and production
-
-G6 is an optional protected live test capture. It requires one human-approved,
-sanitized summary before an authorized source reaches a gateway. It is not a
-production configuration and is not required for synthetic mechanics, package,
-or documentation gates.
+## Production operation
 
 Production administrators own provider construction, gateway quota, secret
-storage, source authorization, and institutional retention policy. A dynamic
-institutional route, including an mAI Factory-style multi-cloud route, supports
-only a gateway-route quality claim. An exact backend claim requires a pinned
-backend. Returned provider/model metadata can describe an observed dynamic
-response but does not authorize an exact-backend quality claim.
+storage, source authorization, and retention policy. The Azure and OpenAI
+adapters record configured provider and route identity plus the response ID. They
+do not capture a dynamic backend model identity from the response. An exact
+backend claim requires separate application evidence for a pinned backend.
+
+Run protected live tests only with an authorized source and an approved endpoint.
+Keep the sanitized evidence outside primary questionnaire artifacts.
 
 ## Migration from `skip_condition_raw`
 
@@ -250,6 +249,7 @@ terminal classes.
 ## Known limits
 
 - Runtime interview execution and respondent-instance loop expansion are out of scope.
+- Completed-answer extraction is not checked against the routing graph.
 - `opaque` conditions are preserved but not executable branch-coverage proof.
 - Fuzzy or unresolved targets remain candidates until cited review resolves them.
 - Native support is versioned and does not cover every vendor function or parser.

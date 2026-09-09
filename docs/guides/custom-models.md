@@ -21,6 +21,8 @@ read a credential, or access the network.
 ```python
 # docs-exec: structured-pipeline-fake
 from pydantic import BaseModel
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from survey_scribe import ResultStatus, StructuredPipeline
 from survey_scribe.providers import CapabilityEvidence, ModelCapabilities
@@ -52,17 +54,18 @@ provider = DeterministicFakeProvider(
         question_count=2,
     ),
 )
-source = DOCS_TMP_PATH / "synthetic-questionnaire.txt"
-source.write_text("Age in years\n\nEmployment status", encoding="utf-8")
+with TemporaryDirectory() as temporary_directory:
+    source = Path(temporary_directory) / "synthetic-questionnaire.txt"
+    source.write_text("Age in years\n\nEmployment status", encoding="utf-8")
 
-result = StructuredPipeline(provider, Summary).convert(source)
+    result = StructuredPipeline(provider, Summary).convert(source)
 
-assert result.status is ResultStatus.success
-assert result.output == Summary(
-    title="Synthetic household questionnaire",
-    question_count=2,
-)
-assert provider.call_count == 1
+    assert result.status is ResultStatus.success
+    assert result.output == Summary(
+        title="Synthetic household questionnaire",
+        question_count=2,
+    )
+    assert provider.call_count == 1
 ```
 
 In an application, inject a reviewed `StructuredProvider` instead of

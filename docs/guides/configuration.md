@@ -25,7 +25,7 @@ validation errors.
 | `config_version` | `Literal[1]` | `1` | Must be the integer `1` |
 | `provider` | `str` | `"openai"` | Trimmed, lowercased, hyphens become underscores |
 | `model` | `str \| None` | `None` | Cannot be empty when set |
-| `base_url` | `AnyHttpUrl \| None` | `None` | Cannot include user information, fragments, or sensitive query keys |
+| `base_url` | `AnyHttpUrl \| None` | `None` | Runtime requires HTTPS; cannot include user information, fragments, or sensitive query keys |
 | `api_version` | `str \| None` | `None` | Cannot be empty when set |
 | `api_key` | `SecretStr \| None` | `None` | Excluded from representation and serialization |
 | `bearer_token` | `SecretStr \| None` | `None` | Excluded from representation and serialization |
@@ -42,6 +42,10 @@ schema and source operations. The current [configuration serialization
 schema](../reference/schemas.md) is generated from `SurveyScribeConfig` in
 serialization mode and checked for drift. It intentionally omits credential
 fields and `token_callback`.
+
+The generated JSON Schema expresses `base_url` as a URI. It does not express the
+custom HTTPS validator. Consumers that validate configuration outside Python
+must apply the HTTPS rule separately.
 
 ## Nested settings
 
@@ -107,7 +111,7 @@ Create `survey-scribe.toml` for non-secret settings:
 config_version = 1
 provider = "azure"
 model = "survey-extractor"
-base_url = "https://example.openai.azure.com/"
+base_url = "https://resource.example/"
 api_version = "2025-04-01-preview"
 max_concurrency = 4
 confidence_threshold = 0.7

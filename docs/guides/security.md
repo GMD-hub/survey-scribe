@@ -152,14 +152,14 @@ Do not first place a key in an ordinary application dictionary that might be
 logged or serialized. Do not add it to a URL query string, graph, sidecar,
 manifest, or evaluator fixture.
 
-## Test capture versus production
+## Live tests versus production
 
-G6 protects one optional live test capture. It does not configure production and
+An optional protected live model-quality test does not configure production and
 must not become an interactive approval on every production request. Production
 administrators own provider selection, gateway quota, secret storage, source
-authorization, logging, and institutional retention policy. The package enforces
-configured per-request, schema, source-binding, and concurrency bounds; it does
-not claim control over gateway-side retention.
+authorization, logging, and retention policy. The package enforces configured
+per-request, schema, source-binding, and concurrency bounds; it does not claim
+control over gateway-side retention.
 
 ## Token callbacks
 

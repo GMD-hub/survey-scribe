@@ -8,6 +8,10 @@ do not replace careful data classification and access controls.
     options:
       members:
         - SurveyScribeError
+        - ProgrammerInputError
+        - RunningEventLoopError
+        - ClientClosedError
+        - ConversionFailedError
         - ConfigurationError
         - AmbiguousCredentialError
         - ArtifactError
@@ -18,3 +22,17 @@ do not replace careful data classification and access controls.
         - is_sensitive_query_key
         - redact_exception
         - redact_data
+
+## Provider exceptions
+
+::: survey_scribe.providers.base
+    options:
+      members:
+        - ProviderError
+        - ProviderDependencyError
+        - ProviderCapabilityError
+        - ProviderTransportError
+        - ProviderAuthenticationError
+        - ProviderRateLimitError
+        - ProviderValidationError
+        - ProviderTruncationError

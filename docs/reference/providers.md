@@ -4,6 +4,9 @@ Routing depends on the provider-neutral `StructuredProvider` port. Provider SDKs
 and Instructor remain inside adapters. Capability inspection must pass before
 source content is sent.
 
+Start with [AI Providers](../guides/ai-providers.md) for provider selection,
+credentials, runtime setup, retries, and production checks.
+
 ::: survey_scribe.providers.base
     options:
       members:
@@ -19,6 +22,8 @@ source content is sent.
       members:
         - ModelCapabilities
         - CapabilityEvidence
+        - ConservativeTokenEstimator
+        - TokenEstimator
         - schema_descriptor
 
 ## Supported adapters and evidence
@@ -32,8 +37,8 @@ model behavior, context window, or extraction quality was verified.
 | Provider value | Extra | Endpoint configuration | Credential | Evidence |
 | --- | --- | --- | --- | --- |
 | `openai` | `openai` | Reviewed OpenAI preset, or `OPENAI_BASE_URL` | `OPENAI_API_KEY` | configuration-only |
-| `openrouter` | `openai` | Reviewed OpenRouter preset | `OPENROUTER_API_KEY` | configuration-only |
-| `vercel` | `openai` | Reviewed Vercel AI Gateway preset | `AI_GATEWAY_API_KEY` | configuration-only |
+| `openrouter` | `openai` | Reviewed default preset; explicit `base_url` overrides it | `OPENROUTER_API_KEY` | configuration-only |
+| `vercel` | `openai` | Reviewed default preset; explicit `base_url` overrides it | `AI_GATEWAY_API_KEY` | configuration-only |
 | `custom` | `openai` | Explicit `base_url` required; use HTTPS in production | `SURVEY_SCRIBE_API_KEY` | configuration-only |
 | `azure`, `azure_openai` | `openai` | Endpoint, API version, deployment | API key or token callback | configuration-only |
 | `anthropic` | `anthropic` | Dedicated Anthropic adapter | `ANTHROPIC_API_KEY` | configuration-only |
@@ -73,7 +78,7 @@ validate adapter construction but do not make a model request.
 
 `InstructorOpenAIProvider` is the packaged OpenAI-compatible adapter. Applications
 must supply an administrator-owned `ModelCapabilities` row. A
-`configuration_only` row allows deterministic schema and request checks; it does
+`configuration-only` row allows deterministic schema and request checks; it does
 not prove that a live provider or model was tested.
 
 ```python
@@ -116,7 +121,9 @@ LangChain clients are not routing inputs. Adapt them to `StructuredProvider`.
 
 Named presets are available for OpenAI, OpenRouter, and Vercel AI Gateway.
 OpenRouter accepts only the non-secret `HTTP-Referer` and `X-Title` headers.
-Custom gateways require an explicit base URL and use the same header allowlist.
+An explicit facade `base_url` overrides any named preset. Review that destination
+as a custom egress route. Custom gateways require an explicit base URL and use
+the same header allowlist.
 
 Azure OpenAI uses `AzureOpenAIProvider`. Configure exactly one API key or
 refreshable token callback. Survey Scribe retains and passes the callback to the
@@ -185,8 +192,9 @@ fails safely before transport when a required name is absent.
 The application owns token and auxiliary-secret acquisition. Keep these
 callbacks non-blocking, and do not make a network request from them. A gateway
 route or header confirms only the configured route; it does not prove the exact
-backend model or service. Only Foundry endpoints that expose the Azure
-OpenAI-compatible chat-completions API are supported. See [Security and API
+backend model or service. The adapter reports configured route identity, not a
+dynamic backend model identity. Only Microsoft Foundry endpoints that expose the
+Azure OpenAI-compatible chat-completions API are supported. See [Security and API
 Keys](../guides/security.md) for credential handling rules.
 
 Survey Scribe disables each SDK's internal retry loop and applies only the

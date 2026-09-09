@@ -15,7 +15,8 @@
   color: #334155;
 }
 
-.md-typeset p a {
+.md-typeset p a,
+.md-typeset li a {
   text-decoration: underline;
   text-underline-offset: 0.12em;
 }

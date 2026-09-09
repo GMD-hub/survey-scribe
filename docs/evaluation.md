@@ -54,17 +54,17 @@ hardware, duration, and peak traced memory without a cross-platform time limit.
 
 ## Optional model-quality capture
 
-G6 is an optional protected test action. It is `not_run` unless a human approves
-one sanitized dry-run summary for an authorized source, gateway route, credential
+An optional protected live test is `not_run` unless a human approves one
+sanitized dry-run summary for an authorized source, gateway route, credential
 environment-variable name, request and token ceilings, temporary-output policy,
 and stop conditions. No provider call occurs as part of the deterministic package
 gates.
 
-A dynamic institutional route can support only a gateway-route claim. An exact
-backend quality claim requires a pinned backend. Returned provider and model
-metadata can describe one observed dynamic response, but it does not pin the
-route. A missing or failed capture limits quality claims but does not weaken or
-block deterministic mechanics evidence.
+A dynamic route can support only a gateway-route claim. An exact backend quality
+claim requires a pinned backend and separate application evidence. The packaged
+adapters retain configured route identity and the response ID, not a dynamic
+backend model identity. A missing or failed capture limits quality claims but
+does not weaken or block deterministic mechanics evidence.
 
 ## Authoritative quality command
 

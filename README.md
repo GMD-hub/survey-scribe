@@ -9,11 +9,10 @@ Information Schema (SVIS). It provides synchronous, asynchronous, and batch APIs
 provider adapters, safe local source normalization, deterministic chunking,
 questionnaire routing graphs, secure configuration, and versioned artifacts.
 
-> **Alpha status:** Version `0.1.0` ships the public `SurveyScribe` API, installed
-> conversion CLI, typed models, source and provider adapters, transactional
-> artifacts, and the `QuestionnaireRouter`. The deprecated root script is not
-> included in the wheel. Package publication remains subject to the approval recorded
-> in [`docs/legal-disposition.md`](docs/legal-disposition.md).
+> **Alpha status:** The source tree declares version `0.1.0` and contains the
+> public `SurveyScribe` API, conversion CLI, typed models, source and provider
+> adapters, transactional artifacts, and `QuestionnaireRouter`. No approved PyPI
+> release is currently available.
 
 ## Features
 
@@ -26,9 +25,14 @@ questionnaire routing graphs, secure configuration, and versioned artifacts.
 - Credential-safe configuration and versioned artifact manifests.
 - Source-grounded directed routing multigraphs with separate evidence and audit history.
 - Native XLSForm relevance and repeat routing without a provider call.
+- Caller-defined structured pipelines for completed-form records.
 - A PEP 561 `py.typed` marker for editor and type-checker support.
 - An installed CLI for single and batch conversion, configuration checks,
-  provider discovery, and deterministic routing-schema export.
+  provider listing, and deterministic routing-schema export.
+
+The standard client extracts questionnaire instrument metadata. It does not
+produce respondent microdata, classify skipped answers, execute routing, or
+expand repeat instances.
 
 ## Installation
 
@@ -61,36 +65,26 @@ the selected conversion path.
 ```python
 from datetime import date
 
-from survey_scribe import AnswerCategory, DataType, SurveySVIS, SurveyVariable
+from survey_scribe.sources import SourceRegistry
 
-sex = SurveyVariable(
-    raw_name="q_sex",
-    label="Sex of household member",
-    question_text="What is the sex of [NAME]?",
-    data_type=DataType.categorical_single,
-    categories=[
-        AnswerCategory(code=1, label="Male"),
-        AnswerCategory(code=2, label="Female"),
-        AnswerCategory(code=9, label="Not stated", is_missing=True),
-    ],
-    extraction_confidence=1.0,
+conversion = SourceRegistry.default().convert_for_svis(
+    "questionnaire.xlsx",
+    extraction_date=date.today(),
 )
+if conversion.svis is None:
+    raise RuntimeError("The workbook is not a supported XLSForm")
 
-survey = SurveySVIS(
-    survey_id="TST_2024_SYNTH",
-    country_code="TST",
-    year=2024,
-    survey_name="Synthetic Household Survey",
-    variables=[sex],
-    source_file="questionnaire.pdf",
-    source_format="pdf",
-    extraction_date=date(2024, 6, 1),
-)
+review_codes = tuple(item.code for item in conversion.document.diagnostics)
+if conversion.native is not None:
+    review_codes += tuple(item.code for item in conversion.native.diagnostics)
+if review_codes:
+    raise RuntimeError(f"Review XLSForm diagnostics before use: {review_codes}")
 
-json_payload = survey.model_dump_json(indent=2)
-restored = SurveySVIS.model_validate_json(json_payload)
-assert restored == survey
+survey = conversion.svis
 ```
+
+This native XLSForm path makes no provider call. PDF, DOCX, and other
+questionnaire instruments use `SurveyScribe` with a configured provider.
 
 Inspect the installed command without loading optional providers:
 
@@ -112,10 +106,18 @@ refuses existing artifacts unless `--overwrite` is present, and supports
 
 ## Documentation
 
-The documentation includes installation and quickstart guides, SVIS field
-guidance, local-source and artifact workflows, API-key security practices,
-questionnaire-routing semantics, evaluation policy, practical use cases, and a
-generated API reference. Start with the [routing guide](docs/routing.md).
+The public website includes end-to-end questionnaire extraction, completed-form
+contracts, skip-pattern examples, Palantir Foundry deployment, Microsoft Foundry,
+mAI Factory, AI provider setup, artifacts, security, privacy, and generated API
+references.
+
+- [Documentation website](https://gmd-hub.github.io/survey-scribe/)
+- [Extraction guide](docs/guides/extraction.md)
+- [Completed questionnaires](docs/guides/completed-questionnaires.md)
+- [Skip patterns](docs/guides/skip-patterns.md)
+- [Palantir Foundry](docs/platforms/palantir-foundry.md)
+- [mAI Factory](docs/integrations/mai-factory.md)
+- [AI providers](docs/guides/ai-providers.md)
 
 ```console
 uv run mkdocs serve

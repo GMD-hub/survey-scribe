@@ -8,6 +8,29 @@ The package parses an XLSForm into a typed `SurveySVIS` without a model call.
 Workbook names, labels, category codes, relevance, and retained logic are
 authoritative. A model provider cannot replace these values.
 
+```python
+from datetime import date
+
+from survey_scribe.sources import SourceRegistry
+
+conversion = SourceRegistry.default().convert_for_svis(
+    "questionnaire.xlsx",
+    extraction_date=date.today(),
+)
+if conversion.svis is None:
+    raise RuntimeError("The workbook is not a supported XLSForm")
+
+review_codes = tuple(item.code for item in conversion.document.diagnostics)
+if conversion.native is not None:
+    review_codes += tuple(item.code for item in conversion.native.diagnostics)
+if review_codes:
+    raise RuntimeError(f"Review XLSForm diagnostics before use: {review_codes}")
+```
+
+See [Questionnaire Extraction](../guides/extraction.md) for artifact publication
+and [Skip Patterns](../guides/skip-patterns.md) for practical relevance and
+routing examples.
+
 ## Supported sheets
 
 | Sheet | Support |
@@ -90,3 +113,12 @@ Survey Scribe rejects:
 Dynamic instances, XML external data, `rank`, search appearances, trigger
 behavior, arbitrary XPath functions, and arithmetic evaluation are not core
 features. Survey Scribe does not execute any XLSForm expression.
+
+## Route native output
+
+Native SVIS output uses `source_format="xlsform"`. The routing source binding
+accepts this identity for a validated XLSX snapshot. Use
+`convert_with_native()` to obtain the exact binding, then pass the unchanged
+source, native SVIS, and binding to `QuestionnaireRouter`. The
+[Skip Patterns](../guides/skip-patterns.md#route-an-existing-svis) guide shows the
+complete provider-free chain.

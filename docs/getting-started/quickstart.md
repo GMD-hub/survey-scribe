@@ -1,117 +1,75 @@
 # Quickstart
 
-This guide creates a typed SVIS record, serializes it, validates it again, and
-writes a versioned artifact set. For direct questionnaire conversion, install the
-required source and provider extras first.
+This guide extracts questionnaire metadata and writes a versioned artifact set.
+It does not extract respondent answer rows. See
+[Completed Questionnaires](../guides/completed-questionnaires.md) for a
+caller-defined answer contract.
 
-## 1. Define variables
+## 1. Extract an XLSForm without a provider
 
-```python
-from survey_scribe import (
-    AnswerCategory,
-    DataType,
-    NumericRange,
-    SurveyVariable,
-    UnitLevel,
-)
-
-age = SurveyVariable(
-    raw_name="q_age",
-    label="Age in completed years",
-    question_text="How old is [NAME] in completed years?",
-    data_type=DataType.numeric,
-    numeric_range=NumericRange(min_value=0, max_value=120),
-    universe="All household members",
-    unit_of_analysis=UnitLevel.individual,
-    source_page=7,
-    extraction_confidence=0.98,
-)
-
-sex = SurveyVariable(
-    raw_name="q_sex",
-    label="Sex of household member",
-    question_text="What is the sex of [NAME]?",
-    data_type=DataType.categorical_single,
-    categories=[
-        AnswerCategory(code=1, label="Male"),
-        AnswerCategory(code=2, label="Female"),
-        AnswerCategory(code=9, label="Not stated", is_missing=True),
-    ],
-    extraction_confidence=1.0,
-)
-```
-
-`extraction_confidence` must be from `0.0` through `1.0`. The schema does not
-automatically set `needs_review`; set it explicitly when your review policy
-requires it.
-
-## 2. Build a survey record
+Install the `tabular` extra and run:
 
 ```python
 from datetime import date
-
-from survey_scribe import StudyType, SurveySVIS
-
-survey = SurveySVIS(
-    survey_id="TST_2024_SYNTH",
-    country_code="TST",
-    year=2024,
-    survey_name="Synthetic Household Survey",
-    study_type=StudyType.lsms,
-    data_collection_mode="CAPI",
-    language="English",
-    variables=[age, sex],
-    source_file="questionnaire.pdf",
-    source_format="pdf",
-    extraction_date=date.today(),
-)
-```
-
-Values such as the ISO3 country code and survey identifier are conventions, not
-format validators in `0.1.x`. Validate institutional naming rules in your
-application boundary.
-
-## 3. Serialize and validate
-
-```python
-payload = survey.model_dump_json(indent=2)
-restored = SurveySVIS.model_validate_json(payload)
-
-assert restored == survey
-```
-
-Use `survey.model_dump(mode="json")` when you need a JSON-compatible Python
-dictionary instead of a string.
-
-## 4. Add diagnostics and write artifacts
-
-```python
 from pathlib import Path
 
-from survey_scribe.results import Diagnostic, DiagnosticCode, ExtractionResult
+from survey_scribe import ExtractionResult
+from survey_scribe.results import ArtifactProvenance
+from survey_scribe.sources import SourceRegistry
+
+conversion = SourceRegistry.default().convert_for_svis(
+    Path("questionnaire.xlsx"),
+    extraction_date=date.today(),
+)
+if conversion.svis is None:
+    raise RuntimeError("The workbook is not a supported XLSForm")
+
+review_codes = tuple(item.code for item in conversion.document.diagnostics)
+if conversion.native is not None:
+    review_codes += tuple(item.code for item in conversion.native.diagnostics)
+if review_codes:
+    raise RuntimeError(f"Review XLSForm diagnostics before publication: {review_codes}")
+if conversion.document.snapshot_sha256 is None:
+    raise RuntimeError("The source snapshot has no digest")
 
 result = ExtractionResult(
-    output=survey,
-    diagnostics=(
-        Diagnostic(
-            code=DiagnosticCode.quality_low_confidence,
-            message="Review q_age against the printed questionnaire.",
-        ),
+    output=conversion.svis,
+    artifact_provenance=ArtifactProvenance(
+        source_sha256=(conversion.document.snapshot_sha256,),
+        model_response_sha256=(),
+        prompt_versions=(),
     ),
 )
-
 written = result.write(Path("output"))
-
-print(written.status.value)
-for artifact in written.artifacts:
-    print(artifact.kind, artifact.path, artifact.sha256)
 ```
 
-The first write creates a main JSON file, generation files, a manifest, and an
-active pointer. A second write for the same survey fails unless you explicitly
-pass `overwrite=True`.
+This path makes no provider call. `conversion.svis` preserves questionnaire
+variables, choices, module labels, raw relevance, and retained notes.
+`conversion.native` contains group, repeat, expression, and routing structure.
+The stable SVIS artifact does not contain that full native structure.
 
-## 5. Normalize a local source
+The output contains the stable `<survey_id>_svis.json` file and a
+`.survey-scribe/` generation tree with a manifest, sidecar, and active pointer.
+A second write for the same survey fails unless you pass `overwrite=True`.
+
+## 2. Inspect the result
+
+```python
+from survey_scribe import ResultStatus
+
+if written.status is ResultStatus.success:
+    survey = written.output
+elif written.status is ResultStatus.partial:
+    review_codes = tuple(item.code for item in written.diagnostics)
+else:
+    raise RuntimeError("No usable questionnaire output")
+```
+
+A quality warning alone remains `success`. `partial` means that usable output
+has an operational failure, such as a failed source block. A failed result has no
+output and cannot be written.
+
+## 3. Normalize a local source
 
 ```python
 from pathlib import Path
@@ -127,12 +85,15 @@ for block in document.blocks:
 Source conversion returns `SourceDocument`. It does not call a model provider and
 is useful when you need to inspect normalized blocks. `SurveyScribe.convert()`
 continues from normalized content to `SurveySVIS`, or uses native XLSForm output
-without a provider call. See [Local Sources](../guides/sources.md) for format,
+without a provider call after provider construction. See [Questionnaire Sources](../guides/sources.md) for format,
 resource, and security controls.
 
-## 6. Convert with `SurveyScribe`
+## 4. Convert with `SurveyScribe`
 
 For a configured provider, use the synchronous facade outside an event loop:
+
+The PDF example also needs the `pdf` extra and a validated local OCR artifact
+directory. Use DOCX or text when you want to test the provider without OCR.
 
 ```python
 from pathlib import Path
@@ -157,6 +118,8 @@ SDK, credential, or network route:
 # docs-exec: survey-scribe-fake
 import json
 from datetime import date
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from survey_scribe import DataType, ResultStatus, SurveyScribe, SurveyVariable
 from survey_scribe.pipeline import BlockExtraction, ExtractedMetadata, ExtractedVariable
@@ -205,18 +168,19 @@ capabilities = ModelCapabilities(
     tested_sdk_version="synthetic-no-sdk",
 )
 provider = DeterministicFakeProvider(capabilities=capabilities, responder=respond)
-source = DOCS_TMP_PATH / "synthetic-questionnaire.txt"
-source.write_text("Age in years", encoding="utf-8")
+with TemporaryDirectory() as temporary_directory:
+    source = Path(temporary_directory) / "synthetic-questionnaire.txt"
+    source.write_text("Age in years", encoding="utf-8")
 
-with SurveyScribe(provider, extraction_date=date(2026, 9, 4)) as client:
-    result = client.convert(source)
+    with SurveyScribe(provider, extraction_date=date(2026, 9, 4)) as client:
+        result = client.convert(source)
 
-assert result.status is ResultStatus.success
-assert result.output is not None
-assert result.output.variables[0].raw_name == "age"
+    assert result.status is ResultStatus.success
+    assert result.output is not None
+    assert result.output.variables[0].raw_name == "age"
 ```
 
-## 7. Run the installed command
+## 5. Run the installed command
 
 ```console
 survey-scribe convert questionnaire.txt --output-dir output
@@ -224,3 +188,10 @@ survey-scribe convert questionnaire.txt --output-dir output
 
 The [command-line guide](../cli.md) documents configuration, output files, batch
 runs, and default versus strict exit behavior.
+
+## 6. Continue the workflow
+
+1. Read the full [Questionnaire Extraction](../guides/extraction.md) guide.
+2. Add [Skip Patterns](../guides/skip-patterns.md) and routing when needed.
+3. Select an [AI Provider](../guides/ai-providers.md) for non-native sources.
+4. Use the [Palantir Foundry](../platforms/palantir-foundry.md) transform for a hosted native XLSForm path.

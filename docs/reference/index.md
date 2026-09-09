@@ -4,34 +4,119 @@ Survey Scribe preserves its stable legacy SVIS API and adds routed models,
 `SurveyScribe`, custom structured pipelines, `QuestionnaireRouter`, and typed
 modules for providers, configuration, results, serialization, and local sources.
 
-## Stable top-level imports
+Use [Questionnaire Extraction](../guides/extraction.md) for a method-by-method
+workflow and [Completed Questionnaires](../guides/completed-questionnaires.md)
+for caller-defined answer records.
+
+## Top-level public imports
+
+The following groups cover every name in `survey_scribe.__all__`.
+
+### Extraction, results, and SVIS
 
 ```python
 from survey_scribe import (
     AnswerCategory,
+    ChunkedStructuredPipeline,
     DataType,
+    Diagnostic,
+    DiagnosticCode,
+    ExtractionResult,
+    FailedBlock,
+    LocalSource,
     NumericRange,
-    QuestionnaireRouter,
-    QuestionnaireRoutingGraph,
-    SurveyScribe,
-    RoutedSurveySVIS,
-    RoutingConfig,
+    ResultStatus,
+    SourceBundle,
+    StructuredPipeline,
     StudyType,
     SurveySVIS,
+    SurveyScribe,
+    SurveyScribeConfig,
     SurveyVariable,
     UnitLevel,
+)
+```
+
+### Routing models and facade
+
+```python
+from survey_scribe import (
+    CandidateEdge,
+    CandidateStatus,
+    Containment,
+    DiagnosticSeverity,
+    DiscrepancyKind,
+    EdgeKind,
+    EvidenceRecord,
+    InventoryItem,
+    LoopDefinition,
+    LoopKind,
+    QuestionnaireRouter,
+    QuestionnaireRoutingGraph,
+    RepeatKind,
+    RepeatSpec,
+    ReplacementEdge,
+    ReviewAction,
+    ReviewDecision,
+    RoutedAnswerCategory,
+    RoutedNumericRange,
+    RoutedSurveySVIS,
+    RoutedSurveyVariable,
+    RoutingAudit,
+    RoutingConfig,
+    RoutingDiagnostic,
+    RoutingDiscrepancy,
+    RoutingEdge,
+    RoutingNode,
+    RoutingSourceBinding,
+    TerminalKind,
+    canonical_routing_schema_json,
+)
+```
+
+The top-level `DiagnosticSeverity` is the routing enum. Import operational result
+severity as `survey_scribe.results.DiagnosticSeverity`.
+
+### Errors
+
+```python
+from survey_scribe import (
+    AmbiguousCredentialError,
+    ArtifactCollisionError,
+    ArtifactWriteError,
+    ClientClosedError,
+    ConfigurationError,
+    ConversionFailedError,
+    ProgrammerInputError,
+    RunningEventLoopError,
+    SourceConversionError,
+    SourceDependencyError,
+    SourceError,
+    SourceFormatError,
+    SourceInputError,
+    SourceLimitError,
+    SourceSecurityError,
+    SourceTimeoutError,
+    SurveyScribeError,
+)
+```
+
+### Version
+
+```python
+from survey_scribe import (
     __version__,
 )
 ```
 
 The seven legacy SVIS model exports and their serialized behavior remain exact
-through 1.x. Routed exports are additive. Import lower-level contracts from their
-documented modules:
+through 1.x. Runtime, result, source, error, and routed model names are also
+available at the top level. Import lower-level contracts from their documented
+modules when a name is not re-exported:
 
 ```python
-from survey_scribe.config import SurveyScribeConfig
-from survey_scribe.errors import ConfigurationError
-from survey_scribe.results import ExtractionResult
+from survey_scribe.providers import ModelCapabilities, StructuredProvider
+from survey_scribe.results import DiagnosticSeverity as ResultDiagnosticSeverity
 from survey_scribe.serialization import legacy_json_bytes, legacy_payload
 from survey_scribe.sources import SourceLimits, SourceRegistry
 from survey_scribe.sources.chunking import chunk_document

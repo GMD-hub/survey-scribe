@@ -19,4 +19,6 @@ Typed artifact-plan and serializer ports are exported from
         - FailedBlock
         - ArtifactKind
         - ArtifactReference
+        - PromptArtifactProvenance
+        - ArtifactProvenance
         - ExtractionResult

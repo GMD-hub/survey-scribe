@@ -2,16 +2,16 @@
 
 <div class="hero" markdown>
 
-**Typed questionnaire metadata with explicit provenance.**
+**Extract questionnaire metadata with explicit provenance and bounded AI use.**
 
-Survey Scribe provides the Survey Variable Information Schema (SVIS), safe local
-document normalization, deterministic chunking, secure configuration resolution,
-versioned artifact output, and source-grounded questionnaire routing for
-household-survey workflows.
+Survey Scribe converts local questionnaire instruments into typed Survey Variable
+Information Schema (SVIS) artifacts. It provides native XLSForm extraction,
+model-assisted document extraction, caller-defined completed-form pipelines,
+source-grounded skip-pattern graphs, and versioned output.
 
-[Install Survey Scribe](getting-started/installation.md){ .md-button .md-button--primary }
-[Open the quickstart](getting-started/quickstart.md){ .md-button }
-[Explore synthetic results](playground.md){ .md-button }
+[Extract a questionnaire](getting-started/quickstart.md){ .md-button .md-button--primary }
+[Deploy in Palantir Foundry](platforms/palantir-foundry.md){ .md-button }
+[Configure AI providers](guides/ai-providers.md){ .md-button }
 
 </div>
 
@@ -21,37 +21,46 @@ household-survey workflows.
 
 <div class="feature-card" markdown>
 
-### Typed SVIS records
+### Questionnaire extraction
 
-Build and validate survey, variable, category, range, confidence, and review
-metadata with Pydantic 2.
-
-</div>
-
-<div class="feature-card" markdown>
-
-### Local source normalization
-
-Convert local PDF, DOCX, XLSX, CSV, HTML, Markdown, and text files into one
-ordered, provenance-aware document model.
+Extract native XLSForm instruments without a provider, or use a strict structured
+provider for PDF, DOCX, CSV, HTML, Markdown, and text.
 
 </div>
 
 <div class="feature-card" markdown>
 
-### Controlled configuration
+### Completed-form contracts
 
-Resolve non-secret TOML settings and opt-in environment credentials with clear,
-deterministic precedence.
+Use caller-defined Pydantic models for completed questionnaires. Answer-state,
+repeat assembly, and routing validation remain application responsibilities.
 
 </div>
 
 <div class="feature-card" markdown>
 
-### Questionnaire routing
+### Skip patterns and routing
 
-Represent accepted flow as a directed multigraph with separate source evidence,
-disputed candidates, activation conditions, repeat templates, and review history.
+Represent activation, branches, section jumps, terminals, repeats, evidence,
+candidates, and review history without pretending to execute an interview.
+
+</div>
+
+<div class="feature-card" markdown>
+
+### Platform integration
+
+Run a provider-free XLSForm transform in Palantir Foundry, use compatible
+Microsoft Foundry endpoints, or configure the generic mAI Factory gateway pattern.
+
+</div>
+
+<div class="feature-card" markdown>
+
+### Controlled providers
+
+Configure OpenAI, OpenRouter, Vercel AI Gateway, Azure-compatible endpoints,
+Anthropic, or an application-owned `StructuredProvider` with bounded retries.
 
 </div>
 
@@ -68,8 +77,10 @@ checksums, and an active pointer.
 
 ## Package scope
 
-Survey Scribe `0.1.x` is an alpha package. It includes:
+Survey Scribe `0.1.x` is an alpha package. No approved PyPI release is currently
+available. The source package includes:
 
+- Native instrument metadata extraction and provider-assisted extraction.
 - Stable legacy SVIS imports plus additive routed models and `QuestionnaireRouter`.
 - Typed configuration, result, source, routing, provider-contract, chunking, and serialization modules.
 - A PEP 561 `py.typed` marker for editors and type checkers.
@@ -84,42 +95,44 @@ Survey Scribe `0.1.x` is an alpha package. It includes:
     sends normalized source content only to the provider endpoint that the user
     explicitly configures. The package contains no telemetry client.
 
+!!! important "Completed-questionnaire boundary"
+
+    The standard client extracts instrument metadata, not respondent microdata.
+    Custom structured pipelines can validate caller-defined answer records, but
+    Survey Scribe does not classify skipped answers, execute routing conditions,
+    or expand repeat instances.
+
 ## Minimal example
 
 ```python
 from datetime import date
 
-from survey_scribe import DataType, SurveySVIS, SurveyVariable
+from survey_scribe.sources import SourceRegistry
 
-survey = SurveySVIS(
-    survey_id="TST_2024_SYNTH",
-    country_code="TST",
-    year=2024,
-    survey_name="Synthetic Household Survey",
-    variables=[
-        SurveyVariable(
-            raw_name="q_age",
-            label="Age in completed years",
-            data_type=DataType.numeric,
-            extraction_confidence=0.98,
-        )
-    ],
-    source_file="questionnaire.pdf",
-    source_format="pdf",
+conversion = SourceRegistry.default().convert_for_svis(
+    "questionnaire.xlsx",
     extraction_date=date.today(),
 )
+if conversion.svis is None:
+    raise RuntimeError("The workbook is not a supported XLSForm")
 
-payload = survey.model_dump_json(indent=2)
-restored = SurveySVIS.model_validate_json(payload)
-assert restored == survey
+review_codes = tuple(item.code for item in conversion.document.diagnostics)
+if conversion.native is not None:
+    review_codes += tuple(item.code for item in conversion.native.diagnostics)
+if review_codes:
+    raise RuntimeError(f"Review XLSForm diagnostics before use: {review_codes}")
+
+survey = conversion.svis
 ```
 
 ## Next steps
 
-1. [Install the package and optional source dependencies](getting-started/installation.md).
-2. [Build and validate your first SVIS record](getting-started/quickstart.md).
-3. [Configure API keys without persisting them](guides/security.md).
-4. [Normalize local source documents](guides/sources.md).
-5. [Use the complete typed API reference](reference/index.md).
-6. [Interpret and validate routed output](routing.md).
-7. [Inspect precomputed result states without uploading data](playground.md).
+1. [Install an approved wheel or pinned source revision](getting-started/installation.md).
+2. [Extract your first questionnaire](getting-started/quickstart.md).
+3. [Choose the correct extraction API](guides/extraction.md).
+4. [Define completed-answer output safely](guides/completed-questionnaires.md).
+5. [Interpret common skip patterns](guides/skip-patterns.md).
+6. [Deploy the provider-free workflow in Palantir Foundry](platforms/palantir-foundry.md).
+7. [Configure mAI Factory](integrations/mai-factory.md) or another [AI provider](guides/ai-providers.md).
+8. [Check all features and limitations](project/features.md).
+9. [Use the typed API reference](reference/index.md).
