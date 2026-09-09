@@ -47,6 +47,7 @@ _MEDIA_TYPES_BY_FORMAT: Mapping[str, frozenset[str]] = {
     "pdf": frozenset({"application/pdf"}),
     "text": frozenset({"text/plain"}),
     "txt": frozenset({"text/plain"}),
+    "xlsform": frozenset({"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}),
     "xlsx": frozenset({"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}),
 }
 

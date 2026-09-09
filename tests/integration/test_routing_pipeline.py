@@ -170,6 +170,27 @@ async def test_real_native_xlsform_routes_relevance_and_repeat_with_zero_model_c
     assert all(record.observation.native_expression is not None for record in native_evidence)
 
 
+def test_native_xlsform_svis_chains_into_provider_free_routing(tmp_path: Path) -> None:
+    path = tmp_path / "roster.xlsx"
+    _workbook(path)
+    registry = SourceRegistry.default()
+    conversion = registry.convert_for_svis(path, extraction_date=date(2026, 9, 1))
+
+    assert conversion.svis is not None
+    assert conversion.svis.source_format == "xlsform"
+    binding = registry.convert_with_native(path, conversion.svis).source_binding
+
+    result = QuestionnaireRouter(None, sources=registry).route(
+        path,
+        conversion.svis,
+        source_binding=binding,
+    )
+
+    assert result.status is ResultStatus.success
+    assert result.output is not None
+    assert [variable.raw_name for variable in result.output.variables] == ["consent", "age"]
+
+
 def test_native_no_provider_sync_async_parity_and_running_loop_rejection(tmp_path: Path) -> None:
     path = tmp_path / "roster.xlsx"
     _workbook(path)
