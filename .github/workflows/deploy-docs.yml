@@ -33,13 +33,30 @@ jobs:
           enable-cache: true
 
       - name: Install locked dependencies
-        run: uv sync --locked --python 3.11
+        run: uv sync --locked --python 3.11 --extra tabular
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
 
+      - name: Check generated documentation references
+        env:
+          UV_OFFLINE: "1"
+        run: uv run --no-sync python scripts/generate_docs_reference.py --check
+
       - name: Build static site
-        run: uv run mkdocs build --strict --clean
+        env:
+          UV_OFFLINE: "1"
+        run: uv run --no-sync mkdocs build --strict --clean
+
+      - name: Check local documentation links
+        env:
+          UV_OFFLINE: "1"
+        run: uv run --no-sync linkchecker --ignore-url='^https?://' site/
+
+      - name: Run offline documentation checks
+        env:
+          UV_OFFLINE: "1"
+        run: uv run --no-sync pytest --disable-socket --allow-unix-socket tests/docs
 
       - name: Archive GitHub Pages artifact
         run: >-

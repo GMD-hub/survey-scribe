@@ -45,7 +45,7 @@ jobs:
         with:
           version: "0.8.11"
           enable-cache: true
-      - run: uv sync --locked --python 3.11
+      - run: uv sync --locked --python 3.11 --extra tabular
       - name: Prepare Chromium browser
         run: uv run --no-sync playwright install --with-deps chromium
       - name: Check generated documentation references offline
