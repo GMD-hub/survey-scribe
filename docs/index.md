@@ -12,6 +12,7 @@ source-grounded skip-pattern graphs, and versioned output.
 [Extract a questionnaire](getting-started/quickstart.md){ .md-button .md-button--primary }
 [Deploy in Palantir Foundry](platforms/palantir-foundry.md){ .md-button }
 [Configure AI providers](guides/ai-providers.md){ .md-button }
+[Browse DeepWiki](https://deepwiki.com/GMD-hub/survey-scribe){ .md-button }
 
 </div>
 

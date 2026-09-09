@@ -112,6 +112,7 @@ mAI Factory, AI provider setup, artifacts, security, privacy, and generated API
 references.
 
 - [Documentation website](https://gmd-hub.github.io/survey-scribe/)
+- [DeepWiki project guide](https://deepwiki.com/GMD-hub/survey-scribe)
 - [Extraction guide](docs/guides/extraction.md)
 - [Completed questionnaires](docs/guides/completed-questionnaires.md)
 - [Skip patterns](docs/guides/skip-patterns.md)

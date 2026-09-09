@@ -48,6 +48,7 @@ _APPROVED_PUBLIC_HOSTS = frozenset(
         "gmd-hub.github.io",
         "img.shields.io",
         "127.0.0.1",
+        "deepwiki.com",
         "www.palantir.com",
         "www.python.org",
     }
@@ -266,6 +267,7 @@ def test_required_user_journey_and_evidence_boundaries_are_published(
         "mAI Factory",
         "completed questionnaire",
         "respondent microdata",
+        "DeepWiki",
     ):
         assert required in corpus
 
