@@ -32,10 +32,9 @@ project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Public installation guidance no longer presents an unavailable PyPI release or
   a stale source revision as the primary installation path.
 
-## 0.1.0 - Unpublished
+## [0.1.0] - 2026-09-10
 
-This version remains a source-tree milestone. No approved package-index or GitHub
-release is available.
+Version `0.1.0` is now published to PyPI and the release workflow completed.
 
 ### Added
 
@@ -44,4 +43,14 @@ release is available.
 - Legacy schema re-export and characterization suite.
 - Cross-platform Python 3.11-3.13 CI and clean-wheel installation checks.
 
+### Changed
+
+- Release packaging and trust/publishing configuration for PyPI via GitHub workflow.
+- Public installation guidance now points to the approved release path.
+
+### Fixed
+
+- Publication metadata and changelog state now reflect the approved 0.1.0 release.
+
 [Unreleased]: https://github.com/GMD-hub/survey-scribe/commits/main
+[0.1.0]: https://github.com/GMD-hub/survey-scribe/releases/tag/v0.1.0
