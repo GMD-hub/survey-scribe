@@ -1,4 +1,4 @@
-"""Keep automation inside the approved Pages-only publication boundary."""
+"""Keep automation inside the approved Pages-only and PyPI publication boundary."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ def test_workflows_enforce_publication_boundary(repository_root: Path) -> None:
         "ci.yml",
         "deploy-docs.yml",
         "docs.yml",
+        "publish.yml",
     }
 
     combined = "\n".join(workflow.read_text(encoding="utf-8") for workflow in workflows)
@@ -21,7 +22,15 @@ def test_workflows_enforce_publication_boundary(repository_root: Path) -> None:
 
     assert all(value not in combined for value in prohibited)
     assert "uv run --no-sync twine check --strict dist/*.whl dist/*.tar.gz" in combined
+    assert (
+        "python scripts/build_wheel_sbom.py --wheel dist/*.whl --wheelhouse .cache/wheelhouse"
+        in combined
+    )
     assert combined.count("uv run --no-sync mkdocs build --strict --clean") == 2
+
+    publish = (repository_root / ".github/workflows/publish.yml").read_text(encoding="utf-8")
+    assert "environment: pypi" in publish
+    assert "uv publish --trusted-publishing always dist/*.whl dist/*.tar.gz" in publish
 
     deployment = (repository_root / ".github/workflows/deploy-docs.yml").read_text(encoding="utf-8")
     assert "pages: write" in deployment

@@ -1,4 +1,4 @@
-"""Enforce immutable actions and the approved Pages-only deployment boundary."""
+"""Enforce immutable actions and the approved deployment boundaries."""
 
 from __future__ import annotations
 
@@ -27,6 +27,8 @@ APPROVED_ACTIONS = {
     "actions/deploy-pages": "cd2ce8fcbc39b97be8ca5fce6e763baed58fa128",  # v5.0.0
 }
 PAGES_WORKFLOW = "deploy-docs.yml"
+PUBLISH_WORKFLOW = "publish.yml"
+PUBLISH_ENVIRONMENT = "pypi"
 PUBLICATION_PATTERNS = (
     "gh-action-pypi-publish",
     "pypa/gh-action-pypi-publish",
@@ -79,8 +81,19 @@ def _check_permissions(
     errors: list[str],
 ) -> None:
     top_permissions = workflow.get("permissions")
-    if top_permissions != {"contents": "read"}:
-        errors.append(f"{path.name}: top-level permissions must equal contents: read")
+    expected_top_permissions: Mapping[str, object]
+    if path.name == PUBLISH_WORKFLOW:
+        expected_top_permissions = {"contents": "read", "id-token": "write"}
+    else:
+        expected_top_permissions = {"contents": "read"}
+
+    if top_permissions != expected_top_permissions:
+        if path.name == PUBLISH_WORKFLOW:
+            errors.append(
+                f"{path.name}: top-level permissions must include contents: read and id-token: write"
+            )
+        else:
+            errors.append(f"{path.name}: top-level permissions must equal contents: read")
     for job_name, job_value in _mapping(workflow.get("jobs")).items():
         job = _mapping(job_value)
         if "permissions" in job and not isinstance(job["permissions"], Mapping):
@@ -129,12 +142,21 @@ def check_workflow(path: Path) -> list[str]:
     lowered = text.casefold()
     for pattern in PUBLICATION_PATTERNS:
         if pattern in lowered:
+            if path.name == PUBLISH_WORKFLOW and pattern == "uv publish":
+                if "uv publish --trusted-publishing always" not in lowered:
+                    errors.append(f"{path.name}: package publication must use trusted publishing")
+                continue
             errors.append(f"{path.name}: package publication is prohibited: {pattern}")
     for key, value in _walk(workflow):
         if key == "uses":
             _check_action(path, value, errors)
         if key == "environment" and path.name != PAGES_WORKFLOW:
-            errors.append(f"{path.name}: deployment environments are not authorized")
+            if path.name == PUBLISH_WORKFLOW:
+                env_name = _mapping(value).get("name", value)
+                if env_name != PUBLISH_ENVIRONMENT:
+                    errors.append(f"{path.name}: deployment environment is not authorized")
+            else:
+                errors.append(f"{path.name}: deployment environments are not authorized")
     if path.name == PAGES_WORKFLOW:
         actions = {
             value.rsplit("@", maxsplit=1)[0]
@@ -168,7 +190,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         for error in errors:
             logger.error(error)
         return 1
-    logger.info("Workflow policy passed with the approved Pages-only exception")
+    logger.info("Workflow policy passed with the approved Pages and PyPI publish exceptions")
     return 0
 
 

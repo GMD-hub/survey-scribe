@@ -104,7 +104,7 @@ jobs:
       - name: Generate SBOM offline
         env:
           UV_OFFLINE: "1"
-        run: uv run --no-sync cyclonedx-py environment --output-file dist/sbom.cdx.json
+        run: uv run --no-sync python scripts/build_wheel_sbom.py --wheel dist/*.whl --wheelhouse .cache/wheelhouse --output dist/sbom.cdx.json
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: survey-scribe-distributions

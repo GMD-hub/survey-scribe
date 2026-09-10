@@ -92,6 +92,30 @@ def test_approved_pages_exception_is_narrowly_accepted(repository_root: Path) ->
     )
 
 
+def test_approved_publish_exception_is_narrowly_accepted(repository_root: Path) -> None:
+    path = repository_root / ".github/workflows/publish.yml"
+
+    assert check_workflow(path) == []
+
+    missing_env = path.read_text(encoding="utf-8").replace(
+        "environment: pypi", "environment: staging"
+    )
+    changed_env = _workflow(repository_root / ".cache", missing_env, name="publish.yml")
+    assert any(
+        "deployment environment is not authorized" in error for error in check_workflow(changed_env)
+    )
+
+    missing_trust = path.read_text(encoding="utf-8").replace(
+        "uv publish --trusted-publishing always",
+        "uv publish",
+    )
+    changed_trust = _workflow(repository_root / ".cache", missing_trust, name="publish.yml")
+    assert any(
+        "package publication must use trusted publishing" in error
+        for error in check_workflow(changed_trust)
+    )
+
+
 @pytest.mark.parametrize(
     "expression",
     ("${{ secrets.PYPI_TOKEN }}", "${{ secrets ['PYPI_TOKEN'] }}"),
