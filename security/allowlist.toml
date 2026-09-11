@@ -11,6 +11,13 @@ expires = "2026-10-03"
 
 [[entries]]
 scanner = "dependency"
+fingerprint = "9eb6d2524791c88dba4d96a50a4807829fc8412368eba6a82e8774090b1a306d"
+owner = "Survey Scribe maintainers"
+rationale = "accelerate 1.14.0 is required by the docling optional stack; no fixed release is available in the currently tested range."
+expires = "2026-10-03"
+
+[[entries]]
+scanner = "dependency"
 fingerprint = "a7c5ba6edcd18ff330a4e88f96e00c9f31265b658baa191782b7c751fb94630a"
 owner = "Survey Scribe maintainers"
 rationale = "Transformers 4.57.6 is constrained by the Docling stack; Survey Scribe does not load model archives from untrusted sources."
@@ -39,7 +46,7 @@ expires = "2026-10-03"
 
 [[entries]]
 scanner = "dependency"
-fingerprint = "2af5ead16deee0da069adb35b3553b7203746c73c2e7a9761e0b01dfd26b3098"
+fingerprint = "582713aea11434b5f4a312604f5a10e4accefa4b81410d5d5559ae4875ca976c"
 owner = "Survey Scribe maintainers"
 rationale = "Transformers 4.57.6 is constrained by the Docling stack; Survey Scribe does not load model archives from untrusted sources."
 expires = "2026-10-03"
