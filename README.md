@@ -1,157 +1,70 @@
-# Survey Scribe
+# Survey Scribe Foundry Hosted Agent
 
-[![CI](https://github.com/GMD-hub/survey-scribe/actions/workflows/ci.yml/badge.svg)](https://github.com/GMD-hub/survey-scribe/actions/workflows/ci.yml)
-[![Python 3.11-3.13](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue.svg)](https://www.python.org/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+Survey Scribe is a Python-based Microsoft Foundry hosted agent that extracts structured Survey Variable Information System (SVIS) metadata and variables from questionnaire PDFs. A user supplies a PDF file name; the agent reads the source document from Azure Blob Storage, processes it with Docling and an LLM constrained by Pydantic schemas, then writes the JSON result to Blob Storage.
 
-Survey Scribe converts local survey questionnaires to the typed Survey Variable
-Information Schema (SVIS). It provides synchronous, asynchronous, and batch APIs,
-provider adapters, safe local source normalization, deterministic chunking,
-questionnaire routing graphs, secure configuration, and versioned artifacts.
+## Solution flow
 
-> **Alpha status:** The source tree declares version `0.1.0` and contains the
-> public `SurveyScribe` API, conversion CLI, typed models, source and provider
-> adapters, transactional artifacts, and `QuestionnaireRouter`. No approved PyPI
-> release is currently available.
+1. Send a PDF file name to the agent through the Foundry Responses protocol.
+2. [`main.py`](src/survey-scribe/main.py) validates the input and invokes the extraction workflow.
+3. [`foundry_blob_agent.py`](src/survey-scribe/foundry_blob_agent.py) downloads `input/<file-name>` from the configured Blob container using `DefaultAzureCredential`.
+4. [`docling_pipeline.py`](src/survey-scribe/docling_pipeline.py) and the SVIS extraction agent convert the PDF into schema-validated JSON.
+5. The result is uploaded as `output/<file-stem>_result.json` in the same Blob container.
 
-## Features
+## Foundry hosted-agent integration
 
-- Typed SVIS models with Pydantic validation and JSON serialization.
-- Stable top-level imports for schema consumers.
-- Numeric, categorical, text, date, and other variable classifications.
-- Missing-category, source-provenance, confidence, and review metadata.
-- Local PDF, DOCX, XLSX, CSV, HTML, Markdown, and text normalization.
-- Token-aware chunking with stable overlap and table provenance.
-- Credential-safe configuration and versioned artifact manifests.
-- Source-grounded directed routing multigraphs with separate evidence and audit history.
-- Native XLSForm relevance and repeat routing without a provider call.
-- Caller-defined structured pipelines for completed-form records.
-- A PEP 561 `py.typed` marker for editor and type-checker support.
-- An installed CLI for single and batch conversion, configuration checks,
-  provider listing, and deterministic routing-schema export.
+The Azure Developer CLI (`azd`) and Foundry Toolkit use [`azure.yaml`](azure.yaml) to package and deploy this project as a containerized hosted agent.
 
-The standard client extracts questionnaire instrument metadata. It does not
-produce respondent microdata, classify skipped answers, execute routing, or
-expand repeat instances.
+| Artifact | Purpose |
+| --- | --- |
+| [`azure.yaml`](azure.yaml) | Declares the Foundry project, the `azure.ai.agent` hosted service, the Responses protocol, agent name, runtime resources, environment variables, and Docker build path. |
+| [`.foundry/.deployment.json`](.foundry/.deployment.json) | Foundry Toolkit deployment metadata, including the selected container deployment mode and container registry. |
+| [`src/survey-scribe/Dockerfile`](src/survey-scribe/Dockerfile) | Creates the Python 3.13 container, installs native Docling dependencies and Python packages, exposes port `8088`, and starts the agent. |
+| [`src/survey-scribe/main.py`](src/survey-scribe/main.py) | Implements the Foundry Responses server contract through `azure-ai-agentserver-responses`. |
+| [`src/survey-scribe/requirements.txt`](src/survey-scribe/requirements.txt) | Lists the hosted-agent runtime dependencies. |
+| [`src/survey-scribe/.dockerignore`](src/survey-scribe/.dockerignore) | Prevents local files, including `.env`, from being copied into the container image. |
 
-## Installation
+At deployment, Foundry builds the image, pushes it to the configured registry, and hosts the Responses-compatible agent. The hosted runtime supplies a managed identity; grant that identity Blob Data Contributor access to the target storage container or account so the agent can read input PDFs and write results.
 
-After publication is approved, install the base schema package with:
+## Run and deploy
 
-```console
-pip install survey-scribe
+Prerequisites:
+
+- Python 3.13 and Docker Desktop.
+- Azure CLI, Azure Developer CLI (`azd`), and the `azure.ai.agents` `azd` extension.
+- An authenticated Azure account with access to the Foundry project, container registry, and storage account.
+
+From the repository root:
+
+```powershell
+azd ai agent run
+azd ai agent invoke --local "questionnaire.pdf"
+azd deploy
+azd ai agent invoke "questionnaire.pdf"
 ```
 
-For development from this repository, use the locked environment:
+The local agent listens on `http://localhost:8088`. Use the exact blob file name stored below the `input/` prefix.
 
-```console
-uv sync --locked --python 3.11
+## Scaffold a new Foundry hosted agent in VS Code
+
+1. Install the Microsoft Foundry extension (Foundry Toolkit) in VS Code and sign in to Azure.
+2. Open the Command Palette with `Ctrl+Shift+P`, run `Foundry: Create Agent`, and select **Hosted agent**.
+3. Choose Python and the **Responses** protocol, then select or create a Foundry project.
+4. Let the toolkit create the agent project and its `azure.yaml`, `.foundry` metadata, Dockerfile, Python entry point, and dependency manifest.
+5. Implement the response handler in the generated entry point, add runtime packages to `requirements.txt`, and configure only non-secret settings in `azure.yaml`.
+6. Test with `azd ai agent run` and `azd ai agent invoke --local`, then deploy with `azd deploy`.
+
+
+## Security and configuration
+
+Before running or deploying this solution outside its current environment, replace all environment-specific configuration and secrets. In particular, [`src/survey-scribe/agents/svis_agent.py`](src/survey-scribe/agents/svis_agent.py) currently contains a hard-coded Azure API key, which must be revoked/rotated and replaced with a secret managed outside source control, such as a Key Vault-backed configuration or managed-identity authentication. Do not commit `.env` files, storage keys, connection strings, API keys, tokens, or customer survey documents.
+
+The storage account and container names in [`foundry_blob_agent.py`](src/survey-scribe/foundry_blob_agent.py) are deployment-specific and must also be changed for the target environment.
+
+## Test
+
+Install the test dependency, then run the schema test from the agent directory:
+
+```powershell
+python -m pip install pytest
+python -m pytest tests/test_schema.py
 ```
-
-Optional dependency groups are available for provider and document adapters:
-
-```console
-pip install "survey-scribe[openai]"
-pip install "survey-scribe[anthropic]"
-pip install "survey-scribe[pdf]"
-pip install "survey-scribe[tabular]"
-```
-
-The base package includes the CLI. Install provider and source extras required by
-the selected conversion path.
-
-## Quick Start
-
-```python
-from datetime import date
-
-from survey_scribe.sources import SourceRegistry
-
-conversion = SourceRegistry.default().convert_for_svis(
-    "questionnaire.xlsx",
-    extraction_date=date.today(),
-)
-if conversion.svis is None:
-    raise RuntimeError("The workbook is not a supported XLSForm")
-
-review_codes = tuple(item.code for item in conversion.document.diagnostics)
-if conversion.native is not None:
-    review_codes += tuple(item.code for item in conversion.native.diagnostics)
-if review_codes:
-    raise RuntimeError(f"Review XLSForm diagnostics before use: {review_codes}")
-
-survey = conversion.svis
-```
-
-This native XLSForm path makes no provider call. PDF, DOCX, and other
-questionnaire instruments use `SurveyScribe` with a configured provider.
-
-Inspect the installed command without loading optional providers:
-
-```console
-survey-scribe --help
-survey-scribe --version
-survey-scribe providers
-survey-scribe config check
-survey-scribe convert questionnaire.pdf --output-dir output
-survey-scribe batch questionnaire-a.pdf questionnaire-b.xlsx --output-dir output
-survey-scribe schema export routing > questionnaire-routing-graph-v1.0.json
-```
-
-Set credentials with environment variables or use `--prompt-api-key` /
-`--prompt-bearer-token`. The CLI writes sidecars and manifests by default,
-refuses existing artifacts unless `--overwrite` is present, and supports
-`--strict` when partial output must produce a nonzero exit. See the
-[CLI guide](docs/cli.md) and [migration guide](docs/migration.md).
-
-## Documentation
-
-The public website includes end-to-end questionnaire extraction, completed-form
-contracts, skip-pattern examples, Palantir Foundry deployment, Microsoft Foundry,
-mAI Factory, AI provider setup, artifacts, security, privacy, and generated API
-references.
-
-- [Documentation website](https://gmd-hub.github.io/survey-scribe/)
-- [DeepWiki project guide](https://deepwiki.com/GMD-hub/survey-scribe)
-- [Extraction guide](docs/guides/extraction.md)
-- [Completed questionnaires](docs/guides/completed-questionnaires.md)
-- [Skip patterns](docs/guides/skip-patterns.md)
-- [Palantir Foundry](docs/platforms/palantir-foundry.md)
-- [mAI Factory](docs/integrations/mai-factory.md)
-- [AI providers](docs/guides/ai-providers.md)
-
-```console
-uv run mkdocs serve
-```
-
-The local site is available at `http://127.0.0.1:8000/` while the server runs.
-Pushes to `main` build and deploy the strict static site to GitHub Pages through
-`.github/workflows/deploy-docs.yml`.
-
-## Development
-
-```console
-uv run ruff check .
-uv run ruff format --check .
-uv run pyright
-uv run pytest tests/unit tests/characterization tests/test_schema.py \
-  --cov=survey_scribe --cov-branch --cov-report=term-missing
-uv run mkdocs build --strict
-uv build
-uv run twine check --strict dist/*
-```
-
-See [`CONTRIBUTING.md`](CONTRIBUTING.md) for fixture controls and pull request
-requirements. Security reports follow [`SECURITY.md`](SECURITY.md).
-
-## Versioning
-
-Survey Scribe uses PEP 440 and Semantic Versioning. The current static version is
-declared once in `pyproject.toml`; the runtime `survey_scribe.__version__` value
-is read from installed distribution metadata. Release changes are recorded in
-[`CHANGELOG.md`](CHANGELOG.md).
-
-## License
-
-Survey Scribe is licensed under the [MIT License](LICENSE). Package publication
-is a separate operational decision and remains gated.

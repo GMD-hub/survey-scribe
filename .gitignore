@@ -8,25 +8,17 @@ env/
 *.egg-info/
 dist/
 build/
-site/
 
-# Environment variables - NEVER commit these files
+# Environment variables — NEVER commit this file
 .env
-.env.*
-!.env.example
 
 # Generated outputs
-output/*
+output/
 !output/.gitkeep
-survey-scribe.toml
-**/.survey-scribe/
-*_svis.json
-!tests/fixtures/**/*_svis.json
-craft_mlt_25k.zip
-english_g2.zip
+src/survey-scribe/packages/
 
-# Test samples-  questionnaire PDFs may be restricted data
-tests/samples/*
+# Test samples — questionnaire PDFs may be restricted data
+tests/samples/
 !tests/samples/.gitkeep
 
 # IDE
@@ -42,16 +34,10 @@ Thumbs.db
 .ipynb_checkpoints/
 *.ipynb
 
-# Local uv configuration
+# mAI
 uv.toml
-
-# Test and tooling caches
-.pytest_cache/
-.ruff_cache/
-.coverage
-coverage.xml
-htmlcov/
-.cache/
+pyproject.toml
+.python-version
 
 # Quarto book
 book/_book/
@@ -59,15 +45,3 @@ book/.quarto/
 
 /.quarto/
 **/*.quarto_ipynb
-
-tmp/
-
-# Compound GPID managed items (junctions + copied file - do not commit)
-.compound-gpid/managed-files.json
-.kilo/AGENTS.md
-.kilo/agents
-.kilo/commands
-.kilo/instructions
-.kilo/kilo.json
-.kilo/shared
-.kilo/skills

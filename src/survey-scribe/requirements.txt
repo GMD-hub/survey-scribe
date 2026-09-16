@@ -1,0 +1,28 @@
+# Target runtime: Python 3.13 (Foundry hosted agent, remote build)
+
+# Hosted agent runtime
+azure-ai-agentserver-responses==2.0.0
+azure-identity==1.25.3
+
+# Core pipeline
+docling==2.57.0
+openai>=1.40.0
+instructor>=1.3.0
+pydantic>=2.8.0
+tenacity>=9.0.0
+
+# PDF scan detection (used alongside Docling)
+pymupdf>=1.24.11
+accelerate>=1.2.0
+
+# Metadata extraction fallback
+lingua-language-detector>=2.1.0
+
+# Blob IO
+azure-storage-blob>=12.23.0
+
+# Utilities
+python-dotenv>=1.0.1
+
+# debugpy enables local debugging of this agent with Foundry Toolkit in VS Code.
+debugpy>=1.8.14
