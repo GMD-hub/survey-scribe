@@ -16,6 +16,7 @@ from survey_scribe.errors import (
     ConfigurationError,
     ProgrammerInputError,
     RunningEventLoopError,
+    redact_exception,
 )
 from survey_scribe.models.svis import SurveySVIS
 from survey_scribe.pipeline import ExtractionPipeline, PipelineConfig
@@ -329,7 +330,7 @@ def _failed_result(error: Exception) -> ExtractionResult[Any]:
         diagnostics=(
             Diagnostic(
                 code=getattr(error, "code", "CONVERSION_FAILED"),
-                message="Conversion failed.",
+                message=redact_exception(error),
                 severity=DiagnosticSeverity.error,
             ),
         ),

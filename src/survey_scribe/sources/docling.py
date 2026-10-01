@@ -130,8 +130,43 @@ class PdfConverter(Protocol):
         ...
 
 
+# A page with fewer than this many extracted characters is treated as
+# image-only for OCR-skip purposes.
+_TEXT_LAYER_MIN_CHARS = 50
+_TEXT_LAYER_SAMPLE_PAGES = 5
+
+
+def _pdf_has_text_layer(
+    path: str,
+    *,
+    sample_pages: int = _TEXT_LAYER_SAMPLE_PAGES,
+    min_chars: int = _TEXT_LAYER_MIN_CHARS,
+) -> bool:
+    """Detect an existing extractable text layer using local PyMuPDF parsing.
+
+    Returns False (requiring OCR) if PyMuPDF cannot open the file at all,
+    so genuinely undetectable documents still go through the OCR path.
+    """
+    try:
+        fitz_module = import_module("fitz")
+    except ModuleNotFoundError:
+        return False
+    try:
+        document = fitz_module.open(path)
+    except Exception:
+        return False
+    try:
+        pages_to_check = min(sample_pages, document.page_count)
+        for index in range(pages_to_check):
+            if len(document[index].get_text().strip()) >= min_chars:
+                return True
+    finally:
+        document.close()
+    return False
+
+
 class DoclingConverter:
-    """Lazy Docling converter configured for local PDFium and full-page OCR."""
+    """Lazy Docling converter configured for local PDFium, OCR only when needed."""
 
     def __call__(self, path: str, artifacts_path: str | None) -> PdfConversion:
         if artifacts_path is None:
@@ -152,9 +187,14 @@ class DoclingConverter:
                 "PDF conversion requires the optional 'pdf' dependencies"
             ) from error
 
+        # Born-digital PDFs already have an extractable text layer; forcing
+        # full-page EasyOCR on them is unnecessary and, at the 2 vCPU/4GiB
+        # ceiling available to the hosted agent, routinely OOMs the worker.
+        needs_ocr = not _pdf_has_text_layer(path)
+
         with validated_ocr_model_snapshot(artifact_root) as model_root:
             pipeline_options = pipeline_module.PdfPipelineOptions()
-            pipeline_options.do_ocr = True
+            pipeline_options.do_ocr = needs_ocr
             pipeline_options.do_table_structure = True
             pipeline_options.enable_remote_services = False
             pipeline_options.artifacts_path = artifact_root

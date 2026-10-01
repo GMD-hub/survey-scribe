@@ -16,6 +16,7 @@ from typing import Any, Generic, TypeVar, cast
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from survey_scribe.config import GenerationConfig, RetryConfig
+from survey_scribe.errors import redact_exception
 from survey_scribe.models.svis import DataType, StudyType, SurveySVIS, SurveyVariable
 from survey_scribe.providers.base import (
     ConcurrencyLimiter,
@@ -886,7 +887,7 @@ def _failed_custom_result(
         diagnostics=(
             Diagnostic(
                 code=getattr(error, "code", "CONVERSION_FAILED"),
-                message="Structured conversion failed.",
+                message=redact_exception(error),
                 severity=DiagnosticSeverity.error,
             ),
         ),
