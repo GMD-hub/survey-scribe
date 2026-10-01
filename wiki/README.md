@@ -3,7 +3,7 @@
 <!-- cg:auto:overview -->
 Survey Scribe converts local survey questionnaires to the typed Survey Variable Information Schema (SVIS). The base schema package `survey-scribe` provides typed SVIS Pydantic models with JSON serialization. It also provides synchronous, asynchronous, and batch APIs, provider adapters, safe local source normalization, deterministic chunking, questionnaire routing graphs, secure configuration, and versioned artifacts.
 
-The DECDG / GPID team at the World Bank develops Survey Scribe. The package is at alpha status (v0.1.0). Package publication is subject to legal approval recorded in `docs/legal-disposition.md`.
+The DECDG / GPID team at the World Bank develops Survey Scribe. The package is at alpha status (v0.1.0) and is published on PyPI.
 
 Current focus: make the package work well with the World Bank MAI factory. After that, make the package Azure Foundry compatible.
 
@@ -35,7 +35,11 @@ Optional dependency groups add provider and format support:
 | `[pdf]` | PDF source processing with Docling |
 | `[tabular]` | Tabular source processing with openpyxl |
 
-The package is at alpha status (v0.1.0). Publication is subject to legal approval recorded in `docs/legal-disposition.md`. Until publication, install from source.
+The package is at alpha status (v0.1.0). Install the published release from PyPI:
+
+```bash
+python -m pip install survey-scribe
+```
 <!-- cg:auto:end -->
 
 <!-- cg:auto:quick-start -->

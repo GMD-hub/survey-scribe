@@ -34,8 +34,8 @@ does not declare general Palantir production support.
 6. Create one unstructured input dataset and one unstructured output dataset.
 7. Grant the repository access to both datasets.
 
-No approved PyPI release exists. Palantir's public library guide does not
-document direct wheel installation. An administrator must first publish an
+Version `0.1.0` is published on PyPI, but Palantir's public library guide does
+not document direct wheel installation. An administrator must first publish an
 approved Conda-compatible Survey Scribe artifact to a library source that your
 repository can access.
 

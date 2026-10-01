@@ -6,9 +6,7 @@ Survey Scribe supports CPython 3.11, 3.12, and 3.13 on Linux, macOS, and Windows
 
 ## From PyPI
 
-The package name `survey-scribe` is reserved in project metadata but has not yet
-been published. After release approval, the base package installation command
-will be:
+Version `0.1.0` is published on PyPI. Install the base package with:
 
 ```console
 python -m pip install survey-scribe
