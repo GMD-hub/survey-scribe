@@ -78,7 +78,7 @@ checksums, and an active pointer.
 
 ## Package scope
 
-Survey Scribe `0.1.x` is an alpha package. Version `0.1.0` is published on PyPI.
+Survey Scribe `0.1.x` is alpha software, with published releases available on PyPI.
 The source package includes:
 
 - Native instrument metadata extraction and provider-assisted extraction.

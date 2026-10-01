@@ -6,14 +6,16 @@ Survey Scribe supports CPython 3.11, 3.12, and 3.13 on Linux, macOS, and Windows
 
 ## From PyPI
 
-Version `0.1.0` is published on PyPI. Install the base package with:
+Survey Scribe `0.1.x` is alpha software, with published releases available on
+PyPI. Install the base package with:
 
 ```console
 python -m pip install survey-scribe
 ```
 
-The base install contains the SVIS models and bootstrap CLI with only Pydantic
-as a runtime dependency.
+The base installation contains Pydantic, `defusedxml`, the typed package API,
+and the CLI. It does not load provider SDKs, OCR models, or document converters
+at import time.
 
 ## From a Built Wheel
 
@@ -21,7 +23,7 @@ Build and install a local release candidate:
 
 ```console
 uv build
-python -m pip install dist/survey_scribe-0.1.0-py3-none-any.whl
+python -m pip install dist/survey_scribe-0.1.1-py3-none-any.whl
 ```
 
 Use a fresh virtual environment for a realistic installation check. Do not rely

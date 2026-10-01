@@ -9,7 +9,8 @@ Information Schema (SVIS). It provides synchronous, asynchronous, and batch APIs
 provider adapters, safe local source normalization, deterministic chunking,
 questionnaire routing graphs, secure configuration, and versioned artifacts.
 
-> **Alpha status:** Survey Scribe `0.1.0` is published on PyPI. The package
+> **Alpha status:** Survey Scribe `0.1.x` is alpha software, with published
+> releases available on PyPI. The package
 > contains the public `SurveyScribe` API, conversion CLI, typed models, source
 > and provider adapters, transactional artifacts, and `QuestionnaireRouter`.
 
@@ -35,7 +36,7 @@ expand repeat instances.
 
 ## Installation
 
-After publication is approved, install the base schema package with:
+Install the base package from PyPI with:
 
 ```console
 pip install survey-scribe

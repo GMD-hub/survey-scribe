@@ -136,9 +136,9 @@ source-normalization command, or manifest-inspection command.
 ## Compatibility and release state
 
 Survey Scribe supports CPython 3.11 through 3.13 and Pydantic 2.11.7 or later
-below major version 3. The package is alpha software. Version `0.1.0` is
-published on PyPI. Production users should install a pinned package or approved
-wheel, Conda artifact, or source revision.
+below major version 3. Survey Scribe `0.1.x` is alpha software, with published
+releases available on PyPI. Production users should install a pinned package or
+approved wheel, Conda artifact, or source revision.
 
 See [Compatibility](../compatibility.md), [Installation](../getting-started/installation.md),
 and the [API Overview](../reference/index.md).
