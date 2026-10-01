@@ -6,9 +6,16 @@ projects.
 
 ## Release and publication status
 
-Survey Scribe is alpha software. The repository declares version `0.1.0`, but no
-approved PyPI release is currently available. Production deployments must use an
-approved wheel, Conda artifact, or pinned source revision.
+Survey Scribe is alpha software. Version `0.1.0` is published on PyPI. Use a
+pinned version or approved artifact for production deployments.
+
+## Install from PyPI
+
+Install the published package in a virtual environment:
+
+```console
+python -m pip install survey-scribe
+```
 
 ## Install an approved wheel
 
@@ -25,17 +32,6 @@ the source commit and wheel digest in your deployment manifest.
 The base installation contains Pydantic, `defusedxml`, the typed package, and the
 CLI. It does not load provider SDKs, OCR models, or document converters at import
 time.
-
-## Future package-index installation
-
-After publication approval and release verification, package-index installation
-will use:
-
-```console
-python -m pip install survey-scribe
-```
-
-Do not use this command until your approved package index contains the release.
 
 ## Install optional features
 

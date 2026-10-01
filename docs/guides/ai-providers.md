@@ -30,8 +30,8 @@ Provider SDK imports are lazy. Importing `survey_scribe` or running
 `survey-scribe --help` does not import a provider SDK, acquire a credential, or
 make a network request.
 
-No approved PyPI release is currently available. Apply these extras to an
-approved wheel or pinned source installation as described in
+Version `0.1.0` is published on PyPI. Apply these extras to the package as
+described in
 [Installation](../getting-started/installation.md).
 
 ## List adapters and evidence

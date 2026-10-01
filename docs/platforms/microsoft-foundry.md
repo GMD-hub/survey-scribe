@@ -41,8 +41,8 @@ Use an approved distribution with the `openai` extra:
 python -m pip install "survey-scribe[openai]"
 ```
 
-No approved PyPI release is currently available. See
-[Installation](../getting-started/installation.md) for wheel and pinned-source
+Version `0.1.0` is published on PyPI. See
+[Installation](../getting-started/installation.md) for package and pinned-wheel
 options.
 
 ## API-key quick start
