@@ -129,7 +129,7 @@ After dependency and wheelhouse preparation, run the artifact checks offline:
 uv build
 uv run twine check --strict dist/*.whl dist/*.tar.gz
 uv run check-wheel-contents dist/*.whl
-uv run python scripts/build_wheel_sbom.py --wheel dist/survey_scribe-0.1.0-py3-none-any.whl --wheelhouse .cache/wheelhouse --output dist/sbom.cdx.json
+uv run python scripts/build_wheel_sbom.py --wheel dist/survey_scribe-0.1.1-py3-none-any.whl --wheelhouse .cache/wheelhouse --output dist/sbom.cdx.json
 UV_OFFLINE=1 uv run pytest tests/package
 ```
 

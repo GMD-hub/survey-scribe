@@ -29,7 +29,7 @@ questionnaire routing graphs, secure configuration, and versioned artifacts.
 - Generated outputs excluded from git: `output/*`, `*_svis.json`, `survey-scribe.toml`
 - Credentials: `.env` / `.env.*` are never committed; credential-safe configuration
 - Python version window: `>=3.11,<3.14`
-- Alpha status (v0.1.0): package publication subject to legal approval recorded in `docs/legal-disposition.md`
+- Alpha status (`0.1.x`), with published releases available on PyPI; package publication subject to legal approval recorded in `docs/legal-disposition.md`
 
 ## Current Focus
 

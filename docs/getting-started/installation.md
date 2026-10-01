@@ -6,8 +6,8 @@ projects.
 
 ## Release and publication status
 
-Survey Scribe is alpha software. Version `0.1.0` is published on PyPI. Use a
-pinned version or approved artifact for production deployments.
+Survey Scribe `0.1.x` is alpha software, with published releases available on
+PyPI. Use a pinned version or approved artifact for production deployments.
 
 ## Install from PyPI
 
@@ -23,7 +23,7 @@ Build the repository revision in a controlled build environment:
 
 ```console
 uv build
-python -m pip install dist/survey_scribe-0.1.0-py3-none-any.whl
+python -m pip install dist/survey_scribe-0.1.1-py3-none-any.whl
 ```
 
 Do not use an artifact from an untrusted pull request or local directory. Record
