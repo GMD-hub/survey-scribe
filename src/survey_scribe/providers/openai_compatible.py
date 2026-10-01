@@ -39,6 +39,20 @@ _PRESET_BASE_URLS = {
     "vercel": "https://ai-gateway.vercel.sh/v1",
 }
 _ALLOWED_DEFAULT_HEADERS = frozenset({"http-referer", "x-title"})
+_MAX_COMPLETION_TOKENS_PREFIXES = ("o1", "o3", "o4", "gpt-5")
+
+
+def _max_tokens_param_name(model: str) -> str:
+    """Return the wire parameter name a reasoning-family model requires."""
+    name = model.strip().casefold()
+    if name.startswith(_MAX_COMPLETION_TOKENS_PREFIXES):
+        return "max_completion_tokens"
+    return "max_tokens"
+
+
+def _supports_custom_temperature(model: str) -> bool:
+    """Return whether a model accepts a non-default temperature value."""
+    return not model.strip().casefold().startswith(_MAX_COMPLETION_TOKENS_PREFIXES)
 
 
 class OpenAICompatiblePreset(StrEnum):
@@ -345,9 +359,10 @@ class InstructorOpenAIProvider:
                     request_schema,
                 ),
                 "max_retries": 0,
-                "temperature": generation.temperature,
-                "max_tokens": generation.max_output_tokens,
+                _max_tokens_param_name(str(kwargs["model"])): generation.max_output_tokens,
             }
+            if _supports_custom_temperature(str(kwargs["model"])):
+                request["temperature"] = generation.temperature
             if generation.seed is not None:
                 request["seed"] = generation.seed
             output, completion_response = await patched.chat.completions.create_with_completion(

@@ -1,6 +1,6 @@
 """Public package surface for Survey Scribe."""
 
-from importlib.metadata import version
+from importlib.metadata import PackageNotFoundError, version
 
 from survey_scribe.client import SurveyScribe
 from survey_scribe.config import SurveyScribeConfig
@@ -143,4 +143,10 @@ __all__ = [
     "canonical_routing_schema_json",
 ]
 
-__version__ = version("survey-scribe")
+try:
+    __version__ = version("survey-scribe")
+except PackageNotFoundError:
+    # Hosted agent deployments copy this package's source tree directly into
+    # a container without installing distribution metadata (see
+    # src/survey_scribe/Dockerfile), so no dist-info is present at runtime.
+    __version__ = "0.0.0+unknown"

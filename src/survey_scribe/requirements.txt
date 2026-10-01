@@ -1,5 +1,20 @@
+# Target runtime: Python 3.13 (Foundry hosted agent, remote build)
+
+# Hosted agent runtime
+azure-ai-agentserver-responses>=2.2.0b1,<3
+azure-identity==1.25.3
+agent-framework-foundry
+agent-framework-foundry-hosting>=1.0.0a260630
+
+# debugpy enables local debugging of this agent with the Foundry Toolkit VS Code extension.
+debugpy>=1.8.14
+
+
 # Core pipeline
-docling>=2.0.0               # PDF to Markdown conversion for pipeline
+# Pinned below the docling-slim[standard] split (introduced v2.93.0), which
+# bundles torch/torchvision/transformers/tree-sitter by default and roughly
+# quadruples image size for no benefit to this EasyOCR + table-structure use.
+docling==2.57.0               # PDF to Markdown conversion for pipeline
 openai>=1.0.0                # OpenAI SDK, used against the World Bank Azure OpenAI gateway
 instructor>=1.0.0            # Structured LLM output with automatic retry
 pydantic>=2.0.0              # Schema definition and validation
@@ -9,8 +24,12 @@ tenacity>=8.0.0               # Exponential-backoff retry for Azure OpenAI rate-
 pymupdf>=1.24.0              # PDF text layer detection only
 accelerate>=1.0.0             # Required by docling/transformers model loading (device_map)
 
+# Blob IO
+azure-storage-blob>=12.23.0
+
 # Fallback used when the metadata LLM call can't determine the survey language
 lingua-language-detector>=2.0.0
 
 # Testing
 pytest>=8.0.0
+

@@ -1,0 +1,7 @@
+{
+  "projectId": "e6e5d789-9045-4d75-bc09-9bfb0af0c621",
+  "hostedAgentDeployOptions": {
+    "deploymentMethod": "container"
+  },
+  "containerRegistry": "200814aharmonizationdemodc67acr.azurecr.io"
+}

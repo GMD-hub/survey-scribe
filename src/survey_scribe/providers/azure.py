@@ -17,8 +17,10 @@ from survey_scribe.providers.capabilities import ModelCapabilities
 from survey_scribe.providers.openai_compatible import (
     Completion,
     InstructorOpenAIProvider,
+    _max_tokens_param_name,
     _normalize_wire_output,
     _strict_wire_response_model,
+    _supports_custom_temperature,
     _validate_provider_base_url,
 )
 
@@ -160,9 +162,10 @@ class AzureOpenAIProvider(InstructorOpenAIProvider):
                 ],
                 "response_model": _strict_wire_response_model(response_model, request_schema),
                 "max_retries": 0,
-                "temperature": generation.temperature,
-                "max_tokens": generation.max_output_tokens,
+                _max_tokens_param_name(str(kwargs["model"])): generation.max_output_tokens,
             }
+            if _supports_custom_temperature(str(kwargs["model"])):
+                request["temperature"] = generation.temperature
             extra_headers = cast(Mapping[str, str] | None, kwargs.get("extra_headers"))
             if extra_headers:
                 request["extra_headers"] = dict(extra_headers)

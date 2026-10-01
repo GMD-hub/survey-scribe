@@ -106,6 +106,7 @@ dev = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/survey_scribe"]
+exclude = ["src/survey_scribe/fetch_ocr_artifacts.py"]
 
 [tool.hatch.build.targets.sdist]
 include = [

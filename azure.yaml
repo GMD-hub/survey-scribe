@@ -1,0 +1,76 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
+
+requiredVersions:
+  extensions:
+    azure.ai.agents: '>=1.0.0-beta.4'
+name: survey-scribe
+services:
+  ai-project:
+    host: azure.ai.project
+    deployments:
+      - name: gpt-5.4-mini
+        model:
+          format: OpenAI
+          name: gpt-5.4-mini
+          version: '2026-03-17'
+        sku:
+          name: GlobalStandard
+          capacity: 10
+  survey-scribe-package-agent-v3:
+    host: azure.ai.agent
+    metadata:
+      tags:
+        - Agent Framework
+        - AI Agent Hosting
+        - Survey Scribe POC
+        - Responses Protocol
+        - Streaming
+    project: src/survey_scribe
+    language: python
+    uses:
+      - ai-project
+    kind: hosted
+    description: Survey-scribe package as agent using the Responses protocol with a
+      bring-your-own approach. Calls a Foundry model via the Responses API and
+      returns the response.
+    protocols:
+      - protocol: responses
+        version: 2.0.0
+    environmentVariables:
+      - name: AZURE_AI_MODEL_DEPLOYMENT_NAME
+        value: ${AZURE_AI_MODEL_DEPLOYMENT_NAME}
+      - name: AZURE_STORAGE_ACCOUNT_URL
+        value: ${AZURE_STORAGE_ACCOUNT_URL}
+      - name: AZURE_STORAGE_CONTAINER_NAME
+        value: ${AZURE_STORAGE_CONTAINER_NAME}
+      - name: SURVEY_SCRIBE_PROVIDER
+        value: ${SURVEY_SCRIBE_PROVIDER}
+      - name: AZURE_OPENAI_ENDPOINT
+        value: ${AZURE_OPENAI_ENDPOINT}
+      - name: AZURE_OPENAI_API_VERSION
+        value: ${AZURE_OPENAI_API_VERSION}
+      - name: AZURE_OPENAI_DEPLOYMENT
+        value: ${AZURE_OPENAI_DEPLOYMENT}
+      - name: SURVEY_SCRIBE_MODEL_SOURCE
+        value: ${SURVEY_SCRIBE_MODEL_SOURCE}
+      - name: MAI_API_ENDPOINT
+        value: ${MAI_API_ENDPOINT}
+      - name: MAI_API_VERSION
+        value: ${MAI_API_VERSION}
+      - name: MAI_API_DEPLOYMENT
+        value: ${MAI_API_DEPLOYMENT}
+      - name: MAI_API_TOKEN_SCOPE
+        value: ${MAI_API_TOKEN_SCOPE}
+      # Baked in by the Dockerfile ENV, but declared explicitly here in case
+      # the hosted agent platform provisions its runtime environment from
+      # this list rather than the image's own ENV metadata.
+      - name: DOCLING_ARTIFACTS_PATH
+        value: /opt/ocr-cache
+    container:
+      resources:
+        cpu: '2.0'
+        memory: '4.0Gi'
+    docker:
+      path: Dockerfile
+infra:
+  provider: microsoft.foundry
