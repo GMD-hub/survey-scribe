@@ -107,7 +107,7 @@ also requires every allowlist entry to name its scanner, exact finding fingerpri
 owner, rationale, and future expiry. This command is the only authoritative
 security policy exit. `.secrets.baseline` separately records reviewed synthetic
 values and checksums with an owner, rationale, and expiry. The current dependency
-allowlist has short-lived entries for `diskcache`, `accelerate`, and `transformers`,
+allowlist has short-lived entries for `diskcache` and `accelerate`,
 which are transitive dependencies without a currently compatible fixed release.
 
 Workflow policy is also local and deterministic:
