@@ -30,10 +30,18 @@ project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Updated Docling and multidict minimum versions to include security fixes.
 - Native XLSForm `source_format="xlsform"` now binds to its validated XLSX
   snapshot for provider-free questionnaire routing.
 - Public installation guidance no longer presents an unavailable PyPI release or
   a stale source revision as the primary installation path.
+
+### Security
+
+- Recorded a time-limited risk acceptance for unresolved `diskcache` and
+  `accelerate` findings in optional dependencies. Neither package has a verified
+  upstream fix as of 2026-10-13. The acceptance expires on 2026-11-13; see the
+  [dependency security review](security/optional-dependency-risk-review-2026-10-13.md).
 
 ## [0.1.1] - 2026-10-01
 
