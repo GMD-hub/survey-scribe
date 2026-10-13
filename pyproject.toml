@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "survey-scribe"
-version = "0.1.1"
+version = "0.1.2"
 description = "Local-first questionnaire extraction to the Survey Variable Information Schema"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
@@ -12,6 +12,7 @@ license = "MIT"
 license-files = ["LICENSE"]
 authors = [
   {name = "World Bank Global Monitoring Database team"},
+  {name = "Stephen Nwobike", email = "snwobike@middlebury.edu"},
 ]
 keywords = [
   "data extraction",
@@ -54,9 +55,10 @@ anthropic = [
   "instructor>=1.10.0,<2",
 ]
 pdf = [
-  "docling>=2.125.0,<3",
+  "docling>=2.132.0,<3",
   "easyocr>=1.7.2,<2",
   "lingua-language-detector>=2.1.1,<3",
+  "multidict>=6.9.1,<7",
   "pymupdf>=1.26.4,<2",
 ]
 tabular = [

@@ -1,17 +1,17 @@
 schema_version = 1
 owner = "Survey Scribe maintainers"
-rationale = "Two short-lived exceptions remain for diskcache and accelerate. Any new entry requires security review."
+rationale = "Two time-limited exceptions remain for optional diskcache and accelerate dependencies. Their reviewed scope, mitigations, and expiry are recorded in security/optional-dependency-risk-review-2026-10-13.md. Do not extend without a new review."
 expires = "2027-09-03"
 [[entries]]
 scanner = "dependency"
 fingerprint = "46ce96b33fd236434d02ea61f041bc490291544f98a3cc0b55be94bc01981c02"
 owner = "Survey Scribe maintainers"
-rationale = "diskcache 5.6.3 is pulled by Instructor; no fixed release exists and Survey Scribe does not use diskcache-backed serialization."
-expires = "2026-10-03"
+rationale = "diskcache 5.6.3 is pulled by Instructor in optional provider extras. Survey Scribe does not configure DiskCache or a persistent DiskCache store; exploitation requires attacker write access to a cache directory that this application does not create or read. No fixed upstream release was available on 2026-10-13. This exact finding has temporary, maintainer-approved risk acceptance for the provider extras only; see security/optional-dependency-risk-review-2026-10-13.md."
+expires = "2026-11-13"
 
 [[entries]]
 scanner = "dependency"
 fingerprint = "9eb6d2524791c88dba4d96a50a4807829fc8412368eba6a82e8774090b1a306d"
 owner = "Survey Scribe maintainers"
-rationale = "accelerate 1.14.0 is required by the docling optional stack; no fixed release is available in the currently tested range."
-expires = "2026-10-03"
+rationale = "accelerate 1.14.0 is transitive through Docling's optional PDF stack. Survey Scribe does not accept arbitrary model checkpoint indexes or call the vulnerable checkpoint-loading APIs; PDF inputs are documents and configured OCR artifacts are hash-validated before offline conversion. No verified fixed release was available on 2026-10-13. This exact finding has temporary, maintainer-approved risk acceptance for the PDF extra only; see security/optional-dependency-risk-review-2026-10-13.md."
+expires = "2026-11-13"

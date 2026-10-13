@@ -151,6 +151,12 @@ declared once in `pyproject.toml`; the runtime `survey_scribe.__version__` value
 is read from installed distribution metadata. Release changes are recorded in
 [`CHANGELOG.md`](CHANGELOG.md).
 
+## Authors
+
+- World Bank Global Monitoring Database team
+- [Stephen Nwobike](https://github.com/stephennwobike-star)
+  ([snwobike@middlebury.edu](mailto:snwobike@middlebury.edu))
+
 ## License
 
 Survey Scribe is licensed under the [MIT License](LICENSE). Package publication
