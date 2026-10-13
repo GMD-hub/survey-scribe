@@ -71,7 +71,12 @@ SDIST_ROOT_FILES = frozenset(
 
 
 def _artifact(repository_root: Path, pattern: str) -> Path:
-    artifacts = sorted((repository_root / "dist").glob(pattern))
+    current_prefix = f"survey_scribe-{version('survey-scribe')}"
+    artifacts = sorted(
+        artifact
+        for artifact in (repository_root / "dist").glob(pattern)
+        if artifact.name.startswith(current_prefix)
+    )
     assert len(artifacts) == 1, f"Expected one current build artifact matching {pattern}."
     return artifacts[0]
 
@@ -105,6 +110,9 @@ def test_wheel_metadata_is_publishable(repository_root: Path) -> None:
 
     assert metadata["Name"] == "survey-scribe"
     assert metadata["Version"] == version("survey-scribe")
+    authors = "\n".join(metadata.get_all("Author", []) + metadata.get_all("Author-email", []))
+    assert "Stephen Nwobike" in authors
+    assert "snwobike@middlebury.edu" in authors
     assert metadata["License-Expression"] == "MIT"
     assert metadata["Requires-Python"] == "<3.14,>=3.11"
     assert "defusedxml<1,>=0.7.1" in metadata.get_all("Requires-Dist", [])
