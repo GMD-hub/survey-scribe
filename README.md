@@ -153,9 +153,12 @@ is read from installed distribution metadata. Release changes are recorded in
 
 ## Authors
 
+- [R. Andres Castaneda](https://github.com/randrescastaneda), author and maintainer
+- [Stephen Nwobike](https://github.com/stephennwobike-star), author
 - World Bank Global Monitoring Database team
-- [Stephen Nwobike](https://github.com/stephennwobike-star)
-  ([snwobike@middlebury.edu](mailto:snwobike@middlebury.edu))
+
+For package support, contact the maintainer, R. Andres Castaneda, at
+[acastanedaa@worldbank.org](mailto:acastanedaa@worldbank.org).
 
 ## License
 
