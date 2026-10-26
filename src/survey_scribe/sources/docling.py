@@ -7,8 +7,8 @@ import re
 import socket
 import time
 import zipfile
-from collections.abc import Iterable
-from contextlib import contextmanager
+from collections.abc import Iterable, Mapping
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from importlib import import_module
@@ -130,18 +130,134 @@ class PdfConverter(Protocol):
         ...
 
 
+_OCR_MODES = ("always", "auto", "never")
+_TABLE_MODES = ("accurate", "fast")
+_PDF_ENV_PREFIX = "SURVEY_SCRIBE_PDF_"
+
+
+@dataclass(frozen=True, slots=True)
+class PdfConversionOptions:
+    """How the local Docling pipeline reads a PDF.
+
+    The defaults are Survey Scribe's established behaviour: full-page English OCR of every page,
+    flat section headings, body text only. Each field loosens one of those choices for a caller
+    that knows its documents; nothing changes for one that does not.
+
+    Attributes:
+        ocr: ``"always"`` runs OCR over every page (the text layer is ignored); ``"auto"`` keeps
+            the text layer and runs OCR only where a page has none; ``"never"`` reads the text
+            layer alone, needs no OCR artifacts, and keeps any script the PDF carries verbatim.
+        ocr_languages: EasyOCR language codes; languages of one script can be combined.
+        heading_levels: infer heading depth (bookmarks, numbering, font style) instead of
+            reporting every heading at level 1; ``section_path`` then carries the ancestors.
+        max_heading_level: the deepest level the inference assigns.
+        include_furniture: keep page headers and footers. The layout model files a section title
+            printed at the top of a page as a page header, which the default read drops.
+        table_mode: TableFormer ``"accurate"`` (slower) or ``"fast"``.
+    """
+
+    ocr: str = "always"
+    ocr_languages: tuple[str, ...] = ("en",)
+    heading_levels: bool = False
+    max_heading_level: int = 6
+    include_furniture: bool = False
+    table_mode: str = "accurate"
+
+    def __post_init__(self) -> None:
+        if self.ocr not in _OCR_MODES:
+            raise ValueError(f"ocr must be one of {_OCR_MODES}, not {self.ocr!r}")
+        if self.table_mode not in _TABLE_MODES:
+            raise ValueError(f"table_mode must be one of {_TABLE_MODES}, not {self.table_mode!r}")
+        languages = tuple(str(code).strip() for code in self.ocr_languages)
+        if not languages or any(not code for code in languages):
+            raise ValueError("ocr_languages must name at least one language code")
+        object.__setattr__(self, "ocr_languages", languages)
+        if isinstance(self.max_heading_level, bool) or not 1 <= self.max_heading_level <= 6:
+            raise ValueError("max_heading_level must be an integer from 1 to 6")
+
+    @classmethod
+    def from_environment(cls, environ: Mapping[str, str] | None = None) -> PdfConversionOptions:
+        """Options from ``SURVEY_SCRIBE_PDF_*`` variables; an unset variable keeps the default.
+
+        ``SURVEY_SCRIBE_PDF_OCR`` (always | auto | never), ``SURVEY_SCRIBE_PDF_OCR_LANGUAGES``
+        (comma-separated), ``SURVEY_SCRIBE_PDF_HEADING_LEVELS`` and
+        ``SURVEY_SCRIBE_PDF_INCLUDE_FURNITURE`` (1 | true | yes | on),
+        ``SURVEY_SCRIBE_PDF_MAX_HEADING_LEVEL`` (1-6), ``SURVEY_SCRIBE_PDF_TABLE_MODE``
+        (accurate | fast).
+        """
+        env = os.environ if environ is None else environ
+
+        def read(name: str) -> str | None:
+            value = env.get(_PDF_ENV_PREFIX + name)
+            return value.strip() if value is not None and value.strip() else None
+
+        def flag(name: str, default: bool) -> bool:
+            value = read(name)
+            if value is None:
+                return default
+            lowered = value.lower()
+            if lowered in ("1", "true", "yes", "on"):
+                return True
+            if lowered in ("0", "false", "no", "off"):
+                return False
+            raise ValueError(f"{_PDF_ENV_PREFIX}{name} must be a boolean, not {value!r}")
+
+        defaults = cls()
+        languages = read("OCR_LANGUAGES")
+        level = read("MAX_HEADING_LEVEL")
+        try:
+            max_level = int(level) if level is not None else defaults.max_heading_level
+        except ValueError:
+            raise ValueError(f"{_PDF_ENV_PREFIX}MAX_HEADING_LEVEL must be an integer") from None
+        return cls(
+            ocr=(read("OCR") or defaults.ocr).lower(),
+            ocr_languages=(
+                tuple(code for code in languages.split(",")) if languages else defaults.ocr_languages
+            ),
+            heading_levels=flag("HEADING_LEVELS", defaults.heading_levels),
+            max_heading_level=max_level,
+            include_furniture=flag("INCLUDE_FURNITURE", defaults.include_furniture),
+            table_mode=(read("TABLE_MODE") or defaults.table_mode).lower(),
+        )
+
+
+def _push_heading(path: tuple[str, ...], level: int, text: str) -> tuple[str, ...]:
+    """The section path after a heading of ``level``: its ancestors kept, deeper headings dropped.
+
+    Every heading at level 1 (the layout model's default) gives a path of one title, as before;
+    with inferred levels a sub-heading sits under its parent instead of replacing it.
+    """
+    depth = max(int(level), 1) - 1
+    return path[:depth] + (text,)
+
+
 class DoclingConverter:
-    """Lazy Docling converter configured for local PDFium and full-page OCR."""
+    """Lazy Docling converter configured for local PDFium and, by default, full-page OCR."""
+
+    def __init__(self, options: PdfConversionOptions | None = None) -> None:
+        self.options = options or PdfConversionOptions()
 
     def __call__(self, path: str, artifacts_path: str | None) -> PdfConversion:
+        options = self.options
         if artifacts_path is None:
             raise SourceDependencyError(
                 "PDF OCR artifacts are not configured; set DOCLING_ARTIFACTS_PATH"
             )
-        try:
-            artifact_root = resolve_ocr_cache(Path(artifacts_path))
-        except OcrCacheError as error:
-            raise SourceDependencyError(str(error)) from None
+        if options.ocr == "never":
+            # the layout and table models only: no OCR archive to validate
+            try:
+                artifact_root = Path(artifacts_path).resolve(strict=True)
+            except OSError:
+                raise SourceDependencyError(
+                    "Configured Docling artifacts directory does not exist"
+                ) from None
+            if not artifact_root.is_dir():
+                raise SourceDependencyError("Configured Docling artifacts path is not a directory")
+        else:
+            try:
+                artifact_root = resolve_ocr_cache(Path(artifacts_path))
+            except OcrCacheError as error:
+                raise SourceDependencyError(str(error)) from None
         try:
             backend_module = import_module("docling.backend.pypdfium2_backend")
             base_module = import_module("docling.datamodel.base_models")
@@ -152,18 +268,40 @@ class DoclingConverter:
                 "PDF conversion requires the optional 'pdf' dependencies"
             ) from error
 
-        with validated_ocr_model_snapshot(artifact_root) as model_root:
+        snapshot: AbstractContextManager[Path | None] = (
+            validated_ocr_model_snapshot(artifact_root)
+            if options.ocr != "never"
+            else nullcontext(None)
+        )
+        with snapshot as model_root:
             pipeline_options = pipeline_module.PdfPipelineOptions()
-            pipeline_options.do_ocr = True
+            pipeline_options.do_ocr = options.ocr != "never"
             pipeline_options.do_table_structure = True
             pipeline_options.enable_remote_services = False
             pipeline_options.artifacts_path = artifact_root
-            pipeline_options.ocr_options = pipeline_module.EasyOcrOptions(
-                lang=["en"],
-                force_full_page_ocr=True,
-                model_storage_directory=str(model_root),
-                download_enabled=False,
-            )
+            if pipeline_options.do_ocr:
+                pipeline_options.ocr_options = pipeline_module.EasyOcrOptions(
+                    lang=list(options.ocr_languages),
+                    force_full_page_ocr=options.ocr == "always",
+                    model_storage_directory=str(model_root),
+                    download_enabled=False,
+                )
+            if options.table_mode != "accurate":
+                mode = getattr(pipeline_module, "TableFormerMode", None)
+                if mode is None:
+                    raise SourceDependencyError("Installed Docling has no TableFormer mode option")
+                pipeline_options.table_structure_options.mode = mode[options.table_mode.upper()]
+            if options.heading_levels:
+                hierarchy = getattr(pipeline_module, "HeadingHierarchyOptions", None)
+                if hierarchy is None:
+                    raise SourceDependencyError(
+                        "Installed Docling has no heading-hierarchy stage; upgrade docling or "
+                        "leave heading_levels off"
+                    )
+                pipeline_options.generate_parsed_pages = True
+                pipeline_options.heading_hierarchy_options = hierarchy(
+                    enabled=True, max_level=options.max_heading_level
+                )
             format_option = converter_module.PdfFormatOption(
                 pipeline_options=pipeline_options,
                 backend=backend_module.PyPdfiumDocumentBackend,
@@ -178,7 +316,14 @@ class DoclingConverter:
         max_cells = int(configured_max_cells) if configured_max_cells is not None else None
         table_cells = 0
         current_section: tuple[str, ...] = ()
-        for item, _level in document.iterate_items():
+        if options.include_furniture:
+            layers = import_module("docling_core.types.doc").ContentLayer
+            items = document.iterate_items(
+                included_content_layers={layers.BODY, layers.FURNITURE}
+            )
+        else:
+            items = document.iterate_items()
+        for item, _depth in items:
             pages = _docling_pages(item)
             page = pages[0] if pages else None
             label = str(getattr(item, "label", "")).lower()
@@ -203,9 +348,16 @@ class DoclingConverter:
                     )
                 continue
             text = _normalize_text(str(getattr(item, "text", "")))
+            marker = _normalize_text(str(getattr(item, "marker", "") or ""))
+            if text and marker and "list" in label:
+                # a numbered question is a list item to the layout model and its number is the
+                # marker, not the text: keep it, a data column is often named by it (q8, s4q8)
+                text = f"{marker} {text}"
             if text:
                 if any(name in label for name in ("section", "title", "heading")):
-                    current_section = (text,)
+                    current_section = _push_heading(
+                        current_section, getattr(item, "level", 1) or 1, text
+                    )
                 blocks.append(
                     PdfConversionBlock(
                         text=text,
@@ -257,8 +409,9 @@ class DoclingPdfAdapter:
         *,
         converter: PdfConverter | None = None,
         artifacts_path: str | os.PathLike[str] | None = None,
+        options: PdfConversionOptions | None = None,
     ) -> None:
-        self._converter = converter or DoclingConverter()
+        self._converter = converter or DoclingConverter(options)
         configured = (
             os.environ.get("DOCLING_ARTIFACTS_PATH") if artifacts_path is None else artifacts_path
         )

@@ -429,7 +429,9 @@ async def test_pipeline_carries_overlap_proof_into_exact_deduplication() -> None
     provider = DeterministicFakeProvider(capabilities=_capabilities(), responder=respond)
     result = await ExtractionPipeline(
         provider,
-        config=PipelineConfig(max_request_tokens=1_024, overlap_tokens=100),
+        # 1,630: the same 188-token content budget the test was written with (the 1.1.0
+        # variable prompt is ~600 tokens longer than 1.0.0's); the chunking is unchanged
+        config=PipelineConfig(max_request_tokens=1_630, overlap_tokens=100),
         extraction_date=date(2026, 9, 3),
     ).extract(document)
     assert result.output is not None
@@ -576,7 +578,7 @@ async def test_pipeline_rejects_bad_identities_limits_and_conflicting_metadata()
     )
     conflicting = await ExtractionPipeline(
         DeterministicFakeProvider(capabilities=_capabilities(), responder=conflict),
-        config=PipelineConfig(max_request_tokens=1_024, overlap_tokens=0),
+        config=PipelineConfig(max_request_tokens=1_630, overlap_tokens=0),  # as above
     ).extract(long_document)
     assert DiagnosticCode.metadata_incomplete in {
         diagnostic.code for diagnostic in conflicting.diagnostics

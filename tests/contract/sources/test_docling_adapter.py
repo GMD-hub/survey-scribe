@@ -1354,3 +1354,88 @@ def test_pdf_adapter_uses_document_coverage_when_no_pages_are_detected(
     )
 
     assert document.coverage == SourceCoverage()
+
+
+def test_pdf_options_default_to_the_established_behaviour() -> None:
+    """Full-page English OCR, flat headings, body text only, accurate tables: a caller that passes
+    nothing gets exactly what the adapter did before the options existed."""
+    options = docling_source.PdfConversionOptions()
+    assert (options.ocr, options.ocr_languages) == ("always", ("en",))
+    assert (options.heading_levels, options.max_heading_level) == (False, 6)
+    assert (options.include_furniture, options.table_mode) == (False, "accurate")
+    assert DoclingConverter().options == options
+    assert docling_source.PdfConversionOptions.from_environment({}) == options
+
+
+def test_pdf_options_reject_unknown_values() -> None:
+    with pytest.raises(ValueError):
+        docling_source.PdfConversionOptions(ocr="sometimes")
+    with pytest.raises(ValueError):
+        docling_source.PdfConversionOptions(table_mode="quick")
+    with pytest.raises(ValueError):
+        docling_source.PdfConversionOptions(ocr_languages=())
+    with pytest.raises(ValueError):
+        docling_source.PdfConversionOptions(max_heading_level=7)
+
+
+def test_pdf_options_read_the_environment_and_keep_defaults_for_unset_variables() -> None:
+    options = docling_source.PdfConversionOptions.from_environment(
+        {
+            "SURVEY_SCRIBE_PDF_OCR": "never",
+            "SURVEY_SCRIBE_PDF_OCR_LANGUAGES": "ru, en",
+            "SURVEY_SCRIBE_PDF_HEADING_LEVELS": "yes",
+            "SURVEY_SCRIBE_PDF_MAX_HEADING_LEVEL": "5",
+            "SURVEY_SCRIBE_PDF_INCLUDE_FURNITURE": "1",
+        }
+    )
+    assert options == docling_source.PdfConversionOptions(
+        ocr="never",
+        ocr_languages=("ru", "en"),
+        heading_levels=True,
+        max_heading_level=5,
+        include_furniture=True,
+    )
+    with pytest.raises(ValueError):
+        docling_source.PdfConversionOptions.from_environment(
+            {"SURVEY_SCRIBE_PDF_HEADING_LEVELS": "maybe"}
+        )
+    with pytest.raises(ValueError):
+        docling_source.PdfConversionOptions.from_environment(
+            {"SURVEY_SCRIBE_PDF_MAX_HEADING_LEVEL": "deep"}
+        )
+
+
+def test_text_layer_only_reading_needs_no_ocr_cache_but_an_artifacts_directory(
+    tmp_path: Path,
+) -> None:
+    """``ocr="never"`` reads the text layer with the layout and table models alone: the EasyOCR
+    archives are not validated, the artifacts directory still has to exist."""
+    converter = DoclingConverter(docling_source.PdfConversionOptions(ocr="never"))
+    with pytest.raises(SourceDependencyError, match="does not exist"):
+        converter(str(tmp_path / "doc.pdf"), str(tmp_path / "missing"))
+    (tmp_path / "models").mkdir()
+    with pytest.raises(SourceDependencyError, match="optional 'pdf' dependencies"):
+        converter(str(tmp_path / "doc.pdf"), str(tmp_path / "models"))
+
+
+def test_headings_keep_their_ancestors_by_level() -> None:
+    """Every heading at level 1 (the layout model's default) gives a one-title path as before;
+    inferred levels nest a sub-heading under its parent instead of replacing it."""
+    push = docling_source._push_heading
+    assert push((), 1, "Part I") == ("Part I",)
+    assert push(("Part I",), 1, "Part II") == ("Part II",)
+    assert push(("Part I",), 2, "1. Pensions") == ("Part I", "1. Pensions")
+    assert push(("Part I", "1. Pensions"), 3, "1.1 Amounts") == ("Part I", "1. Pensions", "1.1 Amounts")
+    assert push(("Part I", "1. Pensions", "1.1 Amounts"), 2, "2. Presents") == ("Part I", "2. Presents")
+    assert push(("Part I",), 3, "deep without a level 2") == ("Part I", "deep without a level 2")
+
+
+def test_default_registry_passes_pdf_options_to_the_adapter(monkeypatch: pytest.MonkeyPatch) -> None:
+    from survey_scribe.sources.registry import SourceRegistry
+
+    options = docling_source.PdfConversionOptions(ocr="auto", heading_levels=True)
+    adapter = cast(Any, SourceRegistry.default(pdf_options=options)._adapters[".pdf"])
+    assert cast(DoclingConverter, adapter._converter).options == options
+    monkeypatch.setenv("SURVEY_SCRIBE_PDF_OCR", "never")
+    adapter = cast(Any, SourceRegistry.default()._adapters[".pdf"])
+    assert cast(DoclingConverter, adapter._converter).options.ocr == "never"
