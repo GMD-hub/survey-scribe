@@ -9,10 +9,10 @@ Information Schema (SVIS). It provides synchronous, asynchronous, and batch APIs
 provider adapters, safe local source normalization, deterministic chunking,
 questionnaire routing graphs, secure configuration, and versioned artifacts.
 
-> **Alpha status:** The source tree declares version `0.1.0` and contains the
-> public `SurveyScribe` API, conversion CLI, typed models, source and provider
-> adapters, transactional artifacts, and `QuestionnaireRouter`. No approved PyPI
-> release is currently available.
+> **Alpha status:** Survey Scribe `0.1.x` is alpha software, with published
+> releases available on PyPI. The package
+> contains the public `SurveyScribe` API, conversion CLI, typed models, source
+> and provider adapters, transactional artifacts, and `QuestionnaireRouter`.
 
 ## Features
 
@@ -36,7 +36,7 @@ expand repeat instances.
 
 ## Installation
 
-After publication is approved, install the base schema package with:
+Install the base package from PyPI with:
 
 ```console
 pip install survey-scribe
@@ -150,6 +150,15 @@ Survey Scribe uses PEP 440 and Semantic Versioning. The current static version i
 declared once in `pyproject.toml`; the runtime `survey_scribe.__version__` value
 is read from installed distribution metadata. Release changes are recorded in
 [`CHANGELOG.md`](CHANGELOG.md).
+
+## Authors
+
+- [R. Andres Castaneda](https://github.com/randrescastaneda), author and maintainer
+- [Stephen Nwobike](https://github.com/stephennwobike-star), author
+- World Bank Global Monitoring Database team
+
+For package support, contact the maintainer, R. Andres Castaneda, at
+[acastanedaa@worldbank.org](mailto:acastanedaa@worldbank.org).
 
 ## License
 

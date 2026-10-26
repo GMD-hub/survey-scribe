@@ -6,6 +6,18 @@ project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-10-14
+
+### Fixed
+
+- Corrected PyPI author credits to include R. Andres Castaneda and Stephen
+  Nwobike alongside the World Bank Global Monitoring Database team.
+- Set author and maintainer contact metadata to `acastanedaa@worldbank.org`,
+  separate from Stephen's author credit. Stephen is not a package maintainer.
+- Added exact distribution metadata checks for author names and contact fields.
+
+## [0.1.2] - 2026-10-13
+
 ### Added
 
 - `PdfConversionOptions` for the PDF adapter (`SourceRegistry.default(pdf_options=...)`
@@ -26,6 +38,7 @@ project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   direct `AzureOpenAIProvider` injection through compatible gateways.
 - Extraction-first public guides for completed questionnaires, skip patterns,
   Palantir Foundry, Microsoft Foundry, mAI Factory, and AI providers.
+- Added Stephen Nwobike to package author metadata.
 
 ### Changed
 
@@ -47,15 +60,40 @@ project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Updated Docling and multidict minimum versions to include security fixes.
 - Native XLSForm `source_format="xlsform"` now binds to its validated XLSX
   snapshot for provider-free questionnaire routing.
 - Public installation guidance no longer presents an unavailable PyPI release or
   a stale source revision as the primary installation path.
 
-## 0.1.0 - Unpublished
+### Security
 
-This version remains a source-tree milestone. No approved package-index or GitHub
-release is available.
+- Recorded a time-limited risk acceptance for unresolved `diskcache` and
+  `accelerate` findings in optional dependencies. Neither package has a verified
+  upstream fix as of 2026-10-13. The acceptance expires on 2026-11-13; see the
+  [dependency security review](security/optional-dependency-risk-review-2026-10-13.md).
+
+## [0.1.1] - 2026-10-01
+
+### Changed
+
+- Updated the tested dependency lock to `urllib3 2.8.0` and
+  `transformers 5.17.0`, with compatible Hugging Face Hub and tokenizers versions.
+- Updated installation guidance and release-artifact examples.
+
+### Fixed
+
+- Resolved new urllib3 and Transformers dependency security findings without
+  adding security exceptions, and removed five obsolete Transformers exceptions.
+- Package SBOM tests now select the current package version rather than `0.1.0`.
+- CI now generates the exact-wheel SBOM before running package tests so that
+  generated release evidence is checked rather than skipped.
+
+The public API and SVIS schemas are unchanged from `0.1.0`.
+
+## [0.1.0] - 2026-09-10
+
+Version `0.1.0` is now published to PyPI and the release workflow completed.
 
 ### Added
 
@@ -64,4 +102,17 @@ release is available.
 - Legacy schema re-export and characterization suite.
 - Cross-platform Python 3.11-3.13 CI and clean-wheel installation checks.
 
+### Changed
+
+- Release packaging and trust/publishing configuration for PyPI via GitHub workflow.
+- Public installation guidance now points to the approved release path.
+
+### Fixed
+
+- Publication metadata and changelog state now reflect the approved 0.1.0 release.
+
 [Unreleased]: https://github.com/GMD-hub/survey-scribe/commits/main
+[0.1.3]: https://github.com/GMD-hub/survey-scribe/releases/tag/v0.1.3
+[0.1.2]: https://github.com/GMD-hub/survey-scribe/releases/tag/v0.1.2
+[0.1.1]: https://github.com/GMD-hub/survey-scribe/releases/tag/v0.1.1
+[0.1.0]: https://github.com/GMD-hub/survey-scribe/releases/tag/v0.1.0

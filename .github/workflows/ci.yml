@@ -97,14 +97,14 @@ jobs:
       - run: uv run --no-sync twine check --strict dist/*.whl dist/*.tar.gz
       - run: uv run --no-sync check-wheel-contents dist/*.whl
       - run: uv run --no-config --no-project --default-index https://pypi.org/simple --with pip==25.2 python -m pip download --dest .cache/wheelhouse --requirement tests/fixtures/package/constraints.txt
-      - name: Test exact artifacts offline
-        env:
-          UV_OFFLINE: "1"
-        run: uv run --no-sync pytest tests/package
       - name: Generate SBOM offline
         env:
           UV_OFFLINE: "1"
         run: uv run --no-sync python scripts/build_wheel_sbom.py --wheel dist/*.whl --wheelhouse .cache/wheelhouse --output dist/sbom.cdx.json
+      - name: Test exact artifacts offline
+        env:
+          UV_OFFLINE: "1"
+        run: uv run --no-sync pytest tests/package
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: survey-scribe-distributions

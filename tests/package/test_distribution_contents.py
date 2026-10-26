@@ -5,8 +5,11 @@ from __future__ import annotations
 import tarfile
 import zipfile
 from email.parser import BytesParser
+from email.utils import getaddresses
 from importlib.metadata import version
 from pathlib import Path, PurePosixPath
+
+import pytest
 
 PACKAGE_FILES = frozenset(
     {
@@ -71,7 +74,12 @@ SDIST_ROOT_FILES = frozenset(
 
 
 def _artifact(repository_root: Path, pattern: str) -> Path:
-    artifacts = sorted((repository_root / "dist").glob(pattern))
+    current_prefix = f"survey_scribe-{version('survey-scribe')}"
+    artifacts = sorted(
+        artifact
+        for artifact in (repository_root / "dist").glob(pattern)
+        if artifact.name.startswith(current_prefix)
+    )
     assert len(artifacts) == 1, f"Expected one current build artifact matching {pattern}."
     return artifacts[0]
 
@@ -95,16 +103,35 @@ def test_wheel_contents_are_bounded(repository_root: Path) -> None:
     assert set(members) == expected
 
 
-def test_wheel_metadata_is_publishable(repository_root: Path) -> None:
-    wheel = _artifact(repository_root, "survey_scribe-*.whl")
-    with zipfile.ZipFile(wheel) as archive:
-        metadata_name = next(
-            name for name in archive.namelist() if name.endswith(".dist-info/METADATA")
-        )
-        metadata = BytesParser().parsebytes(archive.read(metadata_name))
+@pytest.mark.parametrize("artifact_kind", ("wheel", "sdist"))
+def test_distribution_metadata_is_publishable(repository_root: Path, artifact_kind: str) -> None:
+    if artifact_kind == "wheel":
+        wheel = _artifact(repository_root, "survey_scribe-*.whl")
+        with zipfile.ZipFile(wheel) as archive:
+            metadata_name = next(
+                name for name in archive.namelist() if name.endswith(".dist-info/METADATA")
+            )
+            metadata_bytes = archive.read(metadata_name)
+    else:
+        source_distribution = _artifact(repository_root, "survey_scribe-*.tar.gz")
+        with tarfile.open(source_distribution, mode="r:gz") as source_archive:
+            extracted = source_archive.extractfile(
+                f"survey_scribe-{version('survey-scribe')}/PKG-INFO"
+            )
+            assert extracted is not None
+            metadata_bytes = extracted.read()
+    metadata = BytesParser().parsebytes(metadata_bytes)
 
     assert metadata["Name"] == "survey-scribe"
     assert metadata["Version"] == version("survey-scribe")
+    assert metadata.get_all("Author") == [
+        "R. Andres Castaneda, Stephen Nwobike, World Bank Global Monitoring Database team"
+    ]
+    assert metadata.get_all("Author-email") == ["acastanedaa@worldbank.org"]
+    assert getaddresses(metadata.get_all("Maintainer-email", [])) == [
+        ("R. Andres Castaneda", "acastanedaa@worldbank.org")
+    ]
+    assert metadata["Maintainer"] is None
     assert metadata["License-Expression"] == "MIT"
     assert metadata["Requires-Python"] == "<3.14,>=3.11"
     assert "defusedxml<1,>=0.7.1" in metadata.get_all("Requires-Dist", [])

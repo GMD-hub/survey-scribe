@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from importlib.metadata import version
 from pathlib import Path
 
 import pytest
@@ -25,7 +26,7 @@ def _valid_sbom(wheel: Path) -> dict[str, object]:
                 "type": "library",
                 "bom-ref": "root-component",
                 "name": "survey-scribe",
-                "version": "0.1.0",
+                "version": version("survey-scribe"),
                 "hashes": [{"alg": "SHA-256", "content": digest}],
             },
         },
@@ -57,7 +58,9 @@ def _valid_sbom(wheel: Path) -> dict[str, object]:
 def test_sbom_validation_binds_schema_root_dependencies_and_wheel_digest(
     repository_root: Path,
 ) -> None:
-    wheels = sorted((repository_root / "dist").glob("survey_scribe-0.1.0-*.whl"))
+    wheels = sorted(
+        (repository_root / "dist").glob(f"survey_scribe-{version('survey-scribe')}-*.whl")
+    )
     if len(wheels) != 1:
         pytest.skip("build exactly one current wheel before package tests")
 
@@ -65,7 +68,9 @@ def test_sbom_validation_binds_schema_root_dependencies_and_wheel_digest(
 
 
 def test_generated_sbom_is_bound_to_the_built_wheel(repository_root: Path) -> None:
-    wheels = sorted((repository_root / "dist").glob("survey_scribe-0.1.0-*.whl"))
+    wheels = sorted(
+        (repository_root / "dist").glob(f"survey_scribe-{version('survey-scribe')}-*.whl")
+    )
     sbom_path = repository_root / "dist/sbom.cdx.json"
     if len(wheels) != 1 or not sbom_path.is_file():
         pytest.skip("build the exact-wheel SBOM before package tests")
@@ -78,7 +83,9 @@ def test_sbom_validation_rejects_unbound_evidence(
     repository_root: Path,
     mutation: str,
 ) -> None:
-    wheels = sorted((repository_root / "dist").glob("survey_scribe-0.1.0-*.whl"))
+    wheels = sorted(
+        (repository_root / "dist").glob(f"survey_scribe-{version('survey-scribe')}-*.whl")
+    )
     if len(wheels) != 1:
         pytest.skip("build exactly one current wheel before package tests")
     sbom = _valid_sbom(wheels[0])
@@ -94,7 +101,9 @@ def test_sbom_validation_rejects_unbound_evidence(
 
 
 def test_sbom_validation_rejects_an_unreachable_component(repository_root: Path) -> None:
-    wheels = sorted((repository_root / "dist").glob("survey_scribe-0.1.0-*.whl"))
+    wheels = sorted(
+        (repository_root / "dist").glob(f"survey_scribe-{version('survey-scribe')}-*.whl")
+    )
     if len(wheels) != 1:
         pytest.skip("build exactly one current wheel before package tests")
     sbom = _valid_sbom(wheels[0])

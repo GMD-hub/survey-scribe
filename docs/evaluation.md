@@ -107,8 +107,8 @@ also requires every allowlist entry to name its scanner, exact finding fingerpri
 owner, rationale, and future expiry. This command is the only authoritative
 security policy exit. `.secrets.baseline` separately records reviewed synthetic
 values and checksums with an owner, rationale, and expiry. The current dependency
-allowlist has short-lived entries for `diskcache` and `transformers`, which are
-transitive dependencies without a currently compatible fixed release.
+allowlist has short-lived entries for `diskcache` and `accelerate`,
+which are transitive dependencies without a currently compatible fixed release.
 
 Workflow policy is also local and deterministic:
 
@@ -129,7 +129,7 @@ After dependency and wheelhouse preparation, run the artifact checks offline:
 uv build
 uv run twine check --strict dist/*.whl dist/*.tar.gz
 uv run check-wheel-contents dist/*.whl
-uv run python scripts/build_wheel_sbom.py --wheel dist/survey_scribe-0.1.0-py3-none-any.whl --wheelhouse .cache/wheelhouse --output dist/sbom.cdx.json
+uv run python scripts/build_wheel_sbom.py --wheel dist/survey_scribe-0.1.1-py3-none-any.whl --wheelhouse .cache/wheelhouse --output dist/sbom.cdx.json
 UV_OFFLINE=1 uv run pytest tests/package
 ```
 
