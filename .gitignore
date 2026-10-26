@@ -63,11 +63,16 @@ book/.quarto/
 tmp/
 
 # Compound GPID managed items (junctions + copied file - do not commit)
+.compound-gpid/*.bak
+.compound-gpid/*.tmp
+.compound-gpid/active/
+.compound-gpid/generations/
 .compound-gpid/managed-files.json
+.compound-gpid/projection-ownership.json
+.compound-gpid/projection-transaction.json
+.compound-gpid/quarantine/
+.compound-gpid/retired/
+.compound-gpid/staging/
+.kilo
 .kilo/AGENTS.md
-.kilo/agents
-.kilo/commands
-.kilo/instructions
 .kilo/kilo.json
-.kilo/shared
-.kilo/skills
