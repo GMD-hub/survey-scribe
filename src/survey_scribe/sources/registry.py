@@ -27,9 +27,9 @@ if TYPE_CHECKING:
     from datetime import date
 
     from survey_scribe.models.routing import RoutingSourceBinding
-    from survey_scribe.sources.docling import PdfConversionOptions
     from survey_scribe.models.svis import SurveySVIS
     from survey_scribe.routing.native import NativeRoutingSemantics
+    from survey_scribe.sources.docling import PdfConversionOptions
 
 
 @dataclass(frozen=True, slots=True)

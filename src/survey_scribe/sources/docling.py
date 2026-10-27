@@ -147,7 +147,8 @@ class PdfConversionOptions:
         ocr: ``"always"`` runs OCR over every page (the text layer is ignored); ``"auto"`` keeps
             the text layer and runs OCR only where a page has none; ``"never"`` reads the text
             layer alone, needs no OCR artifacts, and keeps any script the PDF carries verbatim.
-        ocr_languages: EasyOCR language codes; languages of one script can be combined.
+        ocr_languages: EasyOCR language codes. OCR currently supports only English because the
+            approved model snapshot contains only the English recognition model.
         heading_levels: infer heading depth (bookmarks, numbering, font style) instead of
             reporting every heading at level 1; ``section_path`` then carries the ancestors.
         max_heading_level: the deepest level the inference assigns.
@@ -168,11 +169,22 @@ class PdfConversionOptions:
             raise ValueError(f"ocr must be one of {_OCR_MODES}, not {self.ocr!r}")
         if self.table_mode not in _TABLE_MODES:
             raise ValueError(f"table_mode must be one of {_TABLE_MODES}, not {self.table_mode!r}")
+        if isinstance(self.ocr_languages, str):
+            raise ValueError("ocr_languages must be a sequence of language codes, not a string")
         languages = tuple(str(code).strip() for code in self.ocr_languages)
         if not languages or any(not code for code in languages):
             raise ValueError("ocr_languages must name at least one language code")
+        if self.ocr != "never" and languages != ("en",):
+            raise ValueError(
+                "OCR supports only ('en',); other languages require approved language-specific "
+                "model artifacts. Use ocr='never' to read a non-English PDF text layer."
+            )
         object.__setattr__(self, "ocr_languages", languages)
-        if isinstance(self.max_heading_level, bool) or not 1 <= self.max_heading_level <= 6:
+        if (
+            isinstance(self.max_heading_level, bool)
+            or not isinstance(self.max_heading_level, int)
+            or not 1 <= self.max_heading_level <= 6
+        ):
             raise ValueError("max_heading_level must be an integer from 1 to 6")
 
     @classmethod
@@ -212,7 +224,9 @@ class PdfConversionOptions:
         return cls(
             ocr=(read("OCR") or defaults.ocr).lower(),
             ocr_languages=(
-                tuple(code for code in languages.split(",")) if languages else defaults.ocr_languages
+                tuple(code for code in languages.split(","))
+                if languages
+                else defaults.ocr_languages
             ),
             heading_levels=flag("HEADING_LEVELS", defaults.heading_levels),
             max_heading_level=max_level,
@@ -221,14 +235,18 @@ class PdfConversionOptions:
         )
 
 
-def _push_heading(path: tuple[str, ...], level: int, text: str) -> tuple[str, ...]:
+def _push_heading(
+    path: tuple[tuple[int, str], ...], level: int, text: str
+) -> tuple[tuple[int, str], ...]:
     """The section path after a heading of ``level``: its ancestors kept, deeper headings dropped.
 
     Every heading at level 1 (the layout model's default) gives a path of one title, as before;
     with inferred levels a sub-heading sits under its parent instead of replacing it.
     """
-    depth = max(int(level), 1) - 1
-    return path[:depth] + (text,)
+    level = max(int(level), 1)
+    while path and path[-1][0] >= level:
+        path = path[:-1]
+    return (*path, (level, text))
 
 
 class DoclingConverter:
@@ -315,12 +333,11 @@ class DoclingConverter:
         configured_max_cells = os.environ.get("SURVEY_SCRIBE_PDF_MAX_CELLS")
         max_cells = int(configured_max_cells) if configured_max_cells is not None else None
         table_cells = 0
+        headings: tuple[tuple[int, str], ...] = ()
         current_section: tuple[str, ...] = ()
         if options.include_furniture:
             layers = import_module("docling_core.types.doc").ContentLayer
-            items = document.iterate_items(
-                included_content_layers={layers.BODY, layers.FURNITURE}
-            )
+            items = document.iterate_items(included_content_layers={layers.BODY, layers.FURNITURE})
         else:
             items = document.iterate_items()
         for item, _depth in items:
@@ -355,9 +372,8 @@ class DoclingConverter:
                 text = f"{marker} {text}"
             if text:
                 if any(name in label for name in ("section", "title", "heading")):
-                    current_section = _push_heading(
-                        current_section, getattr(item, "level", 1) or 1, text
-                    )
+                    headings = _push_heading(headings, getattr(item, "level", 1) or 1, text)
+                    current_section = tuple(title for _level, title in headings)
                 blocks.append(
                     PdfConversionBlock(
                         text=text,

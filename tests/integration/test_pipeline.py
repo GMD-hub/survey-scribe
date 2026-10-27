@@ -29,6 +29,7 @@ from survey_scribe.sources.base import (
     SourceDocument,
     SourceProvenance,
     SourceTable,
+    render_table,
 )
 from survey_scribe.sources.chunking import chunk_document
 
@@ -144,6 +145,176 @@ async def test_pipeline_preserves_source_order_and_marks_partial_quality() -> No
     codes = {diagnostic.code for diagnostic in result.diagnostics}
     assert DiagnosticCode.quality_low_confidence in codes
     assert DiagnosticCode.quality_missing_categories in codes
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("cell", "overlap_tokens", "provider_limit"),
+    [("x" * 997, 0, 200_000), ('"\\\t\n\u00e9"' * 100, 200, 10_000)],
+)
+async def test_pipeline_packs_tables_within_the_complete_request_budget(
+    cell: str, overlap_tokens: int, provider_limit: int
+) -> None:
+    blocks: list[SourceBlock] = []
+    for index in range(11):
+        provenance = SourceProvenance(source_name="survey.pdf", page=index + 1)
+        rows = ((f"{index}: " + (cell if index < 10 else "L" * 8_000),), ("Shared row",))
+        table = SourceTable(id=f"table-{index:06d}", rows=rows, provenance=provenance)
+        blocks.extend(
+            (
+                SourceBlock(
+                    id=f"question-{index:06d}",
+                    order=2 * index,
+                    kind="text",
+                    text=f"Question {index}",
+                    provenance=provenance,
+                ),
+                SourceBlock(
+                    id=table.id,
+                    order=2 * index + 1,
+                    kind="table",
+                    text=render_table(rows),
+                    provenance=provenance,
+                    table=table,
+                ),
+            )
+        )
+    document = SourceDocument(
+        source_name="survey.pdf", media_type="application/pdf", blocks=tuple(blocks)
+    )
+    table_ids = tuple(table.id for table in document.tables)
+    requests: list[FakeRequest] = []
+
+    async def respond(request: FakeRequest) -> object:
+        requests.append(request)
+        if request.response_model is ExtractedMetadata:
+            return ExtractedMetadata(
+                survey_id="TST_2026_SYN", country_code="TST", year=2026, survey_name="Survey"
+            )
+        return BlockExtraction(
+            block_id=_chunk_id(request),
+            variables=tuple(
+                ExtractedVariable(
+                    variable=SurveyVariable(
+                        raw_name=block_id, data_type=DataType.text, extraction_confidence=1.0
+                    ),
+                    source_block_ids=(block_id,),
+                )
+                for block_id in _source_block_ids(request)
+                if block_id in table_ids
+            ),
+        )
+
+    provider = DeterministicFakeProvider(
+        capabilities=replace(_capabilities(), max_input_tokens=provider_limit), responder=respond
+    )
+    config = PipelineConfig(max_request_tokens=11_460, overlap_tokens=overlap_tokens)
+    pipeline = ExtractionPipeline(provider, config=config)
+    result = await pipeline.extract(document)
+
+    assert result.status is ResultStatus.success
+    assert result.output is not None
+    assert [variable.raw_name for variable in result.output.variables] == list(table_ids)
+    assert [variable.source_page for variable in result.output.variables] == list(range(11))
+    assert result.failed_blocks == ()
+    assert all(
+        provider.estimate_tokens(request.messages) <= min(config.max_request_tokens, provider_limit)
+        for request in requests
+    )
+    table_batches = [
+        set(_source_block_ids(request)).intersection(table_ids)
+        for request in requests
+        if request.response_model is BlockExtraction
+    ]
+    assert len(table_batches) > 1
+    assert any(len(batch) > 1 for batch in table_batches)
+    chunked = pipeline._chunk_document(document)
+    assert (
+        tuple(
+            part.table
+            for chunk in chunked.chunks
+            for part in chunk.parts
+            if part.id in chunk.new_part_ids and part.table is not None
+        )
+        == document.tables
+    )
+    assert any(chunk.overlap_part_ids for chunk in chunked.chunks) is bool(overlap_tokens)
+
+
+@pytest.mark.asyncio
+async def test_pipeline_splits_escaped_text_without_losing_source_part_provenance() -> None:
+    text = '"\\\t\n\u00e9"' * 300
+    document = _document().model_copy(
+        update={"blocks": (_document().blocks[0].model_copy(update={"text": text}),)}
+    )
+    requests: list[FakeRequest] = []
+
+    async def respond(request: FakeRequest) -> object:
+        requests.append(request)
+        if request.response_model is ExtractedMetadata:
+            return ExtractedMetadata(
+                survey_id="TST_2026_SYN", country_code="TST", year=2026, survey_name="Survey"
+            )
+        return BlockExtraction(
+            block_id=_chunk_id(request),
+            variables=(
+                ExtractedVariable(
+                    variable=SurveyVariable(
+                        raw_name="age", data_type=DataType.text, extraction_confidence=1.0
+                    ),
+                    source_block_ids=("block-0",),
+                ),
+            ),
+        )
+
+    provider = DeterministicFakeProvider(capabilities=_capabilities(), responder=respond)
+    pipeline = ExtractionPipeline(
+        provider, config=PipelineConfig(max_request_tokens=2_200, overlap_tokens=200)
+    )
+    result = await pipeline.extract(document)
+
+    assert result.status is ResultStatus.success
+    assert result.output is not None
+    assert result.failed_blocks == ()
+    assert all(provider.estimate_tokens(request.messages) <= 2_200 for request in requests)
+    chunked = pipeline._chunk_document(document)
+    new_parts = [
+        part for chunk in chunked.chunks for part in chunk.parts if part.id in chunk.new_part_ids
+    ]
+    assert "".join(part.text for part in new_parts) == text
+    assert [part.part_index for part in new_parts] == list(range(1, len(new_parts) + 1))
+    assert {part.part_count for part in new_parts} == {len(new_parts)}
+    assert all(part.provenance == document.blocks[0].provenance for part in new_parts)
+
+
+@pytest.mark.asyncio
+async def test_pipeline_rejects_a_table_that_cannot_fit_the_serialized_request() -> None:
+    provenance = SourceProvenance(source_name="survey.pdf", page=1)
+    rows = (("\u00e9" * 250,),)
+    table = SourceTable(id="table-1", rows=rows, provenance=provenance)
+    document = SourceDocument(
+        source_name="survey.pdf",
+        media_type="application/pdf",
+        blocks=(
+            SourceBlock(
+                id="table-1",
+                order=0,
+                kind="table",
+                text=render_table(rows),
+                provenance=provenance,
+                table=table,
+            ),
+        ),
+    )
+    provider = DeterministicFakeProvider(capabilities=_capabilities())
+    result = await ExtractionPipeline(
+        provider, config=PipelineConfig(max_request_tokens=2_200, overlap_tokens=0)
+    ).extract(document)
+
+    assert result.status is ResultStatus.failed
+    assert result.output is None
+    assert provider.call_count == 0
+    assert [diagnostic.code for diagnostic in result.diagnostics] == ["SOURCE_LIMIT_EXCEEDED"]
 
 
 @pytest.mark.asyncio

@@ -7,6 +7,7 @@ import hashlib
 import inspect
 import json
 import re
+from collections import Counter
 from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass
 from datetime import date
@@ -41,10 +42,16 @@ from survey_scribe.sources.base import (
     SourceBundle,
     SourceDocument,
     SourceError,
+    SourceLimitError,
     SourceLimits,
     SourceProvenance,
 )
-from survey_scribe.sources.chunking import ChunkedDocument, SourceChunk, chunk_document
+from survey_scribe.sources.chunking import (
+    ChunkedDocument,
+    SourceChunk,
+    SourceChunkPart,
+    chunk_document,
+)
 from survey_scribe.sources.registry import SourceRegistry
 
 _METADATA_SYSTEM_PROMPT = (
@@ -300,11 +307,105 @@ class ExtractionPipeline:
         if content_tokens < 1:
             raise ValueError("provider input limit cannot contain the extraction prompt")
         overlap_tokens = min(self._config.overlap_tokens, max(0, content_tokens - 1))
-        return chunk_document(
+        chunked = chunk_document(
             document,
             max_tokens=content_tokens,
             overlap_tokens=overlap_tokens,
         )
+
+        def fits(chunk: SourceChunk) -> bool:
+            return self._provider.estimate_tokens(_variable_messages(chunked, chunk)) <= max_tokens
+
+        if all(fits(chunk) for chunk in chunked.chunks):
+            return chunked
+
+        # Raw text budgets do not include JSON escaping or the per-part envelope.
+        # Repack only when necessary, checking the same messages sent to the provider.
+        parts = [
+            part
+            for chunk in chunked.chunks
+            for part in chunk.parts
+            if part.id in chunk.new_part_ids
+        ]
+        chunks: list[SourceChunk] = []
+
+        def make_chunk(
+            new: tuple[SourceChunkPart, ...], overlap: tuple[SourceChunkPart, ...]
+        ) -> SourceChunk:
+            all_parts = overlap + new
+            text = "\n\n".join(part.text for part in all_parts)
+            return SourceChunk(
+                id=f"chunk-{len(chunks) + 1:06d}",
+                order=len(chunks),
+                text=text,
+                block_ids=tuple(part.block_id for part in all_parts),
+                new_block_ids=tuple(part.block_id for part in new),
+                overlap_block_ids=tuple(part.block_id for part in overlap),
+                provenance=tuple(part.provenance for part in all_parts),
+                parts=all_parts,
+                new_part_ids=tuple(part.id for part in new),
+                overlap_part_ids=tuple(part.id for part in overlap),
+                token_count=len(text.encode("utf-8")),
+            )
+
+        def overlap_for(part: SourceChunkPart) -> tuple[SourceChunkPart, ...]:
+            selected: tuple[SourceChunkPart, ...] = ()
+            if chunks:
+                previous = chunks[-1]
+                for prior in reversed(previous.parts):
+                    if prior.id not in previous.new_part_ids or prior.kind == "table":
+                        continue
+                    candidate = (prior,) + selected
+                    text = "\n\n".join(item.text for item in candidate)
+                    if len(text.encode("utf-8")) > overlap_tokens:
+                        break
+                    if not fits(make_chunk((part,), candidate)):
+                        break
+                    selected = candidate
+            return selected
+
+        while True:
+            counts = Counter(part.block_id for part in parts)
+            indices: Counter[str] = Counter()
+            for index, part in enumerate(parts):
+                indices[part.block_id] += 1
+                part_index = indices[part.block_id]
+                parts[index] = part.model_copy(
+                    update={
+                        "id": f"{part.block_id}:part-{part_index:06d}",
+                        "part_index": part_index,
+                        "part_count": counts[part.block_id],
+                    }
+                )
+            chunks.clear()
+            current: tuple[SourceChunkPart, ...] = ()
+            overlap: tuple[SourceChunkPart, ...] = ()
+            for index, part in enumerate(parts):
+                if not current:
+                    overlap = overlap_for(part)
+                candidate = make_chunk(current + (part,), overlap)
+                if current and not fits(candidate):
+                    chunks.append(make_chunk(current, overlap))
+                    current = ()
+                    overlap = overlap_for(part)
+                    candidate = make_chunk((part,), overlap)
+                if not fits(candidate):
+                    if part.kind == "table" or len(part.text) < 2:
+                        raise SourceLimitError(
+                            "max_tokens",
+                            "A source part cannot fit within the serialized request limit",
+                        )
+                    middle = len(part.text) // 2
+                    parts[index : index + 1] = [
+                        part.model_copy(update={"text": part.text[:middle]}),
+                        part.model_copy(update={"text": part.text[middle:]}),
+                    ]
+                    break
+                current += (part,)
+            else:
+                if current:
+                    chunks.append(make_chunk(current, overlap))
+                return chunked.model_copy(update={"chunks": tuple(chunks)})
 
     async def _extract_metadata(
         self,
@@ -386,23 +487,7 @@ class ExtractionPipeline:
         chunk: SourceChunk,
         limiter: ConcurrencyLimiter,
     ) -> _BlockOutcome:
-        messages = (
-            ProviderMessage(
-                role="system",
-                content=_VARIABLE_SYSTEM_PROMPT,
-            ),
-            ProviderMessage(
-                role="user",
-                content=(
-                    f"CHUNK_ID: {chunk.id}\n"
-                    f"SOURCE_BLOCK_IDS: {json.dumps(chunk.block_ids)}\n"
-                    "REPEATED_ROW_INVENTORY: "
-                    f"{_repeated_row_inventory(document, chunk)}\n"
-                    "BEGIN_UNTRUSTED_QUESTIONNAIRE_CHUNK\n"
-                    f"{_chunk_payload(chunk)}\nEND_UNTRUSTED_QUESTIONNAIRE_CHUNK"
-                ),
-            ),
-        )
+        messages = _variable_messages(document, chunk)
         try:
             _require_input_capacity(
                 self._provider,
@@ -1200,6 +1285,25 @@ def _chunk_payload(chunk: SourceChunk) -> str:
         for part in chunk.parts
     ]
     return json.dumps(parts, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
+
+
+def _variable_messages(
+    document: ChunkedDocument, chunk: SourceChunk
+) -> tuple[ProviderMessage, ...]:
+    return (
+        ProviderMessage(role="system", content=_VARIABLE_SYSTEM_PROMPT),
+        ProviderMessage(
+            role="user",
+            content=(
+                f"CHUNK_ID: {chunk.id}\n"
+                f"SOURCE_BLOCK_IDS: {json.dumps(chunk.block_ids)}\n"
+                "REPEATED_ROW_INVENTORY: "
+                f"{_repeated_row_inventory(document, chunk)}\n"
+                "BEGIN_UNTRUSTED_QUESTIONNAIRE_CHUNK\n"
+                f"{_chunk_payload(chunk)}\nEND_UNTRUSTED_QUESTIONNAIRE_CHUNK"
+            ),
+        ),
+    )
 
 
 def _artifact_provenance(

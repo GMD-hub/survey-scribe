@@ -237,7 +237,7 @@ registry = SourceRegistry.default(
 | option | default | meaning |
 |---|---|---|
 | `ocr` | `"always"` | `"always"` OCRs every page; `"auto"` keeps the text layer and OCRs only pages without one; `"never"` reads the text layer alone (born-digital PDFs in any script, no EasyOCR artifacts required) |
-| `ocr_languages` | `("en",)` | EasyOCR language codes; languages of one script can be combined |
+| `ocr_languages` | `("en",)` | OCR currently supports English only; other recognition languages need approved language-specific model artifacts and are rejected when OCR is enabled. `ocr="never"` can read a text layer in any script. |
 | `heading_levels` | `False` | infer heading depth from bookmarks, numbering and font style (Docling's heading-hierarchy stage); `section_path` then lists the ancestors |
 | `max_heading_level` | `6` | the deepest inferred level |
 | `include_furniture` | `False` | keep page headers and footers; the layout model files a page-top section title as a page header |

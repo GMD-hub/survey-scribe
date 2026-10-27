@@ -6,6 +6,45 @@ project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `PdfConversionOptions` for the PDF adapter (`SourceRegistry.default(pdf_options=...)`
+  or `SURVEY_SCRIBE_PDF_*` variables): OCR `always | auto | never` (`never` reads the
+  text layer alone, any script, no EasyOCR artifacts), inferred heading levels with
+  `section_path` ancestors, page furniture, and TableFormer mode. Unset options keep
+  the established behaviour. OCR remains limited to approved English model artifacts.
+- `SourceRegistry.supported_suffixes()`.
+
+### Changed
+
+- Chunking keeps a table with the text printed above it: a table joins the running
+  chunk while the token budget allows (it is still never split) instead of always
+  opening a chunk of its own.
+- PDF section headings keep their ancestors when heading levels are inferred; with
+  the default flat headings the section path is unchanged.
+- A numbered question the layout model reads as a list item keeps its number: the
+  item's marker is prefixed to its text (`8. How much ...`), as the page prints it.
+- Variable extraction prompt 1.1.0: `question_text` and `module` are copied verbatim
+  with their printed numbering, and a table's repeated slots (members, days, numbered
+  blank rows) are one variable per question while rows and columns labelled with
+  different things are one variable per cell. The prompt is about 600 tokens longer
+  than 1.0.0; a `PipelineConfig.max_request_tokens` tuned tightly to the old prompt
+  needs that much more.
+
+### Fixed
+
+- PDF contract tests now cover text-layer conversion without relying on missing
+  optional dependencies. OCR modes keep local model and offline conversion controls.
+- Inferred heading paths preserve sibling sections even when heading levels are skipped.
+- PDF options reject noninteger heading limits and unsupported OCR language settings.
+- Packed extraction requests account for serialized source-part metadata and overlap
+  before they are sent to a provider.
+
+### Security
+
+- Updated vulnerable locked dependencies and the compatible Docling stack. The
+  existing time-limited `diskcache` and `accelerate` exceptions are unchanged.
+
 ## [0.1.3] - 2026-10-14
 
 ### Fixed
@@ -19,13 +58,6 @@ project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [0.1.2] - 2026-10-13
 
 ### Added
-
-- `PdfConversionOptions` for the PDF adapter (`SourceRegistry.default(pdf_options=...)`
-  or `SURVEY_SCRIBE_PDF_*` variables): OCR `always | auto | never` (`never` reads the
-  text layer alone, any script, no EasyOCR artifacts), OCR languages, inferred heading
-  levels with `section_path` ancestors, page furniture, TableFormer mode. Unset options
-  keep the established behaviour.
-- `SourceRegistry.supported_suffixes()`.
 
 - PyPI-ready project metadata and MIT license declaration.
 - MkDocs documentation with installation, usage, examples, and API reference.
@@ -44,19 +76,6 @@ project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Runtime dependencies now use compatible ranges while the committed `uv.lock`
   retains exact engineering versions.
-- Chunking keeps a table with the text printed above it: a table joins the running
-  chunk while the token budget allows (it is still never split) instead of always
-  opening a chunk of its own.
-- PDF section headings keep their ancestors when heading levels are inferred; with
-  the default flat headings the section path is unchanged.
-- A numbered question the layout model reads as a list item keeps its number: the
-  item's marker is prefixed to its text (`8. How much …`), as the page prints it.
-- Variable extraction prompt 1.1.0: `question_text` and `module` are copied verbatim
-  with their printed numbering, and a table's repeated slots (members, days, numbered
-  blank rows) are one variable per question while rows and columns labelled with
-  different things are one variable per cell. The prompt is about 600 tokens longer
-  than 1.0.0; a `PipelineConfig.max_request_tokens` tuned tightly to the old prompt
-  needs that much more.
 
 ### Fixed
 

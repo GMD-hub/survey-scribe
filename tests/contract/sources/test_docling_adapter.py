@@ -317,8 +317,10 @@ def test_real_docling_smoke_uses_validated_cache_with_worker_network_blocked(
     assert document.media_type == "application/pdf"
 
 
-def test_docling_configuration_forces_local_pdfium_ocr_and_disables_remote_services(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("ocr", ["always", "auto", "never"])
+@pytest.mark.parametrize("customize", [False, True])
+def test_docling_configuration_uses_local_pdfium_and_disables_remote_services(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ocr: str, customize: bool
 ) -> None:
     captured: dict[str, Any] = {}
 
@@ -332,6 +334,9 @@ def test_docling_configuration_forces_local_pdfium_ocr_and_disables_remote_servi
         artifacts_path: Path | None = None
         ocr_options: object | None = None
 
+        def __init__(self) -> None:
+            self.table_structure_options = SimpleNamespace(mode="accurate")
+
     class FakeEasyOcrOptions:
         def __init__(self, **kwargs: object) -> None:
             captured["ocr_kwargs"] = kwargs
@@ -340,8 +345,13 @@ def test_docling_configuration_forces_local_pdfium_ocr_and_disables_remote_servi
         def __init__(self, **kwargs: object) -> None:
             captured["format_kwargs"] = kwargs
 
+    class FakeHeadingHierarchyOptions:
+        def __init__(self, **kwargs: object) -> None:
+            captured["heading_kwargs"] = kwargs
+
     class FakeDocument:
-        def iterate_items(self) -> list[tuple[object, int]]:
+        def iterate_items(self, **kwargs: object) -> list[tuple[object, int]]:
+            captured["iterate_kwargs"] = kwargs
             item = SimpleNamespace(text="Short questionnaire", prov=[SimpleNamespace(page_no=1)])
             return [(item, 0)]
 
@@ -361,10 +371,15 @@ def test_docling_configuration_forces_local_pdfium_ocr_and_disables_remote_servi
         "docling.datamodel.pipeline_options": SimpleNamespace(
             EasyOcrOptions=FakeEasyOcrOptions,
             PdfPipelineOptions=FakePipelineOptions,
+            HeadingHierarchyOptions=FakeHeadingHierarchyOptions,
+            TableFormerMode={"FAST": "fast"},
         ),
         "docling.document_converter": SimpleNamespace(
             DocumentConverter=FakeDocumentConverter,
             PdfFormatOption=FakePdfFormatOption,
+        ),
+        "docling_core.types.doc": SimpleNamespace(
+            ContentLayer=SimpleNamespace(BODY="body", FURNITURE="furniture")
         ),
     }
 
@@ -382,21 +397,47 @@ def test_docling_configuration_forces_local_pdfium_ocr_and_disables_remote_servi
         "validated_ocr_model_snapshot",
         lambda _path: nullcontext(model_root),
     )
-    conversion = DoclingConverter()(str(tmp_path / "questionnaire.pdf"), str(artifacts))
+    if ocr == "never":
+
+        def unexpected_ocr_cache(_path: Path) -> object:
+            pytest.fail("text-layer conversion must not access the OCR cache")
+
+        monkeypatch.setattr(docling_source, "resolve_ocr_cache", unexpected_ocr_cache)
+        monkeypatch.setattr(docling_source, "validated_ocr_model_snapshot", unexpected_ocr_cache)
+    options = docling_source.PdfConversionOptions(
+        ocr=ocr,
+        heading_levels=customize,
+        max_heading_level=4,
+        include_furniture=customize,
+        table_mode="fast" if customize else "accurate",
+    )
+    conversion = DoclingConverter(options)(str(tmp_path / "questionnaire.pdf"), str(artifacts))
 
     format_kwargs = captured["format_kwargs"]
     assert isinstance(format_kwargs, dict)
     pipeline = format_kwargs["pipeline_options"]
-    assert pipeline.do_ocr is True
+    assert pipeline.do_ocr is (ocr != "never")
     assert pipeline.do_table_structure is True
     assert pipeline.enable_remote_services is False
     assert pipeline.artifacts_path == artifacts
-    assert captured["ocr_kwargs"] == {
-        "lang": ["en"],
-        "force_full_page_ocr": True,
-        "model_storage_directory": str(model_root),
-        "download_enabled": False,
-    }
+    assert pipeline.table_structure_options.mode == options.table_mode
+    if customize:
+        assert pipeline.generate_parsed_pages is True
+        assert captured["heading_kwargs"] == {"enabled": True, "max_level": 4}
+        assert captured["iterate_kwargs"] == {"included_content_layers": {"body", "furniture"}}
+    else:
+        assert "heading_kwargs" not in captured
+        assert captured["iterate_kwargs"] == {}
+    if ocr == "never":
+        assert "ocr_kwargs" not in captured
+        assert pipeline.ocr_options is None
+    else:
+        assert captured["ocr_kwargs"] == {
+            "lang": ["en"],
+            "force_full_page_ocr": ocr == "always",
+            "model_storage_directory": str(model_root),
+            "download_enabled": False,
+        }
     assert format_kwargs["backend"] is FakePdfiumBackend
     assert conversion.blocks[0].text == "Short questionnaire"
     assert conversion.blocks[0].page == 1
@@ -1378,6 +1419,23 @@ def test_pdf_options_reject_unknown_values() -> None:
         docling_source.PdfConversionOptions(max_heading_level=7)
 
 
+@pytest.mark.parametrize("level", [True, 0, 1.5, "3", None])
+def test_pdf_options_require_an_integer_heading_limit(level: Any) -> None:
+    with pytest.raises(ValueError, match="must be an integer from 1 to 6"):
+        docling_source.PdfConversionOptions(max_heading_level=level)
+
+
+def test_pdf_options_reject_a_bare_language_string() -> None:
+    with pytest.raises(ValueError, match="not a string"):
+        docling_source.PdfConversionOptions(ocr_languages=cast(Any, "en"))
+
+
+@pytest.mark.parametrize("ocr", ["always", "auto"])
+def test_pdf_options_reject_ocr_languages_without_approved_models(ocr: str) -> None:
+    with pytest.raises(ValueError, match="approved language-specific model artifacts"):
+        docling_source.PdfConversionOptions(ocr=ocr, ocr_languages=("ru", "en"))
+
+
 def test_pdf_options_read_the_environment_and_keep_defaults_for_unset_variables() -> None:
     options = docling_source.PdfConversionOptions.from_environment(
         {
@@ -1407,13 +1465,23 @@ def test_pdf_options_read_the_environment_and_keep_defaults_for_unset_variables(
 
 def test_text_layer_only_reading_needs_no_ocr_cache_but_an_artifacts_directory(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``ocr="never"`` reads the text layer with the layout and table models alone: the EasyOCR
     archives are not validated, the artifacts directory still has to exist."""
     converter = DoclingConverter(docling_source.PdfConversionOptions(ocr="never"))
     with pytest.raises(SourceDependencyError, match="does not exist"):
         converter(str(tmp_path / "doc.pdf"), str(tmp_path / "missing"))
+    not_directory = tmp_path / "not-directory"
+    not_directory.touch()
+    with pytest.raises(SourceDependencyError, match="not a directory"):
+        converter(str(tmp_path / "doc.pdf"), str(not_directory))
     (tmp_path / "models").mkdir()
+
+    def missing_module(_name: str) -> object:
+        raise ModuleNotFoundError
+
+    monkeypatch.setattr(docling_source, "import_module", missing_module)
     with pytest.raises(SourceDependencyError, match="optional 'pdf' dependencies"):
         converter(str(tmp_path / "doc.pdf"), str(tmp_path / "models"))
 
@@ -1422,15 +1490,79 @@ def test_headings_keep_their_ancestors_by_level() -> None:
     """Every heading at level 1 (the layout model's default) gives a one-title path as before;
     inferred levels nest a sub-heading under its parent instead of replacing it."""
     push = docling_source._push_heading
-    assert push((), 1, "Part I") == ("Part I",)
-    assert push(("Part I",), 1, "Part II") == ("Part II",)
-    assert push(("Part I",), 2, "1. Pensions") == ("Part I", "1. Pensions")
-    assert push(("Part I", "1. Pensions"), 3, "1.1 Amounts") == ("Part I", "1. Pensions", "1.1 Amounts")
-    assert push(("Part I", "1. Pensions", "1.1 Amounts"), 2, "2. Presents") == ("Part I", "2. Presents")
-    assert push(("Part I",), 3, "deep without a level 2") == ("Part I", "deep without a level 2")
+    assert push((), 1, "Part I") == ((1, "Part I"),)
+    assert push(((1, "Part I"),), 1, "Part II") == ((1, "Part II"),)
+    assert push(((1, "Part I"),), 2, "1. Pensions") == ((1, "Part I"), (2, "1. Pensions"))
+    assert push(((1, "Part I"), (2, "1. Pensions")), 3, "1.1 Amounts") == (
+        (1, "Part I"),
+        (2, "1. Pensions"),
+        (3, "1.1 Amounts"),
+    )
+    assert push(((1, "Part I"), (2, "1. Pensions"), (3, "1.1 Amounts")), 2, "2. Presents") == (
+        (1, "Part I"),
+        (2, "2. Presents"),
+    )
 
 
-def test_default_registry_passes_pdf_options_to_the_adapter(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_skipped_heading_levels_do_not_make_siblings_into_ancestors() -> None:
+    push = docling_source._push_heading
+    skipped = push(((1, "Part I"),), 3, "Income")
+    assert skipped == ((1, "Part I"), (3, "Income"))
+    assert push(skipped, 3, "Expenditure") == ((1, "Part I"), (3, "Expenditure"))
+    assert push(push((), 3, "Income"), 3, "Expenditure") == ((3, "Expenditure"),)
+
+
+def test_pdf_heading_paths_and_question_numbers_survive_conversion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    items = (
+        SimpleNamespace(label="section_header", text="Part I", level=1),
+        SimpleNamespace(label="section_header", text="Income", level=3),
+        SimpleNamespace(label="list_item", text="How much did you earn?", marker="8."),
+        SimpleNamespace(label="section_header", text="Expenditure", level=3),
+        SimpleNamespace(label="text", text="How much did you spend?"),
+    )
+    document = SimpleNamespace(pages={1: object()}, iterate_items=lambda: ((i, 0) for i in items))
+    _install_docling_result(monkeypatch, SimpleNamespace(document=document))
+    artifacts = tmp_path / "models"
+    artifacts.mkdir()
+
+    conversion = DoclingConverter(docling_source.PdfConversionOptions(ocr="never"))(
+        str(tmp_path / "questionnaire.pdf"), str(artifacts)
+    )
+
+    assert conversion.blocks[2].text == "8. How much did you earn?"
+    assert conversion.blocks[2].section_path == ("Part I", "Income")
+    assert conversion.blocks[4].section_path == ("Part I", "Expenditure")
+
+
+@pytest.mark.parametrize(
+    ("options", "message"),
+    [
+        (docling_source.PdfConversionOptions(ocr="never", table_mode="fast"), "TableFormer"),
+        (
+            docling_source.PdfConversionOptions(ocr="never", heading_levels=True),
+            "heading-hierarchy",
+        ),
+    ],
+)
+def test_pdf_options_report_missing_docling_stages(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    options: docling_source.PdfConversionOptions,
+    message: str,
+) -> None:
+    _install_docling_result(monkeypatch, SimpleNamespace(document=EmptyDoclingDocument(0)))
+    artifacts = tmp_path / "models"
+    artifacts.mkdir()
+
+    with pytest.raises(SourceDependencyError, match=message):
+        DoclingConverter(options)(str(tmp_path / "questionnaire.pdf"), str(artifacts))
+
+
+def test_default_registry_passes_pdf_options_to_the_adapter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from survey_scribe.sources.registry import SourceRegistry
 
     options = docling_source.PdfConversionOptions(ocr="auto", heading_levels=True)
