@@ -210,9 +210,48 @@ The PDF worker sets offline flags and blocks common Python socket calls during
 conversion. This is application-level protection, not an operating-system
 sandbox. Use process isolation and network policy for hostile documents.
 
-OCR is currently configured for English. A validated cache proves artifact
+OCR is configured for English by default. A validated cache proves artifact
 identity and offline availability; it does not prove recognition quality for a
 new document, language, scan condition, or layout.
+
+### PDF conversion options
+
+The defaults above are Survey Scribe's established behaviour: full-page OCR of
+every page, flat section headings, body text only. `PdfConversionOptions`
+loosens one choice at a time for a caller that knows its documents; an unset
+option keeps the default.
+
+```python
+from survey_scribe.sources.docling import PdfConversionOptions
+from survey_scribe.sources.registry import SourceRegistry
+
+registry = SourceRegistry.default(
+    pdf_options=PdfConversionOptions(
+        ocr="never",            # the text layer alone: any script verbatim, no OCR cache needed
+        heading_levels=True,    # section_path carries Part I > 1. > 1.1 instead of the last heading
+        include_furniture=True, # a section title printed at the top of a page is kept
+    )
+)
+```
+
+| option | default | meaning |
+|---|---|---|
+| `ocr` | `"always"` | `"always"` OCRs every page; `"auto"` keeps the text layer and OCRs only pages without one; `"never"` reads the text layer alone (born-digital PDFs in any script, no EasyOCR artifacts required) |
+| `ocr_languages` | `("en",)` | OCR currently supports English only; other recognition languages need approved language-specific model artifacts and are rejected when OCR is enabled. `ocr="never"` can read a text layer in any script. |
+| `heading_levels` | `False` | infer heading depth from bookmarks, numbering and font style (Docling's heading-hierarchy stage); `section_path` then lists the ancestors |
+| `max_heading_level` | `6` | the deepest inferred level |
+| `include_furniture` | `False` | keep page headers and footers; the layout model files a page-top section title as a page header |
+| `table_mode` | `"accurate"` | TableFormer `"accurate"` or `"fast"` |
+
+The same options are read from the environment by `SourceRegistry.default()`
+when no `pdf_options` are passed: `SURVEY_SCRIBE_PDF_OCR`,
+`SURVEY_SCRIBE_PDF_OCR_LANGUAGES` (comma-separated),
+`SURVEY_SCRIBE_PDF_HEADING_LEVELS`, `SURVEY_SCRIBE_PDF_MAX_HEADING_LEVEL`,
+`SURVEY_SCRIBE_PDF_INCLUDE_FURNITURE`, `SURVEY_SCRIBE_PDF_TABLE_MODE`.
+
+With `ocr="never"` the artifacts directory holds Docling's layout and table
+models only (`docling-tools models download layout tableformer -o <dir>`); with
+OCR enabled it also holds the approved EasyOCR archives described above.
 
 ## XLSX safety
 

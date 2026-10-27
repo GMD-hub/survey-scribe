@@ -115,12 +115,35 @@ def test_chunking_preserves_preamble_short_content_table_and_stable_order() -> N
 
 
 def test_overlap_provenance_is_explicit_and_deterministic() -> None:
-    first = chunk_document(_document(), max_tokens=20, overlap_tokens=2, estimator=WordEstimator())
-    second = chunk_document(_document(), max_tokens=20, overlap_tokens=2, estimator=WordEstimator())
+    # 16 words: preamble + short content + the table fit, the closing note spills into a second chunk
+    first = chunk_document(_document(), max_tokens=16, overlap_tokens=2, estimator=WordEstimator())
+    second = chunk_document(_document(), max_tokens=16, overlap_tokens=2, estimator=WordEstimator())
 
     assert first == second
+    assert len(first.chunks) == 2
     assert any(chunk.overlap_block_ids for chunk in first.chunks[1:])
     assert all(set(chunk.overlap_block_ids).issubset(chunk.block_ids) for chunk in first.chunks)
+
+
+def test_a_table_stays_with_the_text_above_it_when_it_fits() -> None:
+    """A questionnaire grid answers the question printed above it; a chunk holding the grid alone
+    loses that. The table joins the running chunk while the budget allows and is never split."""
+    result = chunk_document(_document(), max_tokens=20, overlap_tokens=0, estimator=WordEstimator())
+
+    assert len(result.chunks) == 1
+    assert result.chunks[0].block_ids == (
+        "block-000001",
+        "block-000002",
+        "block-000003",
+        "block-000004",
+    )
+
+    tight = chunk_document(_document(), max_tokens=12, overlap_tokens=0, estimator=WordEstimator())
+    assert [chunk.block_ids for chunk in tight.chunks] == [
+        ("block-000001", "block-000002"),
+        ("block-000003",),
+        ("block-000004",),
+    ]
 
 
 def test_repeated_row_inventory_tracks_each_actual_row_origin() -> None:

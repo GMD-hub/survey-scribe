@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from survey_scribe.models.routing import RoutingSourceBinding
     from survey_scribe.models.svis import SurveySVIS
     from survey_scribe.routing.native import NativeRoutingSemantics
+    from survey_scribe.sources.docling import PdfConversionOptions
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,9 +125,18 @@ class SourceRegistry:
         """
         self._adapters = {suffix.lower(): adapter for suffix, adapter in adapters.items()}
 
+    def supported_suffixes(self) -> frozenset[str]:
+        """Return the lower-case file suffixes this registry converts."""
+        return frozenset(self._adapters)
+
     @classmethod
-    def default(cls) -> SourceRegistry:
+    def default(cls, *, pdf_options: PdfConversionOptions | None = None) -> SourceRegistry:
         """Create the verified Tier 1 registry without importing optional SDKs.
+
+        Args:
+            pdf_options: How the PDF adapter reads a document. ``None`` reads the
+                ``SURVEY_SCRIBE_PDF_*`` environment variables, which leave the
+                established defaults in place when unset.
 
         Returns:
             A registry for PDF, DOCX, XLSX, CSV, HTML, Markdown, and text files.
@@ -136,14 +146,16 @@ class SourceRegistry:
             DocxAdapter,
             HtmlAdapter,
             MarkdownAdapter,
+            PdfConversionOptions,
             TextAdapter,
         )
         from survey_scribe.sources.tabular import CsvAdapter
         from survey_scribe.sources.xlsform import XlsFormAdapter
 
+        options = pdf_options or PdfConversionOptions.from_environment()
         return cls(
             {
-                ".pdf": DoclingPdfAdapter(),
+                ".pdf": DoclingPdfAdapter(options=options),
                 ".docx": DocxAdapter(),
                 ".xlsx": XlsFormAdapter(),
                 ".csv": CsvAdapter(),

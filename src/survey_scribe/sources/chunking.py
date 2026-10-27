@@ -245,13 +245,9 @@ def _group_parts(
     current_tokens = 0
     for part in parts:
         part_tokens = estimator.estimate(part.text)
-        if part.block.kind == "table":
-            if current:
-                groups.append(tuple(current))
-                current = []
-                current_tokens = 0
-            groups.append((part,))
-            continue
+        # A table is never split, but it is not isolated either: the text printed above a grid is
+        # the question it answers, and a reader shown the grid alone cannot know that. The table
+        # joins the current group when it fits the budget and opens a new one only when it does not.
         separator_tokens = estimator.estimate("\n\n") if current else 0
         if current and current_tokens + separator_tokens + part_tokens > max_tokens:
             groups.append(tuple(current))
