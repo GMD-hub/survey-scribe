@@ -101,8 +101,9 @@ bundle root.
 Use the facade for sources that need model-assisted structured extraction:
 
 The PDF example needs both the selected provider extra and the `pdf` extra, plus
-a validated local OCR artifact directory. Use DOCX or text to test provider
-configuration without OCR.
+the local Docling artifacts directory. The directory needs the approved OCR
+artifacts only when a page needs OCR, such as a scanned page. Use DOCX or text
+to test provider configuration without the Docling models.
 
 ```python
 from pathlib import Path

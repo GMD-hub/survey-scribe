@@ -31,7 +31,7 @@ from survey_scribe.sources.base import (
     SourceTable,
     render_table,
 )
-from survey_scribe.sources.chunking import chunk_document
+from survey_scribe.sources.chunking import ChunkedDocument, chunk_document
 
 
 def _capabilities() -> ModelCapabilities:
@@ -786,3 +786,122 @@ async def test_pipeline_rejects_bad_identities_limits_and_conflicting_metadata()
         chunked.chunks[0],
     )
     assert '"sha256"' in oversized_inventory
+
+
+def _blocks_document(texts: tuple[str, ...]) -> SourceDocument:
+    return SourceDocument(
+        source_name="survey.pdf",
+        media_type="application/pdf",
+        blocks=tuple(
+            SourceBlock(
+                id=f"block-{index:06d}",
+                order=index,
+                kind="text",
+                text=text,
+                provenance=SourceProvenance(source_name="survey.pdf", page=1 + index // 40),
+            )
+            for index, text in enumerate(texts)
+        ),
+        snapshot_sha256="e" * 64,
+    )
+
+
+def _first_chunking(
+    document: SourceDocument, config: PipelineConfig, monkeypatch: pytest.MonkeyPatch
+) -> tuple[DeterministicFakeProvider, int, dict[str, object], ChunkedDocument, ChunkedDocument]:
+    """Run the pipeline chunking and return the chunking that the first call made."""
+    calls: list[tuple[dict[str, object], ChunkedDocument]] = []
+
+    def recording(document: SourceDocument, **kwargs: object) -> ChunkedDocument:
+        result = chunk_document(document, **kwargs)  # type: ignore[arg-type]
+        calls.append((kwargs, result))
+        return result
+
+    monkeypatch.setattr(pipeline_module, "chunk_document", recording)
+    provider = DeterministicFakeProvider(capabilities=_capabilities())
+    chunked = ExtractionPipeline(provider, config=config)._chunk_document(document)
+    limit = min(config.max_request_tokens, provider.max_input_tokens)
+    assert len(calls) == 1
+    kwargs, first = calls[0]
+    return provider, limit, kwargs, first, chunked
+
+
+def _request_tokens(provider: DeterministicFakeProvider, chunked: ChunkedDocument) -> list[int]:
+    return [
+        provider.estimate_tokens(pipeline_module._variable_messages(chunked, chunk))
+        for chunk in chunked.chunks
+    ]
+
+
+def _plain_chunking(document: SourceDocument, kwargs: dict[str, object]) -> ChunkedDocument:
+    plain = {key: value for key, value in kwargs.items() if key != "part_cost"}
+    return chunk_document(document, **plain)  # type: ignore[arg-type]
+
+
+def test_first_chunking_of_tiny_ocr_blocks_fits_every_variables_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 700 invented OCR lines of 41 characters each. The id and the label of each part cost
+    # more than its text, so a chunk filled by plain text alone overflows the request.
+    texts = tuple(f"L{index:04d} tick one box: yes / no / not known." for index in range(700))
+    assert {len(text) for text in texts} == {41}
+    document = _blocks_document(texts)
+    config = PipelineConfig(max_request_tokens=8_000, overlap_tokens=500)
+
+    provider, limit, kwargs, first, chunked = _first_chunking(document, config, monkeypatch)
+
+    assert "part_cost" in kwargs
+    assert chunked is first
+    assert max(_request_tokens(provider, first)) <= limit
+    assert len(first.chunks) > 1
+    assert any(chunk.overlap_part_ids for chunk in first.chunks[1:])
+    new_parts = [
+        part for chunk in first.chunks for part in chunk.parts if part.id in chunk.new_part_ids
+    ]
+    assert tuple(part.text for part in new_parts) == texts
+    plain = _plain_chunking(document, kwargs)
+    assert max(_request_tokens(provider, plain)) > limit
+
+
+def test_first_chunking_of_paragraph_blocks_fits_every_variables_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 60 invented paragraphs of about 600 characters each.
+    sentence = "The interviewer reads the question and records one answer. "
+    texts = tuple(f"Paragraph {index}. " + sentence * 10 for index in range(60))
+    document = _blocks_document(texts)
+    config = PipelineConfig(max_request_tokens=8_000, overlap_tokens=500)
+
+    provider, limit, kwargs, first, chunked = _first_chunking(document, config, monkeypatch)
+
+    assert chunked is first
+    assert max(_request_tokens(provider, first)) <= limit
+    assert len(first.chunks) > 1
+    plain = _plain_chunking(document, kwargs)
+    assert max(_request_tokens(provider, plain)) > limit
+
+
+def test_first_chunking_counts_non_ascii_text_after_json_escaping(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Invented words from Georgian and Thai letters. UTF-8 spends 3 bytes on each letter, but
+    # the ASCII-only JSON payload spends 6 characters (\u10d0) on each letter.
+    def word(start: int, seed: int) -> str:
+        return "".join(chr(start + (seed * 7 + step * 3) % 30) for step in range(6))
+
+    texts = tuple(
+        " ".join([word(0x10D0, index), word(0x0E01, index), word(0x10D0, index + 1)])
+        for index in range(300)
+    )
+    document = _blocks_document(texts)
+    config = PipelineConfig(max_request_tokens=8_000, overlap_tokens=500)
+
+    provider, limit, kwargs, first, chunked = _first_chunking(document, config, monkeypatch)
+
+    assert chunked is first
+    assert max(_request_tokens(provider, first)) <= limit
+    payload = pipeline_module._chunk_payload(first.chunks[0])
+    assert payload.isascii()
+    assert "\\u10" in payload
+    plain = _plain_chunking(document, kwargs)
+    assert max(_request_tokens(provider, plain)) > limit

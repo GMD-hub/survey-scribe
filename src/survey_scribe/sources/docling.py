@@ -13,11 +13,12 @@ from dataclasses import dataclass
 from html.parser import HTMLParser
 from importlib import import_module
 from io import BytesIO
+from math import isfinite
 from multiprocessing import get_context
 from multiprocessing.connection import wait
 from pathlib import Path
 from queue import Empty
-from typing import Any, Protocol, cast
+from typing import Any, Literal, NamedTuple, Protocol, TypeAlias, cast
 from xml.etree.ElementTree import Element
 
 from defusedxml import ElementTree
@@ -112,14 +113,73 @@ class PdfConversionBlock:
             raise ValueError("PDF block page must be its first provenance page")
 
 
+PdfPageStatus: TypeAlias = Literal["blank", "machine_readable", "needs_ocr", "unreadable"]
+_PDF_PAGE_STATUSES: tuple[PdfPageStatus, ...] = (
+    "blank",
+    "machine_readable",
+    "needs_ocr",
+    "unreadable",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class PdfPage:
+    """One physical PDF page as the page check measured it, before any Docling read.
+
+    Attributes:
+        number: the physical page number, from 1.
+        status: ``"blank"`` (too little ink and text to hold content, so no read),
+            ``"machine_readable"`` (a usable text layer), ``"needs_ocr"`` (too little text, or
+            one image over half of the page) or ``"unreadable"`` (the page does not load).
+        characters: the visible characters in the text layer (letters, digits, punctuation, no
+            spaces); 0 for an unreadable page.
+        image_share: the share of the page under its largest image, from 0 to 1.
+        ink_share: the share of dark pixels in a 72 dpi grayscale render of the page, from 0
+            to 1.
+    """
+
+    number: int
+    status: PdfPageStatus
+    characters: int = 0
+    image_share: float = 0.0
+    ink_share: float = 0.0
+
+    def __post_init__(self) -> None:
+        if isinstance(self.number, bool) or not isinstance(self.number, int) or self.number < 1:
+            raise ValueError("PDF page number must be a positive integer")
+        if self.status not in _PDF_PAGE_STATUSES:
+            raise ValueError(
+                f"PDF page status must be one of {_PDF_PAGE_STATUSES}, not {self.status!r}"
+            )
+        if (
+            isinstance(self.characters, bool)
+            or not isinstance(self.characters, int)
+            or self.characters < 0
+        ):
+            raise ValueError("PDF page characters must be a non-negative integer")
+        for name in ("image_share", "ink_share"):
+            value = getattr(self, name)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, int | float)
+                or not isfinite(value)
+                or not 0 <= value <= 1
+            ):
+                raise ValueError(f"PDF page {name} must be a number from 0 to 1")
+            object.__setattr__(self, name, float(value))
+        if self.status == "unreadable" and (self.characters or self.image_share or self.ink_share):
+            raise ValueError("an unreadable PDF page has no measurements")
+
+
 @dataclass(frozen=True, slots=True)
 class PdfConversion:
-    """Serializable PDF conversion result with physical page count."""
+    """Serializable PDF conversion result with physical page count and the page check."""
 
     page_count: int
     blocks: tuple[PdfConversionBlock, ...]
     coverage: SourceCoverage | None = None
     diagnostics: tuple[SourceDiagnostic, ...] = ()
+    pages: tuple[PdfPage, ...] = ()
 
 
 class PdfConverter(Protocol):
@@ -133,20 +193,64 @@ class PdfConverter(Protocol):
 _OCR_MODES = ("always", "auto", "never")
 _TABLE_MODES = ("accurate", "fast")
 _PDF_ENV_PREFIX = "SURVEY_SCRIBE_PDF_"
+# A scanned page can still carry a short text stamp, such as a page number or a scanner
+# mark. A page of questions holds hundreds of characters. A page with fewer visible
+# characters than this limit has no usable text layer and gets OCR in the "auto" mode.
+_MIN_TEXT_LAYER_CHARS = 32
+# A stamp can also be longer than that limit. A scanned page is one image over the whole
+# page, but a logo or a figure on a page of questions is much smaller. A page where one
+# image covers this share of the page or more also gets OCR in the "auto" mode.
+_MIN_SCAN_IMAGE_SHARE = 0.5
+# The page check looks for ink in a grayscale render at this scale (72 dpi). At 36 dpi the thin
+# strokes of light text and of a faded scan blend into the paper, and such a page had no ink.
+_INK_RENDER_SCALE = 1.0
+# A pixel with a gray value under this level (0 is black, 255 is white) is ink. The level sits
+# close to white, so light text and a faded scan count: pure yellow renders near gray 227. Paper
+# tone and light scanner noise sit above it: scans of a white sheet with noise from 230 to 255,
+# or around 240 to 248, have almost no ink. Text at this level or lighter, such as the PDF gray
+# 0.9, has no ink. A gray sheet near gray 236, or a white scan with specks or heavy noise, can
+# have ink. Such a page then gets an OCR read that finds no text.
+_INK_GRAY_LEVEL = 230
+_LIGHT_GRAY_VALUES = bytes(range(_INK_GRAY_LEVEL, 256))
+# A page is blank when its ink share is under this limit and its text layer holds fewer than
+# _MIN_TEXT_LAYER_CHARS visible characters. A page with a usable text layer is never blank,
+# because its text can be too light or invisible for the render. The limit is about 58 dark
+# pixels on a letter page. Measured at the scale and level above on made-up letter pages:
+# - blank: an empty page and 14 scans of a white sheet with light noise measured 0 to 0.000014,
+#   and one such scan with 20 dark specks 0.000056; a page with only a one-digit page number,
+#   9 to 12 points, measured 0.000025 to 0.000087.
+# - content: a short line of text measured 0.000155 (19 characters in yellow) or more; a scan
+#   of one line of text at gray 225 on paper at 250 measured 0.000365 or more; a faded scanned
+#   page at gray 225 measured 0.0014 or more. The 19 pages of a born-digital questionnaire
+#   measured 0.024 to 0.161.
+# The limit sits 1.38 times over the darkest blank page and 1.29 times under the lightest line
+# of text. Ink cannot tell a page number from a short word: a page with only a page number of
+# two or three digits, or with only one short word, measured 0.000047 to 0.00026 and falls on
+# either side of the limit.
+_MAX_BLANK_INK_SHARE = 0.00012
+# The image check maps an image in a form XObject to the page through each form around it.
+# It looks into forms nested this deep, as far as the earlier check did.
+_MAX_FORM_DEPTH = 2
 
 
 @dataclass(frozen=True, slots=True)
 class PdfConversionOptions:
     """How the local Docling pipeline reads a PDF.
 
-    The defaults are Survey Scribe's established behaviour: full-page English OCR of every page,
-    flat section headings, body text only. Each field loosens one of those choices for a caller
-    that knows its documents; nothing changes for one that does not.
+    The defaults read the text layer of each page and run English OCR only on a page that needs
+    it. Section headings stay flat and the read keeps body text only. Each field changes one of
+    those choices for a caller that knows its documents.
+
+    A page check runs before the read and gives each page a status (see ``PdfPage``). A blank
+    page and a page that does not load get no read in any mode.
 
     Attributes:
-        ocr: ``"always"`` runs OCR over every page (the text layer is ignored); ``"auto"`` keeps
-            the text layer and runs OCR only where a page has none; ``"never"`` reads the text
-            layer alone, needs no OCR artifacts, and keeps any script the PDF carries verbatim.
+        ocr: ``"auto"`` reads the text layer of a machine-readable page and runs OCR on a page
+            that needs it, in the Docling default mode: the text layer of the page stays and OCR
+            reads the areas that it does not cover. A PDF with no page for OCR needs no OCR
+            artifacts. ``"always"`` runs full-page OCR on every page that is not blank (the
+            text layer is ignored); ``"never"`` reads the text layer alone, needs no OCR
+            artifacts, and keeps any script the PDF carries verbatim.
         ocr_languages: EasyOCR language codes. OCR currently supports only English because the
             approved model snapshot contains only the English recognition model.
         heading_levels: infer heading depth (bookmarks, numbering, font style) instead of
@@ -157,7 +261,7 @@ class PdfConversionOptions:
         table_mode: TableFormer ``"accurate"`` (slower) or ``"fast"``.
     """
 
-    ocr: str = "always"
+    ocr: str = "auto"
     ocr_languages: tuple[str, ...] = ("en",)
     heading_levels: bool = False
     max_heading_level: int = 6
@@ -250,7 +354,7 @@ def _push_heading(
 
 
 class DoclingConverter:
-    """Lazy Docling converter configured for local PDFium and, by default, full-page OCR."""
+    """Lazy local Docling converter that, by default, runs OCR only on pages that need it."""
 
     def __init__(self, options: PdfConversionOptions | None = None) -> None:
         self.options = options or PdfConversionOptions()
@@ -259,162 +363,427 @@ class DoclingConverter:
         options = self.options
         if artifacts_path is None:
             raise SourceDependencyError(
-                "PDF OCR artifacts are not configured; set DOCLING_ARTIFACTS_PATH"
+                "PDF Docling artifacts are not configured; set DOCLING_ARTIFACTS_PATH"
             )
-        if options.ocr == "never":
-            # the layout and table models only: no OCR archive to validate
-            try:
-                artifact_root = Path(artifacts_path).resolve(strict=True)
-            except OSError:
-                raise SourceDependencyError(
-                    "Configured Docling artifacts directory does not exist"
-                ) from None
-            if not artifact_root.is_dir():
-                raise SourceDependencyError("Configured Docling artifacts path is not a directory")
-        else:
-            try:
-                artifact_root = resolve_ocr_cache(Path(artifacts_path))
-            except OcrCacheError as error:
-                raise SourceDependencyError(str(error)) from None
+        # Docling reads its layout and table models from this directory in every mode.
         try:
-            backend_module = import_module("docling.backend.pypdfium2_backend")
-            base_module = import_module("docling.datamodel.base_models")
-            pipeline_module = import_module("docling.datamodel.pipeline_options")
-            converter_module = import_module("docling.document_converter")
+            artifact_root = Path(artifacts_path).resolve(strict=True)
+        except OSError:
+            raise SourceDependencyError(
+                "Configured Docling artifacts directory does not exist"
+            ) from None
+        if not artifact_root.is_dir():
+            raise SourceDependencyError("Configured Docling artifacts path is not a directory")
+        pages = _pdf_pages(path)
+        text_pages, ocr_pages = _reading_plan(pages, options.ocr)
+        ocr_root: Path | None = None
+        if ocr_pages:
+            try:
+                ocr_root = resolve_ocr_cache(Path(artifacts_path))
+            except OcrCacheError as error:
+                reason = (
+                    'the OCR mode is "always"'
+                    if options.ocr == "always"
+                    else "too little text or an image over half the page"
+                )
+                raise SourceDependencyError(
+                    f"OCR is required for PDF {_page_list(ocr_pages)} ({reason}). {error}"
+                ) from None
+        try:
+            modules = _DoclingModules(
+                backend=import_module("docling.backend.pypdfium2_backend"),
+                base=import_module("docling.datamodel.base_models"),
+                pipeline=import_module("docling.datamodel.pipeline_options"),
+                converter=import_module("docling.document_converter"),
+            )
         except ModuleNotFoundError as error:
             raise SourceDependencyError(
                 "PDF conversion requires the optional 'pdf' dependencies"
             ) from error
 
+        by_number = {page.number: page for page in pages}
+        results: list[tuple[Any, tuple[int, ...]]] = []
+        text_items: list[_DoclingItem] = []
+        ocr_items: dict[int, list[_DoclingItem]] = {}
         snapshot: AbstractContextManager[Path | None] = (
-            validated_ocr_model_snapshot(artifact_root)
-            if options.ocr != "never"
-            else nullcontext(None)
+            validated_ocr_model_snapshot(ocr_root) if ocr_root is not None else nullcontext(None)
         )
+        # Each read returns its failed pages instead of raising. A read of one page with a
+        # failed page has the status "failure", and that page alone must fail, not the file.
         with snapshot as model_root:
-            pipeline_options = pipeline_module.PdfPipelineOptions()
-            pipeline_options.do_ocr = options.ocr != "never"
-            pipeline_options.do_table_structure = True
-            pipeline_options.enable_remote_services = False
-            pipeline_options.artifacts_path = artifact_root
-            if pipeline_options.do_ocr:
-                pipeline_options.ocr_options = pipeline_module.EasyOcrOptions(
-                    lang=list(options.ocr_languages),
-                    force_full_page_ocr=options.ocr == "always",
-                    model_storage_directory=str(model_root),
-                    download_enabled=False,
+            if text_pages:
+                # One read of the whole file with no OCR. Only the items on a text-layer page
+                # stay: OCR reads the other pages, and a blank page gets no read.
+                converter = _docling_document_converter(modules, options, artifact_root, None)
+                result = converter.convert(path, raises_on_error=False)
+                results.append((result, text_pages))
+                text_items = _docling_items(result, options, frozenset(text_pages))
+            if ocr_root is not None:
+                # One OCR converter for all of the OCR pages, so Docling loads the OCR models
+                # once. Only the "always" mode replaces the text layer with full-page OCR.
+                ocr_converter = _docling_document_converter(
+                    modules, options, ocr_root, model_root, full_page=options.ocr == "always"
                 )
-            if options.table_mode != "accurate":
-                mode = getattr(pipeline_module, "TableFormerMode", None)
-                if mode is None:
-                    raise SourceDependencyError("Installed Docling has no TableFormer mode option")
-                pipeline_options.table_structure_options.mode = mode[options.table_mode.upper()]
-            if options.heading_levels:
-                hierarchy = getattr(pipeline_module, "HeadingHierarchyOptions", None)
-                if hierarchy is None:
-                    raise SourceDependencyError(
-                        "Installed Docling has no heading-hierarchy stage; upgrade docling or "
-                        "leave heading_levels off"
+                for page in ocr_pages:
+                    result = ocr_converter.convert(
+                        path, page_range=(page, page), raises_on_error=False
                     )
-                pipeline_options.generate_parsed_pages = True
-                pipeline_options.heading_hierarchy_options = hierarchy(
-                    enabled=True, max_level=options.max_heading_level
-                )
-            format_option = converter_module.PdfFormatOption(
-                pipeline_options=pipeline_options,
-                backend=backend_module.PyPdfiumDocumentBackend,
-            )
-            converter = converter_module.DocumentConverter(
-                format_options={base_module.InputFormat.PDF: format_option}
-            )
-            result = converter.convert(path)
-        document = result.document
-        blocks: list[PdfConversionBlock] = []
-        configured_max_cells = os.environ.get("SURVEY_SCRIBE_PDF_MAX_CELLS")
-        max_cells = int(configured_max_cells) if configured_max_cells is not None else None
-        table_cells = 0
-        headings: tuple[tuple[int, str], ...] = ()
-        current_section: tuple[str, ...] = ()
-        if options.include_furniture:
-            layers = import_module("docling_core.types.doc").ContentLayer
-            items = document.iterate_items(included_content_layers={layers.BODY, layers.FURNITURE})
-        else:
-            items = document.iterate_items()
-        for item, _depth in items:
-            pages = _docling_pages(item)
-            page = pages[0] if pages else None
-            label = str(getattr(item, "label", "")).lower()
-            if "table" in label:
-                remaining_cells = None if max_cells is None else max(max_cells - table_cells, 0)
-                rows = _docling_table_rows(
-                    item,
-                    document,
-                    max_cells=remaining_cells,
-                )
-                if rows:
-                    if max_cells is not None:
-                        table_cells = _add_table_cells(table_cells, rows, max_cells)
-                    blocks.append(
-                        PdfConversionBlock(
-                            text=render_table(rows),
-                            page=page,
-                            pages=pages,
-                            table_rows=rows,
-                            section_path=current_section,
-                        )
-                    )
-                continue
-            text = _normalize_text(str(getattr(item, "text", "")))
-            marker = _normalize_text(str(getattr(item, "marker", "") or ""))
-            if text and marker and "list" in label:
-                # a numbered question is a list item to the layout model and its number is the
-                # marker, not the text: keep it, a data column is often named by it (q8, s4q8)
-                text = f"{marker} {text}"
-            if text:
-                if any(name in label for name in ("section", "title", "heading")):
-                    headings = _push_heading(headings, getattr(item, "level", 1) or 1, text)
-                    current_section = tuple(title for _level, title in headings)
-                blocks.append(
-                    PdfConversionBlock(
-                        text=text,
-                        page=page,
-                        pages=pages,
-                        section_path=current_section,
-                    )
-                )
-        page_count = _docling_page_count(result, document, blocks)
-        failed_pages = _docling_failed_pages(result)
-        if failed_pages and (page_count == 0 or failed_pages[-1] > page_count):
-            raise SourceConversionError("PDF conversion returned invalid failed-page metadata")
-        if _docling_conversion_incomplete(result) and not failed_pages:
-            raise SourceConversionError("PDF conversion was incomplete without page coverage")
+                    results.append((result, (page,)))
+                    ocr_items[page] = _docling_items(result, options, frozenset((page,)))
+        blocks = _pdf_blocks(_merge_page_items(text_items, ocr_items))
+
+        page_count = len(pages)
+        failed = {page.number for page in pages if page.status == "unreadable"}
+        for result, read_pages in results:
+            result_page_count = _docling_page_count(result, result.document, [])
+            result_failed = _docling_failed_pages(result)
+            if result_failed and (result_page_count == 0 or result_failed[-1] > result_page_count):
+                raise SourceConversionError("PDF conversion returned invalid failed-page metadata")
+            if _docling_conversion_incomplete(result) and not result_failed:
+                raise SourceConversionError("PDF conversion was incomplete without page coverage")
+            # Docling gives the status "failure" when every page of a read fails, and also when
+            # its pipeline stops after the page loop. In the second case the read lost pages
+            # that its errors do not name, so the conversion stops, as with raises_on_error.
+            if _docling_read_failed(result) and not set(read_pages).issubset(result_failed):
+                raise SourceConversionError("PDF conversion failed on pages that it does not name")
+            page_count = max(page_count, result_page_count)
+            # A failure on a page that this read did not keep does not count: another read
+            # covers that page, or the page is blank.
+            failed.update(set(result_failed).intersection(read_pages))
+        page_count = max([page_count, *(page for block in blocks for page in block.pages)])
+        if page_count != len(pages):
+            raise SourceConversionError("PDF conversion found more pages than the page check")
         coverage = None
         diagnostics: tuple[SourceDiagnostic, ...] = ()
         if page_count:
-            failed = set(failed_pages)
+            failed_pages = tuple(sorted(failed))
+            blank_pages = tuple(page.number for page in pages if page.status == "blank")
             coverage = SourceCoverage(
                 unit="page",
                 total_units=page_count,
                 converted_units=tuple(
-                    page for page in range(1, page_count + 1) if page not in failed
+                    page
+                    for page in range(1, page_count + 1)
+                    if page not in failed and page not in blank_pages
                 ),
                 failed_units=failed_pages,
+                blank_units=blank_pages,
             )
-            diagnostics = tuple(
-                SourceDiagnostic(
-                    code="PDF_PAGE_CONVERSION_FAILED",
-                    message="PDF page conversion failed",
-                    unit="page",
-                    unit_index=page,
+            diagnostics = (
+                tuple(
+                    SourceDiagnostic(
+                        code="PDF_PAGE_OCR",
+                        message=_ocr_message(by_number[page], options.ocr),
+                        severity="warning",
+                        unit="page",
+                        unit_index=page,
+                    )
+                    for page in ocr_pages
+                    if page not in failed
                 )
-                for page in failed_pages
+                + tuple(
+                    SourceDiagnostic(
+                        code="PDF_PAGE_TEXT_INCOMPLETE",
+                        message="The text of this PDF page can be incomplete because OCR is "
+                        f"off and {_ocr_reason(by_number[page])}",
+                        severity="warning",
+                        unit="page",
+                        unit_index=page,
+                    )
+                    for page in text_pages
+                    if by_number[page].status == "needs_ocr" and page not in failed
+                )
+                + tuple(
+                    SourceDiagnostic(
+                        code="PDF_PAGE_CONVERSION_FAILED",
+                        message="PDF page conversion failed",
+                        unit="page",
+                        unit_index=page,
+                    )
+                    for page in failed_pages
+                )
             )
         return PdfConversion(
             page_count=page_count,
             blocks=tuple(blocks),
             coverage=coverage,
             diagnostics=diagnostics,
+            pages=pages,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class _DoclingModules:
+    """The Docling modules that one conversion imports once and uses for each read."""
+
+    backend: Any
+    base: Any
+    pipeline: Any
+    converter: Any
+
+
+class _DoclingItem(NamedTuple):
+    """One Docling item kept from a read, and the page that places it among the other items.
+
+    A part of an item that crosses a page break has its own ``text``, the text of the item on
+    one page. Only the first part of an item keeps the list ``marker``.
+    """
+
+    item: Any
+    document: Any
+    pages: tuple[int, ...]
+    order_page: int | None
+    text: str | None = None
+    marker: bool = True
+
+
+def _reading_plan(pages: tuple[PdfPage, ...], ocr: str) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    """The page numbers that the text layer reads and the page numbers that OCR reads.
+
+    A blank page and a page that does not load are on neither list, so they get no read in any
+    mode. ``"auto"`` sends a page that needs OCR to OCR, ``"always"`` sends every other page to
+    OCR, and ``"never"`` sends every other page to the text layer.
+    """
+    readable = tuple(page for page in pages if page.status in ("machine_readable", "needs_ocr"))
+    if ocr == "always":
+        return (), tuple(page.number for page in readable)
+    if ocr == "never":
+        return tuple(page.number for page in readable), ()
+    return (
+        tuple(page.number for page in readable if page.status == "machine_readable"),
+        tuple(page.number for page in readable if page.status == "needs_ocr"),
+    )
+
+
+def _ocr_reason(page: PdfPage) -> str:
+    if page.status != "needs_ocr":
+        return 'the OCR mode is "always"'
+    if page.image_share >= _MIN_SCAN_IMAGE_SHARE:
+        return "one image covers half of the page or more"
+    return f"the text layer has fewer than {_MIN_TEXT_LAYER_CHARS} visible characters"
+
+
+def _ocr_message(page: PdfPage, ocr: str) -> str:
+    """The ``PDF_PAGE_OCR`` message. Outside the ``"always"`` mode OCR keeps the text layer of
+    the page, so the message says so when the page has one."""
+    if ocr == "always" or not page.characters:
+        return f"OCR read this PDF page because {_ocr_reason(page)}"
+    return (
+        f"OCR read the areas of this PDF page that have no text layer because "
+        f"{_ocr_reason(page)}, and the text layer of the page stays"
+    )
+
+
+def _docling_document_converter(
+    modules: _DoclingModules,
+    options: PdfConversionOptions,
+    artifact_root: Path,
+    model_root: Path | None,
+    *,
+    full_page: bool = True,
+) -> Any:
+    """A Docling converter for one kind of read: the text layer, or OCR when the validated
+    EasyOCR ``model_root`` is given. ``full_page`` OCR replaces the text layer; otherwise OCR
+    runs in the Docling default mode, which keeps the text layer and reads only the areas that
+    it does not cover."""
+    pipeline_module = modules.pipeline
+    pipeline_options = pipeline_module.PdfPipelineOptions()
+    pipeline_options.do_ocr = model_root is not None
+    pipeline_options.do_table_structure = True
+    pipeline_options.enable_remote_services = False
+    pipeline_options.artifacts_path = artifact_root
+    if model_root is not None:
+        # OcrMode.FULL_PAGE replaced force_full_page_ocr in later Docling releases; their
+        # default mode is the mode of force_full_page_ocr=False.
+        ocr_mode = getattr(pipeline_module, "OcrMode", None)
+        ocr_mode_options: dict[str, object] = {}
+        if ocr_mode is None:
+            ocr_mode_options = {"force_full_page_ocr": full_page}
+        elif full_page:
+            ocr_mode_options = {"mode": ocr_mode.FULL_PAGE}
+        pipeline_options.ocr_options = pipeline_module.EasyOcrOptions(
+            lang=list(options.ocr_languages),
+            **ocr_mode_options,
+            model_storage_directory=str(model_root),
+            download_enabled=False,
+        )
+    if options.table_mode != "accurate":
+        mode = getattr(pipeline_module, "TableFormerMode", None)
+        if mode is None:
+            raise SourceDependencyError("Installed Docling has no TableFormer mode option")
+        pipeline_options.table_structure_options.mode = mode[options.table_mode.upper()]
+    if options.heading_levels:
+        hierarchy = getattr(pipeline_module, "HeadingHierarchyOptions", None)
+        if hierarchy is None:
+            raise SourceDependencyError(
+                "Installed Docling has no heading-hierarchy stage; upgrade docling or "
+                "leave heading_levels off"
+            )
+        pipeline_options.generate_parsed_pages = True
+        pipeline_options.heading_hierarchy_options = hierarchy(
+            enabled=True, max_level=options.max_heading_level
+        )
+    format_option = modules.converter.PdfFormatOption(
+        pipeline_options=pipeline_options,
+        backend=modules.backend.PyPdfiumDocumentBackend,
+    )
+    return modules.converter.DocumentConverter(
+        format_options={modules.base.InputFormat.PDF: format_option}
+    )
+
+
+def _docling_items(
+    result: Any,
+    options: PdfConversionOptions,
+    keep: frozenset[int],
+) -> list[_DoclingItem]:
+    """The items of one Docling read, in reading order, that have a page on ``keep``.
+
+    Docling can join the text at the end of one page to the text at the top of a later page.
+    When such an item crosses a page that the read does not keep (a page that OCR reads, a
+    blank page or a page that does not load), the item is cut at its page breaks. Only the
+    parts on a page on ``keep`` stay, and each part takes its place by its own page. An item
+    that cannot be cut, such as a table, stays when any of its pages is on ``keep``, at its
+    first page on ``keep``. An item with no page stays where it is, as the single read before
+    the page check kept it.
+    """
+    document = result.document
+    if options.include_furniture:
+        layers = import_module("docling_core.types.doc").ContentLayer
+        items = document.iterate_items(included_content_layers={layers.BODY, layers.FURNITURE})
+    else:
+        items = document.iterate_items()
+    kept: list[_DoclingItem] = []
+    for item, _depth in items:
+        pages = _docling_pages(item)
+        if len(pages) > 1 and not keep.issuperset(range(pages[0], pages[-1] + 1)):
+            parts = _page_parts(item)
+            if parts:
+                kept.extend(
+                    _DoclingItem(item, document, (page,), page, text, marker=index == 0)
+                    for index, (page, text) in enumerate(parts)
+                    if page in keep
+                )
+                continue
+        kept_pages = [page for page in pages if page in keep]
+        if pages and not kept_pages:
+            continue
+        kept.append(_DoclingItem(item, document, pages, kept_pages[0] if kept_pages else None))
+    return kept
+
+
+def _page_parts(item: object) -> tuple[tuple[int, str], ...]:
+    """The text of an item cut at its page breaks: one ``(page, text)`` part for each page.
+
+    Each provenance entry gives a page and the character span of the item text on that page.
+    The result is empty for a table, and when a span is missing, out of order or outside the
+    text: Docling gives a wrong span when it joins the two halves of a hyphenated word.
+    """
+    text = getattr(item, "text", None)
+    if not isinstance(text, str) or "table" in str(getattr(item, "label", "")).lower():
+        return ()
+    parts: list[tuple[int, int, int]] = []
+    for origin in getattr(item, "prov", ()) or ():
+        page = getattr(origin, "page_no", None)
+        span = getattr(origin, "charspan", None)
+        if (
+            not isinstance(page, int)
+            or isinstance(page, bool)
+            or page < 1
+            or not isinstance(span, tuple | list)
+            or len(span) != 2
+            or not all(isinstance(value, int) and not isinstance(value, bool) for value in span)
+        ):
+            return ()
+        start, end = span
+        if not (parts[-1][2] if parts else 0) <= start <= end <= len(text):
+            return ()
+        if parts and page == parts[-1][0]:
+            parts[-1] = (page, parts[-1][1], end)
+        elif parts and page < parts[-1][0]:
+            return ()
+        else:
+            parts.append((page, start, end))
+    return tuple((page, text[start:end]) for page, start, end in parts)
+
+
+def _merge_page_items(
+    text_items: list[_DoclingItem],
+    ocr_items: Mapping[int, list[_DoclingItem]],
+) -> list[_DoclingItem]:
+    """The items of both reads in page order; the order inside a page does not change.
+
+    The items of an OCR page go before the first text-layer item that is placed on a later
+    page. The text-layer items keep the order of their read, so a file with no OCR page keeps
+    the order of the single read. This is not a sort by page: a text-layer item that the read
+    puts after an item of a later page stays there, as in the single read.
+    """
+    merged: list[_DoclingItem] = []
+    ocr_pages = sorted(ocr_items)
+    next_ocr = 0
+    for entry in text_items:
+        if entry.order_page is not None:
+            while next_ocr < len(ocr_pages) and ocr_pages[next_ocr] < entry.order_page:
+                merged.extend(ocr_items[ocr_pages[next_ocr]])
+                next_ocr += 1
+        merged.append(entry)
+    for page in ocr_pages[next_ocr:]:
+        merged.extend(ocr_items[page])
+    return merged
+
+
+def _pdf_blocks(entries: list[_DoclingItem]) -> list[PdfConversionBlock]:
+    """The blocks of the merged items in one walk, so the section headings and the table cell
+    limit carry across the pages of both reads."""
+    blocks: list[PdfConversionBlock] = []
+    configured_max_cells = os.environ.get("SURVEY_SCRIBE_PDF_MAX_CELLS")
+    max_cells = int(configured_max_cells) if configured_max_cells is not None else None
+    table_cells = 0
+    headings: tuple[tuple[int, str], ...] = ()
+    current_section: tuple[str, ...] = ()
+    for entry in entries:
+        item, document, pages = entry.item, entry.document, entry.pages
+        page = pages[0] if pages else None
+        label = str(getattr(item, "label", "")).lower()
+        if "table" in label:
+            remaining_cells = None if max_cells is None else max(max_cells - table_cells, 0)
+            rows = _docling_table_rows(
+                item,
+                document,
+                max_cells=remaining_cells,
+            )
+            if rows:
+                if max_cells is not None:
+                    table_cells = _add_table_cells(table_cells, rows, max_cells)
+                blocks.append(
+                    PdfConversionBlock(
+                        text=render_table(rows),
+                        page=page,
+                        pages=pages,
+                        table_rows=rows,
+                        section_path=current_section,
+                    )
+                )
+            continue
+        text = _normalize_text(str(getattr(item, "text", "")) if entry.text is None else entry.text)
+        marker = _normalize_text(str(getattr(item, "marker", "") or "")) if entry.marker else ""
+        if text and marker and "list" in label:
+            # a numbered question is a list item to the layout model and its number is the
+            # marker, not the text: keep it, a data column is often named by it (q8, s4q8)
+            text = f"{marker} {text}"
+        if text:
+            if any(name in label for name in ("section", "title", "heading")):
+                headings = _push_heading(headings, getattr(item, "level", 1) or 1, text)
+                current_section = tuple(title for _level, title in headings)
+            blocks.append(
+                PdfConversionBlock(
+                    text=text,
+                    page=page,
+                    pages=pages,
+                    section_path=current_section,
+                )
+            )
+    return blocks
 
 
 class DoclingPdfAdapter:
@@ -867,6 +1236,133 @@ def _bounded_process_cleanup(process: Any) -> None:
     process.join(timeout=0.5)
     if process.is_alive():
         raise SourceConversionError("PDF worker cleanup did not complete")
+
+
+def _pdf_pages(path: str) -> tuple[PdfPage, ...]:
+    """One ``PdfPage`` for each physical page, in order, with the status that decides its read.
+
+    The first rule that matches gives the status: a page that does not load is
+    ``"unreadable"``; a page with an ink share under ``_MAX_BLANK_INK_SHARE`` and fewer than
+    ``_MIN_TEXT_LAYER_CHARS`` visible characters is ``"blank"``; a page where one image covers
+    ``_MIN_SCAN_IMAGE_SHARE`` of the page or more, or with fewer than ``_MIN_TEXT_LAYER_CHARS``
+    visible characters, is ``"needs_ocr"``; any other page is ``"machine_readable"``.
+    """
+    try:
+        pdfium = import_module("pypdfium2")
+        pdfium_raw = import_module("pypdfium2.raw")
+    except ModuleNotFoundError as error:
+        raise SourceDependencyError(
+            "PDF conversion requires the optional 'pdf' dependencies"
+        ) from error
+    pages: list[PdfPage] = []
+    document = pdfium.PdfDocument(path)
+    try:
+        for index in range(len(document)):
+            try:
+                page = document[index]
+            except pdfium.PdfiumError:
+                pages.append(PdfPage(number=index + 1, status="unreadable"))
+                continue
+            try:
+                pages.append(_pdf_page(page, index + 1, pdfium, pdfium_raw))
+            except pdfium.PdfiumError:
+                # A page that loads but gives no text layer or no render cannot be read either.
+                pages.append(PdfPage(number=index + 1, status="unreadable"))
+            finally:
+                page.close()
+    finally:
+        document.close()
+    return tuple(pages)
+
+
+def _pdf_page(page: Any, number: int, pdfium: Any, pdfium_raw: Any) -> PdfPage:
+    textpage = page.get_textpage()
+    try:
+        text = textpage.get_text_bounded()
+    finally:
+        textpage.close()
+    characters = sum(1 for char in text if char.isprintable() and not char.isspace())
+    image_share = _largest_image_share(page, pdfium, pdfium_raw)
+    ink_share = _ink_share(page, pdfium_raw)
+    status: PdfPageStatus
+    if ink_share < _MAX_BLANK_INK_SHARE and characters < _MIN_TEXT_LAYER_CHARS:
+        status = "blank"
+    elif image_share >= _MIN_SCAN_IMAGE_SHARE or characters < _MIN_TEXT_LAYER_CHARS:
+        status = "needs_ocr"
+    else:
+        status = "machine_readable"
+    return PdfPage(
+        number=number,
+        status=status,
+        characters=characters,
+        image_share=image_share,
+        ink_share=ink_share,
+    )
+
+
+def _largest_image_share(page: Any, pdfium: Any, pdfium_raw: Any) -> float:
+    """The share of the page under its largest image, in page coordinates.
+
+    The box of an object in a form XObject is in the coordinates of that form, so the box goes
+    through the matrix of each form around it before it is compared with the page box.
+    """
+    page_left, page_bottom, page_right, page_top = page.get_bbox()
+    page_area = (page_right - page_left) * (page_top - page_bottom)
+    if page_area <= 0:
+        return 0.0
+    largest = 0.0
+    pending: list[tuple[Any, tuple[Any, ...]]] = [(None, ())]
+    while pending:
+        form, matrices = pending.pop()
+        for item in page.get_objects(max_depth=1, form=form):
+            if item.type == pdfium_raw.FPDF_PAGEOBJ_FORM:
+                if len(matrices) < _MAX_FORM_DEPTH:
+                    pending.append((item.raw, (*matrices, item.get_matrix())))
+                continue
+            if item.type != pdfium_raw.FPDF_PAGEOBJ_IMAGE:
+                continue
+            try:
+                left, bottom, right, top = item.get_pos()
+            except pdfium.PdfiumError:
+                continue
+            corners = ((left, bottom), (left, top), (right, bottom), (right, top))
+            for matrix in reversed(matrices):
+                corners = tuple(matrix.on_point(x, y) for x, y in corners)
+            width = min(max(x for x, _y in corners), page_right) - max(
+                min(x for x, _y in corners), page_left
+            )
+            height = min(max(y for _x, y in corners), page_top) - max(
+                min(y for _x, y in corners), page_bottom
+            )
+            if width > 0 and height > 0:
+                largest = max(largest, width * height / page_area)
+    return min(largest, 1.0)
+
+
+def _ink_share(page: Any, pdfium_raw: Any) -> float:
+    """The share of pixels darker than ``_INK_GRAY_LEVEL`` in a 72 dpi grayscale render."""
+    bitmap = page.render(
+        scale=_INK_RENDER_SCALE,
+        grayscale=True,
+        force_bitmap_format=pdfium_raw.FPDFBitmap_Gray,
+    )
+    try:
+        width, height, stride = bitmap.width, bitmap.height, bitmap.stride
+        pixels = bytes(bitmap.buffer)
+    finally:
+        bitmap.close()
+    if width < 1 or height < 1:
+        return 0.0
+    dark = sum(
+        len(pixels[row * stride : row * stride + width].translate(None, _LIGHT_GRAY_VALUES))
+        for row in range(height)
+    )
+    return dark / (width * height)
+
+
+def _page_list(pages: tuple[int, ...]) -> str:
+    numbers = ", ".join(str(page) for page in pages)
+    return f"page {numbers}" if len(pages) == 1 else f"pages {numbers}"
 
 
 def _pdf_preflight_worker(path: str, max_pages: int, output: Any) -> None:
@@ -1500,6 +1996,16 @@ def _docling_conversion_incomplete(result: object) -> bool:
     value = getattr(status, "value", status)
     normalized = str(value).lower()
     return any(marker in normalized for marker in ("partial", "failure", "failed", "error"))
+
+
+def _docling_read_failed(result: object) -> bool:
+    """Whether a read has a status that is not a success or a partial success. Docling raises
+    for such a read unless the call passes ``raises_on_error=False``."""
+    status = getattr(result, "status", None)
+    if status is None:
+        return False
+    normalized = str(getattr(status, "value", status)).lower()
+    return not any(marker in normalized for marker in ("success", "partial"))
 
 
 def _docling_table_markdown(item: object, document: object) -> str:

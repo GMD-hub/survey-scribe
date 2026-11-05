@@ -307,11 +307,19 @@ class ExtractionPipeline:
         if content_tokens < 1:
             raise ValueError("provider input limit cannot contain the extraction prompt")
         overlap_tokens = min(self._config.overlap_tokens, max(0, content_tokens - 1))
-        chunked = chunk_document(
-            document,
-            max_tokens=content_tokens,
-            overlap_tokens=overlap_tokens,
-        )
+        try:
+            chunked = chunk_document(
+                document,
+                max_tokens=content_tokens,
+                overlap_tokens=overlap_tokens,
+                part_cost=_variable_part_cost(self._provider),
+            )
+        except SourceLimitError:
+            chunked = chunk_document(
+                document,
+                max_tokens=content_tokens,
+                overlap_tokens=overlap_tokens,
+            )
 
         def fits(chunk: SourceChunk) -> bool:
             return self._provider.estimate_tokens(_variable_messages(chunked, chunk)) <= max_tokens
@@ -1274,17 +1282,45 @@ def _repeated_row_inventory(document: ChunkedDocument, chunk: SourceChunk) -> st
     return json.dumps(summary, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
 
 
+def _payload_entry(part: SourceChunkPart, *, overlap: bool) -> dict[str, object]:
+    """Return the JSON object of one part, as the variables request sends it."""
+    return {
+        "part_id": part.id,
+        "block_id": part.block_id,
+        "overlap": overlap,
+        "text": part.text,
+    }
+
+
+def _payload_json(value: object) -> str:
+    """Return the compact JSON text that the variables request uses."""
+    return json.dumps(value, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
+
+
 def _chunk_payload(chunk: SourceChunk) -> str:
-    parts = [
-        {
-            "part_id": part.id,
-            "block_id": part.block_id,
-            "overlap": part.id in chunk.overlap_part_ids,
-            "text": part.text,
-        }
-        for part in chunk.parts
-    ]
-    return json.dumps(parts, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
+    return _payload_json(
+        [_payload_entry(part, overlap=part.id in chunk.overlap_part_ids) for part in chunk.parts]
+    )
+
+
+def _variable_part_cost(provider: StructuredProvider) -> Callable[[SourceChunkPart], int]:
+    """Return a function that gives the token cost of one part.
+
+    A part is a whole block, or one partition of a block that exceeds the limit.
+    The cost includes the escaped text, the JSON label and the block id in
+    SOURCE_BLOCK_IDS.
+    """
+    baseline = provider.estimate_tokens((ProviderMessage(role="user", content=" "),))
+
+    def cost(part: SourceChunkPart) -> int:
+        # Count "overlap": false, the longer of the two values.
+        fragment = (
+            f"{_payload_json(_payload_entry(part, overlap=False))},{json.dumps(part.block_id)}, "
+        )
+        message = ProviderMessage(role="user", content=f" {fragment}")
+        return provider.estimate_tokens((message,)) - baseline
+
+    return cost
 
 
 def _variable_messages(

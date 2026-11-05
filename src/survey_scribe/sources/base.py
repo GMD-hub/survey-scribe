@@ -184,7 +184,11 @@ class SourceBlock(BaseModel):
 
 
 class SourceCoverage(BaseModel):
-    """Complete immutable accounting for physical source conversion units."""
+    """Complete immutable accounting for physical source conversion units.
+
+    Each unit is converted, failed, or blank. A blank unit holds no content to read, such as
+    an empty PDF page; it is missing from the blocks but it is not a failure.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -192,8 +196,9 @@ class SourceCoverage(BaseModel):
     total_units: int = Field(default=1, ge=1)
     converted_units: tuple[int, ...] = (1,)
     failed_units: tuple[int, ...] = ()
+    blank_units: tuple[int, ...] = ()
 
-    @field_validator("total_units", "converted_units", "failed_units", mode="before")
+    @field_validator("total_units", "converted_units", "failed_units", "blank_units", mode="before")
     @classmethod
     def reject_boolean_units(cls, value: object) -> object:
         """Reject Boolean unit values before Pydantic converts them to integers."""
@@ -206,21 +211,24 @@ class SourceCoverage(BaseModel):
     def validate_complete_accounting(self) -> SourceCoverage:
         converted = self.converted_units
         failed = self.failed_units
-        for label, units in (("converted", converted), ("failed", failed)):
+        blank = self.blank_units
+        for label, units in (("converted", converted), ("failed", failed), ("blank", blank)):
             if any(isinstance(unit, bool) or unit < 1 for unit in units):
                 raise ValueError(f"{label} units must be positive integers")
             if tuple(sorted(set(units))) != units:
                 raise ValueError(f"{label} units must be unique and ordered")
         if set(converted).intersection(failed):
             raise ValueError("converted and failed units must not overlap")
+        if set(blank).intersection((*converted, *failed)):
+            raise ValueError("blank units must not overlap converted or failed units")
         expected = set(range(1, self.total_units + 1))
-        if set(converted).union(failed) != expected:
+        if set(converted).union(failed, blank) != expected:
             raise ValueError("coverage must account for every source unit exactly once")
         return self
 
     @property
     def complete(self) -> bool:
-        """Return whether every physical unit converted successfully."""
+        """Return whether no physical unit failed; a blank unit is not a failure."""
         return not self.failed_units
 
 

@@ -15,8 +15,10 @@ survey-scribe convert questionnaire.pdf --output-dir output
 
 Install the extras needed by the selected source and provider before migration.
 For example, PDF extraction through OpenAI needs
-`python -m pip install "survey-scribe[pdf,openai]"` and a validated local OCR
-cache. The installed CLI is not a wrapper around the root script; it uses the
+`python -m pip install "survey-scribe[pdf,openai]"` and the local Docling
+artifacts directory. The directory needs the approved OCR artifacts only when a
+page needs OCR, such as a scanned page. The installed CLI is not a wrapper
+around the root script; it uses the
 public `SurveyScribe` facade and returns defined result statuses.
 
 ## Configuration

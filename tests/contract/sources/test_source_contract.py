@@ -618,6 +618,58 @@ def test_source_coverage_rejects_invalid_accounting_states(
 @pytest.mark.parametrize(
     ("values", "message"),
     [
+        ({"total_units": 2, "converted_units": (1,), "blank_units": (0,)}, "positive integers"),
+        ({"total_units": 2, "converted_units": (1,), "blank_units": (True,)}, "positive integers"),
+        ({"total_units": 3, "converted_units": (1,), "blank_units": (3, 2)}, "unique and ordered"),
+        ({"total_units": 2, "converted_units": (1,), "blank_units": (2, 2)}, "unique and ordered"),
+        ({"total_units": 2, "converted_units": (1, 2), "blank_units": (2,)}, "must not overlap"),
+        (
+            {"total_units": 2, "converted_units": (1,), "failed_units": (2,), "blank_units": (2,)},
+            "must not overlap",
+        ),
+        ({"total_units": 3, "converted_units": (1,), "blank_units": (2,)}, "every source unit"),
+        ({"total_units": 2, "converted_units": (1,), "blank_units": (3,)}, "every source unit"),
+    ],
+)
+def test_source_coverage_rejects_invalid_blank_units(
+    values: dict[str, object], message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        SourceCoverage.model_validate(values)
+
+
+def test_source_coverage_accounts_for_blank_units_without_a_failure() -> None:
+    """A blank unit fills the accounting next to the converted and failed units. It is not a
+    failure, so a coverage with blank units and no failed unit is complete."""
+    blank_only = SourceCoverage(
+        unit="page", total_units=3, converted_units=(1, 3), blank_units=(2,)
+    )
+    with_failure = SourceCoverage(
+        unit="page", total_units=3, converted_units=(1,), failed_units=(3,), blank_units=(2,)
+    )
+    every_page_blank = SourceCoverage(
+        unit="page", total_units=2, converted_units=(), blank_units=(1, 2)
+    )
+
+    assert blank_only.blank_units == (2,)
+    assert blank_only.complete is True
+    assert with_failure.complete is False
+    assert every_page_blank.converted_units == ()
+    assert SourceCoverage().blank_units == ()
+    assert (
+        SourceDocument(
+            source_name="questionnaire.pdf",
+            media_type="application/pdf",
+            blocks=(),
+            coverage=blank_only,
+        ).coverage
+        == blank_only
+    )
+
+
+@pytest.mark.parametrize(
+    ("values", "message"),
+    [
         ({"pages": (True,)}, "positive integers"),
         ({"pages": (0,)}, "positive integers"),
         ({"pages": (2, 1)}, "unique and ordered"),
