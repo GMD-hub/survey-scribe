@@ -22,8 +22,7 @@ project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - Chunking keeps a table with the text printed above it: a table joins the running
-  chunk while the token budget allows (it is still never split) instead of always
-  opening a chunk of its own.
+  chunk while the token budget allows instead of always opening a chunk of its own.
 - PDF section headings keep their ancestors when heading levels are inferred; with
   the default flat headings the section path is unchanged.
 - A numbered question the layout model reads as a list item keeps its number: the
@@ -43,6 +42,13 @@ project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - PDF options reject noninteger heading limits and unsupported OCR language settings.
 - Packed extraction requests account for serialized source-part metadata and overlap
   before they are sent to a provider.
+- A table larger than the request budget no longer fails the whole document
+  ([#18](https://github.com/GMD-hub/survey-scribe/issues/18)). Chunking splits it into
+  row groups that each repeat the table's first (header) row, keep the physical table
+  id, and carry the group's source row range in `provenance`; the result reports a
+  `SOURCE_TABLE_SPLIT` warning with the table id and part count. Only a row that cannot
+  fit with the header is an error, a `SOURCE_LIMIT_EXCEEDED` diagnostic naming the
+  table and block.
 
 ### Security
 

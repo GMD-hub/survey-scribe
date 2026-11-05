@@ -54,6 +54,7 @@ class DiagnosticCode(StrEnum):
     quality_module_reconciled = "QUALITY_MODULE_RECONCILED"
     metadata_incomplete = "METADATA_INCOMPLETE"
     source_unreadable = "SOURCE_UNREADABLE"
+    source_table_split = "SOURCE_TABLE_SPLIT"
     provider_failed = "PROVIDER_FAILED"
     provider_truncated = "PROVIDER_TRUNCATED"
     validation_failed = "VALIDATION_FAILED"

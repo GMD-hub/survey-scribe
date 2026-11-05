@@ -315,7 +315,114 @@ async def test_pipeline_rejects_a_table_that_cannot_fit_the_serialized_request()
     assert result.output is None
     assert provider.call_count == 0
     assert [diagnostic.code for diagnostic in result.diagnostics] == ["SOURCE_LIMIT_EXCEEDED"]
+    assert result.diagnostics[0].details == {"table_id": "table-1", "block_id": "table-1"}
 
+
+def _table_document(rows: tuple[tuple[str, ...], ...]) -> SourceDocument:
+    provenance = SourceProvenance(source_name="survey.pdf", page=3, row_start=1, row_end=len(rows))
+    table = SourceTable(id="table-7", rows=rows, provenance=provenance)
+    return SourceDocument(
+        source_name="survey.pdf",
+        media_type="application/pdf",
+        blocks=(
+            SourceBlock(
+                id="block-0",
+                order=0,
+                kind="text",
+                text="Q5. Expenditure in the last 7 days",
+                provenance=SourceProvenance(source_name="survey.pdf", page=3),
+            ),
+            SourceBlock(
+                id="block-1",
+                order=1,
+                kind="table",
+                text=render_table(rows),
+                provenance=provenance,
+                table=table,
+            ),
+        ),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "rows",
+    [
+        (("code", "item", "amount"),)
+        + tuple((f"{index:03d}", f"Expenditure item {index}", "____") for index in range(80)),
+        (("code", "item"),) + tuple((f"{index:03d}", "\u00e9" * 40) for index in range(12)),
+    ],
+    ids=["raw-budget", "serialized-budget"],
+)
+async def test_pipeline_splits_an_oversized_table_by_rows_and_warns(
+    rows: tuple[tuple[str, ...], ...],
+) -> None:
+    document = _table_document(rows)
+    requests: list[FakeRequest] = []
+
+    async def respond(request: FakeRequest) -> object:
+        requests.append(request)
+        if request.response_model is ExtractedMetadata:
+            return ExtractedMetadata(
+                survey_id="TST_2026_SYN", country_code="TST", year=2026, survey_name="Survey"
+            )
+        return BlockExtraction(
+            block_id=_chunk_id(request),
+            variables=(
+                ExtractedVariable(
+                    variable=SurveyVariable(
+                        raw_name=f"v_{_chunk_id(request).replace('-', '_')}",
+                        data_type=DataType.text,
+                        extraction_confidence=1.0,
+                    ),
+                    source_block_ids=(_source_block_ids(request)[-1],),
+                ),
+            ),
+        )
+
+    provider = DeterministicFakeProvider(capabilities=_capabilities(), responder=respond)
+    pipeline = ExtractionPipeline(
+        provider, config=PipelineConfig(max_request_tokens=2_200, overlap_tokens=200)
+    )
+    result = await pipeline.extract(document)
+
+    assert result.status is ResultStatus.success
+    assert result.output is not None
+    assert all(provider.estimate_tokens(request.messages) <= 2_200 for request in requests)
+    chunked = pipeline._chunk_document(document)
+    table_parts = [
+        part
+        for chunk in chunked.chunks
+        for part in chunk.parts
+        if part.id in chunk.new_part_ids and part.table is not None
+    ]
+    assert len(table_parts) > 1
+    assert [part.part_index for part in table_parts] == list(range(1, len(table_parts) + 1))
+    assert {part.part_count for part in table_parts} == {len(table_parts)}
+    for part in table_parts:
+        assert part.table is not None
+        assert part.table.id == "table-7"
+        assert part.table.rows[0] == rows[0]
+        assert part.provenance.page == 3
+        assert part.provenance.row_start is not None
+        assert part.provenance.row_end == part.provenance.row_start + len(part.table.rows) - 2
+    assert [row for part in table_parts if part.table for row in part.table.rows[1:]] == list(
+        rows[1:]
+    )
+    assert table_parts[0].provenance.row_start == 2
+    assert table_parts[-1].provenance.row_end == len(rows)
+    warnings = [
+        diagnostic
+        for diagnostic in result.diagnostics
+        if diagnostic.code == DiagnosticCode.source_table_split
+    ]
+    assert len(warnings) == 1
+    assert warnings[0].severity == "warning"
+    assert warnings[0].details == {
+        "table_id": "table-7",
+        "block_id": "block-1",
+        "part_count": len(table_parts),
+    }
 
 @pytest.mark.asyncio
 async def test_pipeline_uses_metadata_fallback_and_accounts_for_unreadable_units() -> None:

@@ -50,7 +50,9 @@ from survey_scribe.sources.chunking import (
     ChunkedDocument,
     SourceChunk,
     SourceChunkPart,
+    SourceTableLimitError,
     chunk_document,
+    split_table_part,
 )
 from survey_scribe.sources.registry import SourceRegistry
 
@@ -212,6 +214,21 @@ class ExtractionPipeline:
         active_limiter = limiter or ConcurrencyLimiter(self._config.max_concurrency)
         try:
             chunked = self._chunk_document(document)
+        except SourceTableLimitError as error:
+            return ExtractionResult[SurveySVIS](
+                output=None,
+                diagnostics=(
+                    Diagnostic(
+                        code=error.code,
+                        message=(
+                            "A source table row cannot fit within provider limits, "
+                            "even after splitting the table by rows."
+                        ),
+                        severity=DiagnosticSeverity.error,
+                        details={"table_id": error.table_id, "block_id": error.block_id},
+                    ),
+                ),
+            )
         except (SourceError, ProviderError, ValueError) as error:
             return ExtractionResult[SurveySVIS](
                 output=None,
@@ -235,6 +252,19 @@ class ExtractionPipeline:
         diagnostics: list[Diagnostic] = [*metadata_diagnostics]
         response_sha256 = list(metadata_response_sha256)
         diagnostics.extend(_source_diagnostics(document))
+        diagnostics.extend(
+            Diagnostic(
+                code=DiagnosticCode.source_table_split,
+                message="A source table exceeded the request budget and was split by rows.",
+                severity=DiagnosticSeverity.warning,
+                details={
+                    "table_id": split.table_id,
+                    "block_id": split.block_id,
+                    "part_count": split.part_count,
+                },
+            )
+            for split in chunked.split_tables
+        )
         for outcome in block_results:
             records.extend(outcome.records)
             if outcome.failure is not None:
@@ -327,6 +357,7 @@ class ExtractionPipeline:
             for part in chunk.parts
             if part.id in chunk.new_part_ids
         ]
+        blocks = {block.id: block for block in document.blocks}
         chunks: list[SourceChunk] = []
 
         def make_chunk(
@@ -390,7 +421,10 @@ class ExtractionPipeline:
                     overlap = overlap_for(part)
                     candidate = make_chunk((part,), overlap)
                 if not fits(candidate):
-                    if part.kind == "table" or len(part.text) < 2:
+                    if part.table is not None:
+                        parts[index : index + 1] = split_table_part(part, blocks[part.block_id])
+                        break
+                    if len(part.text) < 2:
                         raise SourceLimitError(
                             "max_tokens",
                             "A source part cannot fit within the serialized request limit",

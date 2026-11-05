@@ -15,7 +15,10 @@ from survey_scribe.sources.base import (
 from survey_scribe.sources.chunking import (
     ConservativeTokenEstimator,
     SourceChunkPart,
+    SourceTableLimitError,
+    TableSplit,
     chunk_document,
+    split_table_part,
 )
 
 
@@ -330,7 +333,7 @@ def test_overlap_is_reserved_inside_the_hard_final_token_limit() -> None:
     assert all(CharacterEstimator().estimate(chunk.text) <= 6 for chunk in result.chunks)
 
 
-def test_oversized_table_is_rejected_instead_of_exceeding_the_limit() -> None:
+def test_oversized_single_row_table_is_rejected_with_its_table_id() -> None:
     source = "questionnaire.csv"
     rows = (("x" * 20,),)
     provenance = SourceProvenance(source_name=source, row_start=1, row_end=1)
@@ -350,10 +353,170 @@ def test_oversized_table_is_rejected_instead_of_exceeding_the_limit() -> None:
         ),
     )
 
-    with pytest.raises(SourceLimitError) as raised:
+    with pytest.raises(SourceTableLimitError) as raised:
         chunk_document(document, max_tokens=10, estimator=CharacterEstimator())
 
+    assert isinstance(raised.value, SourceLimitError)
     assert raised.value.limit == "max_tokens"
+    assert raised.value.table_id == "table-1"
+    assert raised.value.block_id == "block-1"
+
+
+def _wide_table_document(
+    rows: tuple[tuple[str, ...], ...], *, row_start: int = 5
+) -> SourceDocument:
+    source = "questionnaire.pdf"
+    provenance = SourceProvenance(
+        source_name=source,
+        pages=(2, 3),
+        row_start=row_start,
+        row_end=row_start + len(rows) - 1,
+    )
+    table = SourceTable(id="table-9", rows=rows, provenance=provenance)
+    return SourceDocument(
+        source_name=source,
+        media_type="application/pdf",
+        blocks=(
+            SourceBlock(
+                id="block-0",
+                order=0,
+                kind="text",
+                text="Q4 roster",
+                provenance=SourceProvenance(source_name=source, page=2),
+            ),
+            SourceBlock(
+                id="block-1",
+                order=1,
+                kind="table",
+                text=render_table(rows),
+                provenance=provenance,
+                table=table,
+            ),
+            SourceBlock(
+                id="block-2",
+                order=2,
+                kind="text",
+                text="Q5 next",
+                provenance=SourceProvenance(source_name=source, page=3),
+            ),
+        ),
+    )
+
+
+def test_oversized_table_is_split_into_header_repeating_row_groups() -> None:
+    header = ("code", "label")
+    rows = (header, *((f"r{index}", "item") for index in range(10)))
+    document = _wide_table_document(rows)
+
+    result = chunk_document(
+        document, max_tokens=40, overlap_tokens=5, estimator=CharacterEstimator()
+    )
+    table_parts = [
+        part
+        for chunk in result.chunks
+        for part in chunk.parts
+        if part.id in chunk.new_part_ids and part.table is not None
+    ]
+
+    assert len(table_parts) > 1
+    assert all(chunk.token_count <= 40 for chunk in result.chunks)
+    assert [part.id for part in table_parts] == [
+        f"block-1:part-{index:06d}" for index in range(1, len(table_parts) + 1)
+    ]
+    assert {part.part_count for part in table_parts} == {len(table_parts)}
+    for part in table_parts:
+        assert part.table is not None
+        assert part.table.id == "table-9"
+        assert part.table.rows[0] == header
+        assert part.table.provenance == part.provenance
+        assert part.text == render_table(part.table.rows)
+        assert part.provenance.pages == (2, 3)
+        assert part.provenance.row_start is not None
+        assert part.provenance.row_end == part.provenance.row_start + len(part.table.rows) - 2
+    assert [row for part in table_parts if part.table for row in part.table.rows[1:]] == list(
+        rows[1:]
+    )
+    assert table_parts[0].provenance.row_start == 6
+    assert table_parts[-1].provenance.row_end == 5 + len(rows) - 1
+    assert [block_id for chunk in result.chunks for block_id in chunk.new_block_ids] == [
+        "block-0",
+        *("block-1" for _ in table_parts),
+        "block-2",
+    ]
+    assert result.split_tables == (
+        TableSplit(table_id="table-9", block_id="block-1", part_count=len(table_parts)),
+    )
+
+
+def test_tables_within_the_limit_are_not_reported_as_split() -> None:
+    result = chunk_document(_document(), max_tokens=100, estimator=CharacterEstimator())
+
+    assert result.split_tables == ()
+
+
+def test_a_single_row_may_use_the_full_limit_but_not_exceed_it() -> None:
+    header = ("h",)
+    rows = (header, ("a" * 9,), ("b",))
+    document = _wide_table_document(rows, row_start=1)
+
+    result = chunk_document(
+        document, max_tokens=12, overlap_tokens=4, estimator=CharacterEstimator()
+    )
+    table_parts = [
+        part
+        for chunk in result.chunks
+        for part in chunk.parts
+        if part.id in chunk.new_part_ids and part.table is not None
+    ]
+
+    assert [part.text for part in table_parts] == ["h\naaaaaaaaa", "h\nb"]
+    assert [(part.provenance.row_start, part.provenance.row_end) for part in table_parts] == [
+        (2, 2),
+        (3, 3),
+    ]
+    with pytest.raises(SourceTableLimitError) as raised:
+        chunk_document(
+            _wide_table_document((header, ("a" * 11,), ("b",))),
+            max_tokens=12,
+            estimator=CharacterEstimator(),
+        )
+    assert raised.value.table_id == "table-9"
+
+
+def test_split_table_part_halves_whole_and_split_parts_by_rows() -> None:
+    header = ("code", "label")
+    rows = (header, *((f"r{index}", "item") for index in range(5)))
+    document = _wide_table_document(rows)
+    block = document.blocks[1]
+    assert block.table is not None
+    whole = SourceChunkPart(
+        id="block-1:part-000001",
+        block_id="block-1",
+        part_index=1,
+        part_count=1,
+        kind="table",
+        text=block.text,
+        provenance=block.provenance,
+        table=block.table,
+    )
+
+    first, second = split_table_part(whole, block)
+
+    assert first.table is not None and second.table is not None
+    assert first.table.rows == (header, *rows[1:3])
+    assert second.table.rows == (header, *rows[3:])
+    assert (first.provenance.row_start, first.provenance.row_end) == (6, 7)
+    assert (second.provenance.row_start, second.provenance.row_end) == (8, 10)
+    assert second.text == render_table(second.table.rows)
+
+    third, fourth = split_table_part(second, block)
+
+    assert third.table is not None and fourth.table is not None
+    assert third.table.rows == (header, rows[3])
+    assert fourth.table.rows == (header, *rows[4:])
+    assert (fourth.provenance.row_start, fourth.provenance.row_end) == (9, 10)
+    with pytest.raises(SourceTableLimitError):
+        split_table_part(third, block)
 
 
 def test_chunk_parts_transport_table_cells_without_flattening() -> None:
