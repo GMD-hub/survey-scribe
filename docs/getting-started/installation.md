@@ -102,8 +102,10 @@ For hosted deployments, also review [Palantir Foundry](../platforms/palantir-fou
 
 ### PDF conversion reports a missing dependency
 
-Install the `pdf` extra, configure local OCR artifacts, and validate them before
-conversion. See [PDF and OCR setup](../guides/sources.md#pdf-and-ocr-setup).
+Install the `pdf` extra and configure the local Docling artifacts directory. The
+directory needs the approved OCR artifacts only when a page needs OCR, such as a
+scanned page. Validate them before conversion. See
+[PDF and OCR setup](../guides/sources.md#pdf-and-ocr-setup).
 
 ### XLSX conversion reports a missing dependency
 

@@ -92,8 +92,10 @@ resource, and security controls.
 
 For a configured provider, use the synchronous facade outside an event loop:
 
-The PDF example also needs the `pdf` extra and a validated local OCR artifact
-directory. Use DOCX or text when you want to test the provider without OCR.
+The PDF example also needs the `pdf` extra and the local Docling artifacts
+directory. The directory needs the approved OCR artifacts only when a page needs
+OCR, such as a scanned page. Use DOCX or text when you want to test the provider
+without the Docling models.
 
 ```python
 from pathlib import Path

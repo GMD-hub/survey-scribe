@@ -19,7 +19,7 @@ does not declare general Palantir production support.
 | Path | Status | Reason |
 | --- | --- | --- |
 | XLSForm dataset to routed and SVIS artifacts | Conditional | Uses documentation-derived Foundry dataset filesystem APIs and tested provider-free Survey Scribe APIs |
-| PDF or DOCX normalization without a provider | Conditional | File materialization works, but PDF needs approved local OCR artifacts |
+| PDF or DOCX normalization without a provider | Conditional | File materialization works, but PDF needs local Docling models, and approved local OCR artifacts for a scanned page |
 | Model-assisted extraction with built-in provider | Not verified | Palantir documents a source-managed synchronous client; Survey Scribe providers use async SDK clients |
 | Palantir media-set transform | Not documented here | The code below is scoped to dataset `Input` and `Output` objects only |
 | Palantir Python Function | Not recommended for this workflow | The file and artifact workflow is designed as a batch transform |

@@ -12,11 +12,50 @@ project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   or `SURVEY_SCRIBE_PDF_*` variables): OCR `always | auto | never` (`never` reads the
   text layer alone, any script, no EasyOCR artifacts), inferred heading levels with
   `section_path` ancestors, page furniture, and TableFormer mode. Unset options keep
-  the established behaviour. OCR remains limited to approved English model artifacts.
+  the established behaviour, except OCR (see Changed). OCR remains limited to approved
+  English model artifacts.
 - `SourceRegistry.supported_suffixes()`.
+- `SourceCoverage.blank_units` lists the units with no content to read, such as a
+  blank PDF page. A blank unit is not a failure. The other adapters leave it empty.
 
 ### Changed
 
+- PDF OCR defaults to `auto`. The PDF adapter now decides the read page by page.
+- Before conversion, a page check gives each page one status. The first match wins:
+  1. `unreadable`: the page does not load.
+  2. `blank`: fewer than 0.012% dark pixels in a 72 dpi grayscale render, and fewer
+     than 32 visible characters. A pixel is dark under gray level 230.
+  3. `needs_ocr`: one image covers half the page or more.
+  4. `needs_ocr`: the text layer has fewer than 32 visible characters.
+  5. `machine_readable`: any other page.
+- The test for blank comes first. A blank page gets no read in any mode, also with
+  `ocr="always"`. It goes in `coverage.blank_units` with no block and no diagnostic.
+- A page with only a one-digit page number is blank. A page with only a longer page
+  number or one short word can be blank too. Then that word is lost.
+- `auto` reads the text-layer pages in one Docling call with no OCR. It reads each
+  `needs_ocr` page alone with OCR. `always` runs full-page OCR on each page that is
+  not blank. `never` reads the text layer of each page that is not blank.
+- In `auto` mode, OCR reads a `needs_ocr` page in the Docling default mode, as the
+  `auto` option did before. The text layer of the page stays, and OCR reads the areas
+  that it does not cover. Only `always` runs full-page OCR, which replaces the text
+  layer.
+- A `machine_readable` page gets no OCR. Text inside an image under half of the page
+  is not read, also when another page of the file needs OCR.
+- The blocks of both reads go in page order. A heading on an OCR page is the section
+  of the later pages too. The text-layer blocks keep the order of the Docling read.
+- Docling can join text across a page break. If the joined block crosses a page that
+  the text-layer read does not keep, the adapter cuts it at each page break. Each
+  part goes to its own page.
+- A Docling failure on one page does not stop the conversion. Only that page fails,
+  and the other pages keep their blocks. A failed read whose errors do not name every
+  page of the read still stops the conversion, as before.
+- Each page that OCR reads gets a `PDF_PAGE_OCR` warning with the reason. In `never`
+  mode, a `needs_ocr` page gets a `PDF_PAGE_TEXT_INCOMPLETE` warning.
+- The adapter needs the EasyOCR artifacts only when a page gets an OCR read. If they
+  are missing, the error names the pages.
+- The page check measures an image in a scaled form XObject at its size on the page.
+- On a 19-page questionnaire with a text layer, forced OCR kept 88 of 113 question
+  numbers and the text layer kept 112.
 - Chunking keeps a table with the text printed above it: a table joins the running
   chunk while the token budget allows (it is still never split) instead of always
   opening a chunk of its own.

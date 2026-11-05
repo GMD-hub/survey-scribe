@@ -136,8 +136,8 @@ identifier. Do not infer one.
 Given an application-configured `StructuredProvider` named `provider`:
 
 For PDF input, install both the selected provider extra and the `pdf` extra, then
-configure the approved local OCR artifacts. Use DOCX or text when OCR is not
-required.
+configure the local Docling artifacts directory. A PDF with a scanned page also
+needs the approved local OCR artifacts.
 
 ```python
 from survey_scribe import ResultStatus, StructuredPipeline
