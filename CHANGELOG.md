@@ -14,6 +14,10 @@ project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `section_path` ancestors, page furniture, and TableFormer mode. Unset options keep
   the established behaviour. OCR remains limited to approved English model artifacts.
 - `SourceRegistry.supported_suffixes()`.
+- Legacy binary `.doc` and `.xls` sources (`DoclingOfficeAdapter`): Docling converts
+  them with LibreOffice and parses them with its Word and Excel pipelines, in the same
+  killable, network-disabled worker as PDF conversion. A workbook's coverage is counted
+  by sheet. LibreOffice (`soffice`) must be on PATH; no model artifacts are needed.
 
 ### Changed
 

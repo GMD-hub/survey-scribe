@@ -1571,3 +1571,137 @@ def test_default_registry_passes_pdf_options_to_the_adapter(
     monkeypatch.setenv("SURVEY_SCRIBE_PDF_OCR", "never")
     adapter = cast(Any, SourceRegistry.default()._adapters[".pdf"])
     assert cast(DoclingConverter, adapter._converter).options.ocr == "never"
+
+
+def fake_xls_conversion(path: str, artifacts_path: str | None) -> PdfConversion:
+    """Pickle-safe fake of a two-sheet workbook: Docling files each sheet as a page."""
+    del path, artifacts_path
+    return PdfConversion(
+        page_count=2,
+        blocks=(
+            PdfConversionBlock(text="Household roster", page=1, section_path=("Roster",)),
+            PdfConversionBlock(
+                text="code | label\n1 | Head",
+                page=2,
+                table_rows=(("code", "label"), ("1", "Head")),
+            ),
+        ),
+    )
+
+
+def fake_doc_conversion(path: str, artifacts_path: str | None) -> PdfConversion:
+    """Pickle-safe fake of a Word document: its items carry no page."""
+    del path, artifacts_path
+    return PdfConversion(
+        page_count=0,
+        blocks=(
+            PdfConversionBlock(text="Section A", section_path=("Section A",)),
+            PdfConversionBlock(text="A1. How old are you?", section_path=("Section A",)),
+            PdfConversionBlock(text="   "),
+        ),
+    )
+
+
+def _write_ole(path: Path) -> None:
+    """The legacy binary Office signature, then filler: enough for the signature check."""
+    path.write_bytes(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + bytes(504))
+
+
+def test_office_adapter_reads_a_workbook_by_sheet_and_a_document_whole(tmp_path: Path) -> None:
+    from survey_scribe.sources.docling import DoclingOfficeAdapter
+
+    limits = replace(DEFAULT_SOURCE_LIMITS, deadline_seconds=10)
+    workbook = tmp_path / "codes.xls"
+    _write_ole(workbook)
+    sheets = DoclingOfficeAdapter("xls", converter=fake_xls_conversion).convert(
+        resolve_local_source(workbook), limits=limits
+    )
+    assert sheets.media_type == "application/vnd.ms-excel"
+    assert sheets.coverage == SourceCoverage(unit="sheet", total_units=2, converted_units=(1, 2))
+    assert [block.kind for block in sheets.blocks] == ["text", "table"]
+    assert sheets.tables[0].rows == (("code", "label"), ("1", "Head"))
+    assert [block.provenance.page for block in sheets.blocks] == [1, 2]
+
+    word = tmp_path / "form.doc"
+    _write_ole(word)
+    document = DoclingOfficeAdapter("doc", converter=fake_doc_conversion).convert(
+        resolve_local_source(word), limits=limits
+    )
+    assert document.media_type == "application/msword"
+    assert document.coverage == SourceCoverage()
+    assert [block.text for block in document.blocks] == ["Section A", "A1. How old are you?"]
+    assert document.blocks[1].provenance.section_path == ("Section A",)
+
+
+def test_office_sources_must_be_ole_files(tmp_path: Path) -> None:
+    from survey_scribe.sources.docling import DoclingOfficeAdapter
+    from survey_scribe.sources.registry import SourceRegistry
+
+    disguised = tmp_path / "form.doc"
+    disguised.write_text("not a Word file", encoding="utf-8")
+    with pytest.raises(SourceFormatError, match="DOC extension does not match"):
+        DoclingOfficeAdapter("doc", converter=fake_doc_conversion).convert(
+            resolve_local_source(disguised), limits=DEFAULT_SOURCE_LIMITS
+        )
+    with pytest.raises(SourceFormatError, match="DOC extension does not match"):
+        SourceRegistry.default().convert(disguised)
+    assert {".doc", ".xls"} <= SourceRegistry.default().supported_suffixes()
+    with pytest.raises(ValueError, match="suffix"):
+        docling_source.DoclingOfficeConverter("ppt")
+
+
+def test_office_converter_needs_libreoffice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(docling_source, "libreoffice_command", lambda: None)
+    with pytest.raises(SourceDependencyError, match="LibreOffice"):
+        docling_source.DoclingOfficeConverter("doc")(str(tmp_path / "form.doc"), None)
+
+
+def test_office_converter_asks_docling_for_the_legacy_format_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    asked: list[object] = []
+
+    class Heading:
+        label = "section_header"
+        text = "Section B"
+        level = 1
+        prov: list[object] = []
+
+    class Question:
+        label = "list_item"
+        text = "Do you own a car?"
+        marker = "B2."
+        prov: list[object] = []
+
+    class FakeDocument:
+        pages: dict[int, object] = {}
+
+        def iterate_items(self) -> list[tuple[object, int]]:
+            return [(Heading(), 0), (Question(), 1)]
+
+    class FakeDocumentConverter:
+        def __init__(self, *, allowed_formats: list[object]) -> None:
+            asked.extend(allowed_formats)
+
+        def convert(self, _path: str) -> object:
+            return SimpleNamespace(document=FakeDocument(), errors=(), status="success")
+
+    modules = {
+        "docling.datamodel.base_models": SimpleNamespace(
+            InputFormat=SimpleNamespace(DOC="doc", XLS="xls")
+        ),
+        "docling.document_converter": SimpleNamespace(DocumentConverter=FakeDocumentConverter),
+    }
+    monkeypatch.setattr(docling_source, "import_module", modules.__getitem__)
+    monkeypatch.setattr(docling_source, "libreoffice_command", lambda: "soffice")
+
+    conversion = docling_source.DoclingOfficeConverter("doc")(str(tmp_path / "form.doc"), None)
+
+    assert asked == ["doc"]
+    assert conversion.page_count == 0
+    assert conversion.blocks == (
+        PdfConversionBlock(text="Section B", section_path=("Section B",)),
+        PdfConversionBlock(text="B2. Do you own a car?", section_path=("Section B",)),
+    )

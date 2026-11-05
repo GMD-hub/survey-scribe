@@ -139,9 +139,11 @@ class SourceRegistry:
                 established defaults in place when unset.
 
         Returns:
-            A registry for PDF, DOCX, XLSX, CSV, HTML, Markdown, and text files.
+            A registry for PDF, DOCX, XLSX, CSV, HTML, Markdown, and text files, and the
+            legacy binary DOC and XLS (Docling's Word and Excel pipelines, with LibreOffice).
         """
         from survey_scribe.sources.docling import (
+            DoclingOfficeAdapter,
             DoclingPdfAdapter,
             DocxAdapter,
             HtmlAdapter,
@@ -158,6 +160,8 @@ class SourceRegistry:
                 ".pdf": DoclingPdfAdapter(options=options),
                 ".docx": DocxAdapter(),
                 ".xlsx": XlsFormAdapter(),
+                ".doc": DoclingOfficeAdapter("doc", options=options),
+                ".xls": DoclingOfficeAdapter("xls", options=options),
                 ".csv": CsvAdapter(),
                 ".html": HtmlAdapter(),
                 ".htm": HtmlAdapter(),
@@ -338,6 +342,8 @@ def _routed_snapshot_sha256(snapshot: ResolvedSource) -> str:
 
 __all__ = ["SourceConversionResult", "SourceRegistry", "SourceSvisConversionResult"]
 
+_OLE_SIGNATURE = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"  # a legacy binary Office file
+
 
 def _verify_signature(path: Path, suffix: str) -> None:
     if suffix == ".pdf":
@@ -348,6 +354,15 @@ def _verify_signature(path: Path, suffix: str) -> None:
                 raise SourceFormatError("PDF extension does not match file content")
         except OSError as error:
             raise SourceFormatError("PDF signature could not be inspected") from error
+        return
+    if suffix in {".doc", ".xls"}:
+        try:
+            with path.open("rb") as stream:
+                signature = stream.read(len(_OLE_SIGNATURE))
+        except OSError as error:
+            raise SourceFormatError("OLE source signature could not be inspected") from error
+        if signature != _OLE_SIGNATURE:
+            raise SourceFormatError(f"{suffix.upper()} extension does not match file content")
         return
     if suffix not in {".docx", ".xlsx"}:
         return

@@ -11,6 +11,7 @@ provenance without calling a model provider.
 | `.pdf` | Docling PDF conversion with local OCR artifacts | `pdf` |
 | `.docx` | Inert DOCX XML parsing | Base |
 | `.xlsx` | Read-only XLSForm parsing with native SVIS and routing semantics | `tabular` |
+| `.doc`, `.xls` | Docling's Word and Excel conversion of legacy binary Office files; needs LibreOffice (`soffice`) on PATH | `pdf` |
 | `.csv` | UTF-8 CSV parsing | Base |
 | `.html`, `.htm` | Visible text and table extraction | Base |
 | `.md`, `.markdown` | Markdown paragraphs and tables | Base |

@@ -18,6 +18,7 @@ features, conditional integration patterns, and features that are not included.
 | --- | --- | --- |
 | Questionnaire instrument to `SurveySVIS` | Supported | Native XLSForm or provider-assisted document extraction |
 | Local PDF, DOCX, XLSX, CSV, HTML, Markdown, and text inputs | Supported | Format-specific limits apply |
+| Legacy DOC and XLS inputs | Supported | Docling with LibreOffice on PATH |
 | Provider-free XLSForm SVIS | Supported | Use `SourceRegistry.convert_for_svis()` |
 | Ordered sync and async batches | Supported | One shared limiter per batch |
 | Completed-answer records | Conditional | Use a caller-defined closed Pydantic model |

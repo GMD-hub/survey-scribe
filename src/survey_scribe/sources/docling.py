@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import socket
 import time
 import zipfile
@@ -249,6 +250,68 @@ def _push_heading(
     return (*path, (level, text))
 
 
+def _docling_blocks(document: Any, *, include_furniture: bool) -> list[PdfConversionBlock]:
+    """A converted Docling document's items as ordered blocks, each with its section path.
+
+    Format-neutral: a PDF's items carry pages, a workbook's carry sheets (Docling files each
+    sheet as a page), a Word document's carry none.
+    """
+    blocks: list[PdfConversionBlock] = []
+    configured_max_cells = os.environ.get("SURVEY_SCRIBE_PDF_MAX_CELLS")
+    max_cells = int(configured_max_cells) if configured_max_cells is not None else None
+    table_cells = 0
+    headings: tuple[tuple[int, str], ...] = ()
+    current_section: tuple[str, ...] = ()
+    if include_furniture:
+        layers = import_module("docling_core.types.doc").ContentLayer
+        items = document.iterate_items(included_content_layers={layers.BODY, layers.FURNITURE})
+    else:
+        items = document.iterate_items()
+    for item, _depth in items:
+        pages = _docling_pages(item)
+        page = pages[0] if pages else None
+        label = str(getattr(item, "label", "")).lower()
+        if "table" in label:
+            remaining_cells = None if max_cells is None else max(max_cells - table_cells, 0)
+            rows = _docling_table_rows(
+                item,
+                document,
+                max_cells=remaining_cells,
+            )
+            if rows:
+                if max_cells is not None:
+                    table_cells = _add_table_cells(table_cells, rows, max_cells)
+                blocks.append(
+                    PdfConversionBlock(
+                        text=render_table(rows),
+                        page=page,
+                        pages=pages,
+                        table_rows=rows,
+                        section_path=current_section,
+                    )
+                )
+            continue
+        text = _normalize_text(str(getattr(item, "text", "")))
+        marker = _normalize_text(str(getattr(item, "marker", "") or ""))
+        if text and marker and "list" in label:
+            # a numbered question is a list item to the layout model and its number is the
+            # marker, not the text: keep it, a data column is often named by it (q8, s4q8)
+            text = f"{marker} {text}"
+        if text:
+            if any(name in label for name in ("section", "title", "heading")):
+                headings = _push_heading(headings, getattr(item, "level", 1) or 1, text)
+                current_section = tuple(title for _level, title in headings)
+            blocks.append(
+                PdfConversionBlock(
+                    text=text,
+                    page=page,
+                    pages=pages,
+                    section_path=current_section,
+                )
+            )
+    return blocks
+
+
 class DoclingConverter:
     """Lazy Docling converter configured for local PDFium and, by default, full-page OCR."""
 
@@ -329,59 +392,7 @@ class DoclingConverter:
             )
             result = converter.convert(path)
         document = result.document
-        blocks: list[PdfConversionBlock] = []
-        configured_max_cells = os.environ.get("SURVEY_SCRIBE_PDF_MAX_CELLS")
-        max_cells = int(configured_max_cells) if configured_max_cells is not None else None
-        table_cells = 0
-        headings: tuple[tuple[int, str], ...] = ()
-        current_section: tuple[str, ...] = ()
-        if options.include_furniture:
-            layers = import_module("docling_core.types.doc").ContentLayer
-            items = document.iterate_items(included_content_layers={layers.BODY, layers.FURNITURE})
-        else:
-            items = document.iterate_items()
-        for item, _depth in items:
-            pages = _docling_pages(item)
-            page = pages[0] if pages else None
-            label = str(getattr(item, "label", "")).lower()
-            if "table" in label:
-                remaining_cells = None if max_cells is None else max(max_cells - table_cells, 0)
-                rows = _docling_table_rows(
-                    item,
-                    document,
-                    max_cells=remaining_cells,
-                )
-                if rows:
-                    if max_cells is not None:
-                        table_cells = _add_table_cells(table_cells, rows, max_cells)
-                    blocks.append(
-                        PdfConversionBlock(
-                            text=render_table(rows),
-                            page=page,
-                            pages=pages,
-                            table_rows=rows,
-                            section_path=current_section,
-                        )
-                    )
-                continue
-            text = _normalize_text(str(getattr(item, "text", "")))
-            marker = _normalize_text(str(getattr(item, "marker", "") or ""))
-            if text and marker and "list" in label:
-                # a numbered question is a list item to the layout model and its number is the
-                # marker, not the text: keep it, a data column is often named by it (q8, s4q8)
-                text = f"{marker} {text}"
-            if text:
-                if any(name in label for name in ("section", "title", "heading")):
-                    headings = _push_heading(headings, getattr(item, "level", 1) or 1, text)
-                    current_section = tuple(title for _level, title in headings)
-                blocks.append(
-                    PdfConversionBlock(
-                        text=text,
-                        page=page,
-                        pages=pages,
-                        section_path=current_section,
-                    )
-                )
+        blocks = _docling_blocks(document, include_furniture=options.include_furniture)
         page_count = _docling_page_count(result, document, blocks)
         failed_pages = _docling_failed_pages(result)
         if failed_pages and (page_count == 0 or failed_pages[-1] > page_count):
@@ -451,46 +462,12 @@ class DoclingPdfAdapter:
         if effective_page_count > limits.max_pages:
             raise SourceLimitError("max_pages", "PDF exceeds the configured page limit")
 
-        blocks: list[SourceBlock] = []
-        table_index = 0
         for converted in conversion.blocks:
             if converted.pages and converted.pages[-1] > limits.max_pages:
                 raise SourceLimitError("max_pages", "PDF block exceeds the configured page limit")
             if converted.pages and converted.pages[-1] > effective_page_count:
                 raise SourceConversionError("PDF block provenance exceeds the converted page count")
-            provenance = SourceProvenance(
-                source_name=source.primary.name,
-                page=converted.page,
-                pages=converted.pages,
-                section_path=converted.section_path,
-            )
-            table: SourceTable | None = None
-            kind = "text"
-            if converted.table_rows:
-                table_index += 1
-                table = SourceTable(
-                    id=f"table-{table_index:06d}",
-                    rows=converted.table_rows,
-                    provenance=provenance,
-                )
-                kind = "table"
-            text = (
-                render_table(converted.table_rows)
-                if converted.table_rows
-                else converted.text.strip()
-            )
-            if not text:
-                continue
-            blocks.append(
-                SourceBlock(
-                    id=f"block-{len(blocks) + 1:06d}",
-                    order=len(blocks),
-                    kind=kind,
-                    text=text,
-                    provenance=provenance,
-                    table=table,
-                )
-            )
+        blocks = _source_blocks(conversion.blocks, source.primary.name)
         coverage = conversion.coverage
         if coverage is not None:
             if coverage.unit != "page" or coverage.total_units != effective_page_count:
@@ -510,6 +487,160 @@ class DoclingPdfAdapter:
             coverage=coverage,
             diagnostics=conversion.diagnostics,
         )
+
+
+_OFFICE_FORMATS = {
+    # suffix: (Docling input format, media type, coverage unit of a Docling page)
+    "doc": ("DOC", "application/msword", "document"),
+    "xls": ("XLS", "application/vnd.ms-excel", "sheet"),
+}
+_OLE_SIGNATURE = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+
+
+@dataclass(frozen=True, slots=True)
+class DoclingOfficeConverter:
+    """Docling's Word or Excel pipeline over a legacy binary Office file (``.doc``, ``.xls``).
+
+    Docling converts the file to its Open XML form with LibreOffice, then parses it; no model
+    runs. Pickle-safe, so it crosses the spawned worker boundary like the PDF converter.
+    """
+
+    suffix: str
+    include_furniture: bool = False
+
+    def __post_init__(self) -> None:
+        if self.suffix not in _OFFICE_FORMATS:
+            raise ValueError(f"suffix must be one of {tuple(_OFFICE_FORMATS)}, not {self.suffix!r}")
+
+    def __call__(self, path: str, artifacts_path: str | None) -> PdfConversion:
+        del artifacts_path  # Docling's Word and Excel pipelines use no models
+        if not libreoffice_command():
+            raise SourceDependencyError(
+                f"Converting a .{self.suffix} file needs LibreOffice: install it and put "
+                "`soffice` on PATH"
+            )
+        try:
+            base_module = import_module("docling.datamodel.base_models")
+            converter_module = import_module("docling.document_converter")
+        except ModuleNotFoundError as error:
+            raise SourceDependencyError(
+                f".{self.suffix} conversion requires the optional 'pdf' dependencies"
+            ) from error
+        input_format = getattr(base_module.InputFormat, _OFFICE_FORMATS[self.suffix][0])
+        converter = converter_module.DocumentConverter(allowed_formats=[input_format])
+        result = converter.convert(path)
+        if _docling_conversion_incomplete(result):
+            raise SourceConversionError(f".{self.suffix} conversion was incomplete")
+        document = result.document
+        blocks = _docling_blocks(document, include_furniture=self.include_furniture)
+        return PdfConversion(
+            page_count=_docling_page_count(result, document, blocks),
+            blocks=tuple(blocks),
+        )
+
+
+def libreoffice_command() -> str | None:
+    """The LibreOffice executable Docling converts legacy Office files with: on PATH, as Docling
+    looks it up (``libreoffice``, then ``soffice``)."""
+    return shutil.which("libreoffice") or shutil.which("soffice")
+
+
+class DoclingOfficeAdapter:
+    """Normalize a legacy binary Office file (``.doc``, ``.xls``) through Docling, in a fresh
+    killable, network-disabled process."""
+
+    def __init__(
+        self,
+        suffix: str,
+        *,
+        converter: PdfConverter | None = None,
+        options: PdfConversionOptions | None = None,
+    ) -> None:
+        include_furniture = options.include_furniture if options is not None else False
+        self._suffix = suffix
+        self._converter = converter or DoclingOfficeConverter(suffix, include_furniture)
+
+    def convert(self, source: ResolvedSource, *, limits: SourceLimits) -> SourceDocument:
+        deadline = time.monotonic() + limits.deadline_seconds
+        _inspect_ole(source.primary, self._suffix)
+        conversion = _run_pdf_worker(
+            self._converter,
+            source.primary,
+            artifacts_path=None,
+            timeout=_remaining_deadline(deadline),
+            max_cells=limits.max_cells,
+            kind=f".{self._suffix}",
+        )
+        _format, media_type, unit = _OFFICE_FORMATS[self._suffix]
+        units = conversion.page_count if unit == "sheet" else 0
+        return SourceDocument(
+            source_name=source.primary.name,
+            media_type=media_type,
+            blocks=tuple(_source_blocks(conversion.blocks, source.primary.name)),
+            coverage=(
+                SourceCoverage(
+                    unit="sheet",
+                    total_units=units,
+                    converted_units=tuple(range(1, units + 1)),
+                )
+                if units
+                else SourceCoverage()
+            ),
+            diagnostics=conversion.diagnostics,
+        )
+
+
+def _inspect_ole(path: Path, suffix: str) -> None:
+    try:
+        with path.open("rb") as stream:
+            signature = stream.read(len(_OLE_SIGNATURE))
+    except OSError as error:
+        raise SourceConversionError(f".{suffix} source could not be inspected") from error
+    if signature != _OLE_SIGNATURE:
+        raise SourceFormatError(f"{suffix.upper()} extension does not match file content")
+
+
+def _source_blocks(
+    converted_blocks: Iterable[PdfConversionBlock], source_name: str
+) -> list[SourceBlock]:
+    """Docling's converted blocks as source blocks, a table with its rows, empty blocks dropped."""
+    blocks: list[SourceBlock] = []
+    table_index = 0
+    for converted in converted_blocks:
+        provenance = SourceProvenance(
+            source_name=source_name,
+            page=converted.page,
+            pages=converted.pages,
+            section_path=converted.section_path,
+        )
+        table: SourceTable | None = None
+        kind = "text"
+        if converted.table_rows:
+            table_index += 1
+            table = SourceTable(
+                id=f"table-{table_index:06d}",
+                rows=converted.table_rows,
+                provenance=provenance,
+            )
+            kind = "table"
+        text = (
+            render_table(converted.table_rows)
+            if converted.table_rows
+            else converted.text.strip()
+        )
+        if not text:
+            continue
+        blocks.append(
+            SourceBlock(
+                id=f"block-{len(blocks) + 1:06d}",
+                order=len(blocks),
+                kind=kind,
+                text=text,
+                provenance=provenance,
+                table=table,
+            )
+        )
+    return blocks
 
 
 class DocxAdapter:
@@ -691,6 +822,7 @@ def _run_pdf_worker(
     artifacts_path: str | None,
     timeout: float,
     max_cells: int | None = None,
+    kind: str = "PDF",
 ) -> PdfConversion:
     context = get_context("spawn")
     output = context.Queue(maxsize=1)
@@ -704,11 +836,13 @@ def _run_pdf_worker(
             status, code, payload = _wait_for_worker_message(output, process, timeout)
         except Empty:
             _bounded_process_cleanup(process)
-            raise SourceTimeoutError("PDF conversion exceeded the configured deadline") from None
+            raise SourceTimeoutError(
+                f"{kind} conversion exceeded the configured deadline"
+            ) from None
         except ChildProcessError:
             _bounded_process_cleanup(process)
             raise SourceConversionError(
-                "PDF conversion worker exited before returning a result"
+                f"{kind} conversion worker exited before returning a result"
             ) from None
         _bounded_process_cleanup(process)
         if status == "ok" and isinstance(payload, PdfConversion):
@@ -721,7 +855,7 @@ def _run_pdf_worker(
             raise SourceSecurityError(str(payload))
         if code == SourceLimitError.code:
             raise SourceLimitError("max_cells", str(payload))
-        raise SourceConversionError("PDF conversion failed in the isolated worker")
+        raise SourceConversionError(f"{kind} conversion failed in the isolated worker")
     except (KeyboardInterrupt, SystemExit):
         _bounded_process_cleanup(process)
         raise
