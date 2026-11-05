@@ -49,6 +49,13 @@ project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `SOURCE_TABLE_SPLIT` warning with the table id and part count. Only a row that cannot
   fit with the header is an error, a `SOURCE_LIMIT_EXCEEDED` diagnostic naming the
   table and block.
+- A merged table cell in a Docling-converted document (PDF, `.doc`, `.xls`) is written
+  once instead of in every column it spans: table rows are read from Docling's cell
+  grid, the text in the first column of the span and the columns it continues into
+  left empty. A cell spanning rows keeps its text in each row, so a row group of a split
+  table still carries it. Header rows still join into one header row (`Paid.GEL`); a
+  header cell spanning header rows counts once (`Code`, not `Code.Code`). A table's
+  rows, and the request budget they take, shrink by the repeated text.
 
 ### Security
 

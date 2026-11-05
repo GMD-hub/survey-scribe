@@ -1646,12 +1646,82 @@ def _docling_table_markdown(item: object, document: object) -> str:
         return str(exporter())
 
 
+def _docling_cell_text(cell: object, document: object) -> str:
+    getter = getattr(cell, "_get_text", None)
+    if callable(getter):
+        try:
+            return str(getter(doc=document))
+        except TypeError:
+            return str(getter())
+    return str(getattr(cell, "text", ""))
+
+
+def _docling_cell_starts(cell: object, axis: str, index: int) -> bool:
+    """Whether ``cell`` begins at row or column ``index`` rather than continuing into it."""
+    return int(getattr(cell, f"start_{axis}_offset_idx", index)) >= index
+
+
+def _docling_grid_rows(item: object, document: object) -> tuple[tuple[str, ...], ...] | None:
+    """Rows from a Docling table's cell grid, a merged cell's text written once.
+
+    Docling's grid places a merged cell in every position it covers, so its exports repeat
+    the text in each spanned column. Here a body cell's text stands in the first column it
+    spans and the columns it continues into stay empty; a cell spanning rows keeps its text
+    in each row, so a row read without its neighbours (a split table) still carries it.
+    The leading column-header rows become one header row, as in Docling's DataFrame export:
+    each column joins the header cells over it with ``.``, a cell spanning header rows counts
+    once, and a column covered only by cells that start to its left has an empty header.
+    Returns None when the item has no grid.
+    """
+    grid = getattr(getattr(item, "data", None), "grid", None)
+    if not grid:
+        return None
+    rows = [list(row) for row in cast(Iterable[Iterable[object]], grid)]
+    if not all(rows):
+        return None
+    width = max(len(row) for row in rows)
+    starts = _docling_cell_starts
+
+    def text(cell: object) -> str:
+        return _docling_cell_text(cell, document)
+
+    headers = 0
+    for index, row in enumerate(rows):
+        if not any(
+            getattr(cell, "column_header", False) and starts(cell, "row", index) for cell in row
+        ):
+            break
+        headers += 1
+    header: tuple[str, ...]
+    if headers:
+        names: list[str] = []
+        for column in range(width):
+            over = [(r, rows[r][column]) for r in range(headers) if column < len(rows[r])]
+            if not any(starts(cell, "col", column) for _, cell in over):
+                names.append("")
+                continue
+            names.append(".".join(text(cell) for r, cell in over if starts(cell, "row", r)))
+        header = tuple(names)
+    else:
+        header = tuple(str(column) for column in range(width))
+    body = tuple(
+        tuple(text(cell) if starts(cell, "col", column) else "" for column, cell in enumerate(row))
+        for row in rows[headers:]
+    )
+    return (header, *body)
+
+
 def _docling_table_rows(
     item: object,
     document: object,
     *,
     max_cells: int | None,
 ) -> tuple[tuple[str, ...], ...]:
+    rows = _docling_grid_rows(item, document)
+    if rows is not None:
+        if max_cells is not None:
+            _add_table_cells(0, rows, max_cells)
+        return rows
     dataframe_exporter = getattr(item, "export_to_dataframe", None)
     if callable(dataframe_exporter):
         try:

@@ -594,6 +594,85 @@ def test_docling_converter_prefers_structured_rows_with_embedded_newlines(
     )
 
 
+def _grid_cell(
+    text: str, rows: tuple[int, int], cols: tuple[int, int], *, header: bool = False
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        text=text,
+        start_row_offset_idx=rows[0],
+        end_row_offset_idx=rows[1],
+        start_col_offset_idx=cols[0],
+        end_col_offset_idx=cols[1],
+        column_header=header,
+    )
+
+
+# Two header rows over six columns: "Code" spans both header rows, "Paid" spans two columns
+# above "GEL" and "Tetri", "Note" spans three columns and both header rows. In the body, "Food"
+# spans two rows and an example sentence spans three columns.
+_SPANNING_CELLS = (
+    (("Code", (0, 2), (0, 1)), ("Paid", (0, 1), (1, 3)), ("Note", (0, 2), (3, 6))),
+    (("GEL", (1, 2), (1, 2)), ("Tetri", (1, 2), (2, 3))),
+    (("Food", (2, 4), (0, 1)), ("1", (2, 3), (1, 2)), ("50", (2, 3), (2, 3))),
+    (("written across three columns", (2, 3), (3, 6)),),
+    (("2", (3, 4), (1, 2)), ("0", (3, 4), (2, 3))),
+    (("x", (3, 4), (3, 4)), ("y", (3, 4), (4, 5)), ("z", (3, 4), (5, 6))),
+)
+_SPANNING_ROWS = (
+    ("Code", "Paid.GEL", "Paid.Tetri", "Note", "", ""),
+    ("Food", "1", "50", "written across three columns", "", ""),
+    ("Food", "2", "0", "x", "y", "z"),
+)
+
+
+def test_docling_table_rows_write_a_merged_cell_once() -> None:
+    cells = [
+        _grid_cell(text, rows, cols, header=rows[0] < 2)
+        for group in _SPANNING_CELLS
+        for text, rows, cols in group
+    ]
+    grid = [[None] * 6 for _ in range(4)]
+    for cell in cells:  # as Docling's grid: a merged cell in every position it covers
+        for r in range(cell.start_row_offset_idx, cell.end_row_offset_idx):
+            for c in range(cell.start_col_offset_idx, cell.end_col_offset_idx):
+                grid[r][c] = cell
+
+    class GridTable:
+        data = SimpleNamespace(grid=grid)
+
+        def export_to_dataframe(self, **_kwargs: object) -> object:
+            pytest.fail("a table with a grid unexpectedly used the DataFrame export")
+
+    rows = docling_source._docling_table_rows(GridTable(), object(), max_cells=None)
+
+    assert rows == _SPANNING_ROWS
+    with pytest.raises(SourceLimitError, match="cell limit"):
+        docling_source._docling_table_rows(GridTable(), object(), max_cells=17)
+
+
+def test_docling_table_rows_read_docling_table_data() -> None:
+    doc_types = pytest.importorskip("docling_core.types.doc")
+    cells = [
+        doc_types.TableCell(
+            text=text,
+            start_row_offset_idx=rows[0],
+            end_row_offset_idx=rows[1],
+            start_col_offset_idx=cols[0],
+            end_col_offset_idx=cols[1],
+            row_span=rows[1] - rows[0],
+            col_span=cols[1] - cols[0],
+            column_header=rows[0] < 2,
+        )
+        for group in _SPANNING_CELLS
+        for text, rows, cols in group
+    ]
+    data = doc_types.TableData(num_rows=4, num_cols=6, table_cells=cells)
+
+    rows = docling_source._docling_table_rows(SimpleNamespace(data=data), None, max_cells=None)
+
+    assert rows == _SPANNING_ROWS
+
+
 def test_pdf_adapter_normalizes_tables_and_skips_empty_blocks(tmp_path: Path) -> None:
     path = tmp_path / "questionnaire.pdf"
     _write_pdf(path)
