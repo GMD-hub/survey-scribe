@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
@@ -112,6 +113,7 @@ def chunk_document(
     max_tokens: int,
     overlap_tokens: int = 0,
     estimator: TokenEstimator | None = None,
+    part_cost: Callable[[SourceChunkPart], int] | None = None,
 ) -> ChunkedDocument:
     """Chunk without dropping preamble, complete tables, or source order.
 
@@ -122,6 +124,10 @@ def chunk_document(
             the next chunk.
         estimator: Token estimator. The conservative dependency-free estimator is
             used when omitted.
+        part_cost: Function that gives the token cost of one part as the caller
+            sends it. A part is a whole block, or one partition of a block that
+            exceeds the limit. When given, this cost fills each chunk, and the
+            overlap still counts the plain text.
 
     Returns:
         Stable chunks plus an inventory of exact repeated table rows.
@@ -140,27 +146,45 @@ def chunk_document(
         raise ValueError("overlap_tokens must be non-negative and less than max_tokens")
     token_estimator = estimator or ConservativeTokenEstimator()
     new_content_budget = max_tokens - overlap_tokens if overlap_tokens else max_tokens
+    if part_cost is not None:
+        # With a small limit, keep each text part at least half a chunk long.
+        new_content_budget = max(new_content_budget, max_tokens // 2)
     parts = _split_blocks(
         document.blocks,
         max_tokens=max_tokens,
         text_budget=new_content_budget,
         estimator=token_estimator,
+        part_cost=part_cost,
     )
-    groups = _group_parts(parts, max_tokens=new_content_budget, estimator=token_estimator)
-    chunks: list[SourceChunk] = []
-    previous_new: tuple[_BlockPart, ...] = ()
-    for new_parts in groups:
-        overlap = _overlap_tail(
-            previous_new,
-            overlap_tokens,
-            token_estimator,
-            new_parts=new_parts,
+    planned: list[tuple[tuple[_BlockPart, ...], tuple[_BlockPart, ...]]] = []
+    if part_cost is None:
+        previous_new: tuple[_BlockPart, ...] = ()
+        for new_parts in _group_parts(
+            parts, max_tokens=new_content_budget, estimator=token_estimator
+        ):
+            overlap = _overlap_tail(
+                previous_new,
+                overlap_tokens,
+                token_estimator,
+                new_parts=new_parts,
+                max_tokens=max_tokens,
+            )
+            planned.append((overlap, new_parts))
+            previous_new = new_parts
+    else:
+        planned = _pack_by_cost(
+            parts,
             max_tokens=max_tokens,
+            overlap_tokens=overlap_tokens,
+            estimator=token_estimator,
         )
+    chunks: list[SourceChunk] = []
+    for overlap, new_parts in planned:
         all_parts = overlap + new_parts
         text = _join_parts(all_parts)
         token_count = token_estimator.estimate(text)
-        if token_count > max_tokens:
+        final_tokens = token_count if part_cost is None else _parts_cost(all_parts)
+        if final_tokens > max_tokens:
             raise SourceLimitError("max_tokens", "Final source chunk exceeds the token limit")
         chunks.append(
             SourceChunk(
@@ -177,7 +201,6 @@ def chunk_document(
                 token_count=token_count,
             )
         )
-        previous_new = new_parts
     return ChunkedDocument(
         source_name=document.source_name,
         chunks=tuple(chunks),
@@ -192,6 +215,7 @@ class _BlockPart:
     part_index: int
     part_count: int
     text: str
+    cost: int | None = None
 
 
 def _split_blocks(
@@ -200,28 +224,32 @@ def _split_blocks(
     max_tokens: int,
     text_budget: int,
     estimator: TokenEstimator,
+    part_cost: Callable[[SourceChunkPart], int] | None = None,
 ) -> tuple[_BlockPart, ...]:
     parts: list[_BlockPart] = []
     for block in blocks:
         if block.kind == "table":
-            if estimator.estimate(block.text) > max_tokens:
+            part = _BlockPart(
+                block=block,
+                id=f"{block.id}:part-000001",
+                part_index=1,
+                part_count=1,
+                text=block.text,
+            )
+            if part_cost is not None:
+                part = _with_cost(part, part_cost)
+            table_tokens = part.cost if part.cost is not None else estimator.estimate(block.text)
+            if table_tokens > max_tokens:
                 raise SourceLimitError(
                     "max_tokens",
                     "A source table exceeds the token limit and cannot be split safely",
                 )
-            parts.append(
-                _BlockPart(
-                    block=block,
-                    id=f"{block.id}:part-000001",
-                    part_index=1,
-                    part_count=1,
-                    text=block.text,
-                )
-            )
+            parts.append(part)
             continue
-        text_parts = _split_text(block.text, max_tokens=text_budget, estimator=estimator)
+        measure = estimator.estimate if part_cost is None else _text_cost(block, part_cost)
+        text_parts = _split_text(block.text, max_tokens=text_budget, measure=measure)
         part_count = len(text_parts)
-        parts.extend(
+        block_parts = [
             _BlockPart(
                 block=block,
                 id=f"{block.id}:part-{index:06d}",
@@ -230,8 +258,117 @@ def _split_blocks(
                 text=text,
             )
             for index, text in enumerate(text_parts, start=1)
-        )
+        ]
+        if part_cost is not None:
+            block_parts = [_with_cost(part, part_cost) for part in block_parts]
+        parts.extend(block_parts)
     return tuple(parts)
+
+
+def _with_cost(part: _BlockPart, part_cost: Callable[[SourceChunkPart], int]) -> _BlockPart:
+    """Return the same part with its token cost added.
+
+    Parts are frozen, so the function builds a new one.
+    """
+    return _BlockPart(
+        block=part.block,
+        id=part.id,
+        part_index=part.part_index,
+        part_count=part.part_count,
+        text=part.text,
+        cost=part_cost(_to_chunk_part(part)),
+    )
+
+
+def _text_cost(
+    block: SourceBlock, part_cost: Callable[[SourceChunkPart], int]
+) -> Callable[[str], int]:
+    """Return a function that gives the token cost of one partition of the block text.
+
+    All part ids of one block have the same length, so the first id gives the
+    correct cost.
+    """
+
+    def measure(text: str) -> int:
+        probe = _BlockPart(
+            block=block,
+            id=f"{block.id}:part-000001",
+            part_index=1,
+            part_count=1,
+            text=text,
+        )
+        return part_cost(_to_chunk_part(probe))
+
+    return measure
+
+
+def _parts_cost(parts: tuple[_BlockPart, ...]) -> int:
+    """Return the total token cost of the parts."""
+    return sum(part.cost or 0 for part in parts)
+
+
+def _pack_by_cost(
+    parts: tuple[_BlockPart, ...],
+    *,
+    max_tokens: int,
+    overlap_tokens: int,
+    estimator: TokenEstimator,
+) -> list[tuple[tuple[_BlockPart, ...], tuple[_BlockPart, ...]]]:
+    """Put the parts into chunks in source order, by token cost.
+
+    Each chunk starts with its overlap. Then new parts go into the chunk until
+    the next part does not fit.
+    """
+    planned: list[tuple[tuple[_BlockPart, ...], tuple[_BlockPart, ...]]] = []
+    previous: tuple[_BlockPart, ...] = ()
+    overlap: tuple[_BlockPart, ...] = ()
+    current: list[_BlockPart] = []
+    for part in parts:
+        if current and _parts_cost((*overlap, *current, part)) > max_tokens:
+            planned.append((overlap, tuple(current)))
+            previous = tuple(current)
+            current = []
+        if not current:
+            overlap = _cost_overlap(
+                previous,
+                part,
+                overlap_tokens=overlap_tokens,
+                max_tokens=max_tokens,
+                estimator=estimator,
+            )
+        current.append(part)
+    if current:
+        planned.append((overlap, tuple(current)))
+    return planned
+
+
+def _cost_overlap(
+    previous: tuple[_BlockPart, ...],
+    first: _BlockPart,
+    *,
+    overlap_tokens: int,
+    max_tokens: int,
+    estimator: TokenEstimator,
+) -> tuple[_BlockPart, ...]:
+    """Return the overlap parts for the next chunk.
+
+    The overlap takes whole text parts, and no tables, from the end of the
+    previous chunk, up to overlap_tokens of plain text. It stops before a part
+    that leaves no space for the first new part.
+    """
+    if overlap_tokens == 0:
+        return ()
+    selected: list[_BlockPart] = []
+    for part in reversed(previous):
+        if part.block.kind == "table":
+            continue
+        candidate = tuple(reversed([*selected, part]))
+        if estimator.estimate(_join_parts(candidate)) > overlap_tokens:
+            break
+        if _parts_cost((*candidate, first)) > max_tokens:
+            break
+        selected.append(part)
+    return tuple(reversed(selected))
 
 
 def _group_parts(
@@ -288,9 +425,9 @@ def _split_text(
     text: str,
     *,
     max_tokens: int,
-    estimator: TokenEstimator,
+    measure: Callable[[str], int],
 ) -> tuple[str, ...]:
-    if estimator.estimate(text) <= max_tokens:
+    if measure(text) <= max_tokens:
         return (text,)
     remaining = text
     parts: list[str] = []
@@ -300,7 +437,7 @@ def _split_text(
         split = 0
         while low <= high:
             middle = (low + high) // 2
-            if estimator.estimate(remaining[:middle]) <= max_tokens:
+            if measure(remaining[:middle]) <= max_tokens:
                 split = middle
                 low = middle + 1
             else:

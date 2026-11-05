@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import pytest
 
 from survey_scribe.sources.base import (
@@ -14,6 +16,7 @@ from survey_scribe.sources.base import (
 )
 from survey_scribe.sources.chunking import (
     ConservativeTokenEstimator,
+    SourceChunk,
     SourceChunkPart,
     chunk_document,
 )
@@ -520,3 +523,171 @@ def test_chunk_parts_reject_invalid_index_table_and_provenance_states(
 
     with pytest.raises(ValueError, match=message):
         SourceChunkPart.model_validate(values)
+
+
+# The part costs below are invented. ENVELOPE stands for the label, the id and the separator
+# that a caller sends with each part. It is not a measured number.
+ENVELOPE = 60
+
+
+def _envelope_cost(part: SourceChunkPart) -> int:
+    return len(part.text) + ENVELOPE
+
+
+def _text_document(texts: tuple[str, ...]) -> SourceDocument:
+    provenance = SourceProvenance(source_name="questionnaire.txt")
+    return SourceDocument(
+        source_name="questionnaire.txt",
+        media_type="text/plain",
+        blocks=tuple(
+            SourceBlock(
+                id=f"block-{index}",
+                order=index,
+                kind="text",
+                text=text,
+                provenance=provenance,
+            )
+            for index, text in enumerate(texts)
+        ),
+    )
+
+
+def _chunk_cost(chunk: SourceChunk, cost: Callable[[SourceChunkPart], int]) -> int:
+    return sum(cost(part) for part in chunk.parts)
+
+
+def test_without_part_cost_paragraph_blocks_keep_the_plain_text_chunks() -> None:
+    # Six invented paragraphs of 100 characters. Two paragraphs and one separator are 202
+    # characters, so three paragraphs (304) do not fit the 250 limit.
+    texts = tuple(f"Paragraph {index}: " + "x" * 87 for index in range(6))
+    document = _text_document(texts)
+
+    plain = chunk_document(document, max_tokens=250, estimator=CharacterEstimator())
+    counted = chunk_document(
+        document, max_tokens=250, estimator=CharacterEstimator(), part_cost=_envelope_cost
+    )
+
+    assert [chunk.new_block_ids for chunk in plain.chunks] == [
+        ("block-0", "block-1"),
+        ("block-2", "block-3"),
+        ("block-4", "block-5"),
+    ]
+    assert [chunk.token_count for chunk in plain.chunks] == [202, 202, 202]
+    assert all(_chunk_cost(chunk, _envelope_cost) > 250 for chunk in plain.chunks)
+    assert [chunk.new_block_ids for chunk in counted.chunks] == [
+        (f"block-{index}",) for index in range(6)
+    ]
+    assert all(_chunk_cost(chunk, _envelope_cost) <= 250 for chunk in counted.chunks)
+    assert [chunk.token_count for chunk in counted.chunks] == [100] * 6
+
+
+def test_part_cost_fills_chunks_by_cost_and_the_overlap_by_plain_text() -> None:
+    # Twenty invented five-character blocks. Each part costs 5 + 25 = 30, so ten parts
+    # fill a chunk of 300. The overlap budget of 20 holds three parts by plain text
+    # (5 + 2 + 5 + 2 + 5 = 19), although their cost is 90. A part cost must not shrink
+    # the overlap: the reader gets the same prior text as without a part cost.
+    def cost(part: SourceChunkPart) -> int:
+        return len(part.text) + 25
+
+    document = _text_document(tuple(f"Q{index:02d}ok" for index in range(20)))
+
+    result = chunk_document(
+        document,
+        max_tokens=300,
+        overlap_tokens=20,
+        estimator=CharacterEstimator(),
+        part_cost=cost,
+    )
+
+    assert [chunk.new_block_ids for chunk in result.chunks] == [
+        tuple(f"block-{index}" for index in range(10)),
+        tuple(f"block-{index}" for index in range(10, 17)),
+        tuple(f"block-{index}" for index in range(17, 20)),
+    ]
+    assert [chunk.overlap_block_ids for chunk in result.chunks] == [
+        (),
+        ("block-7", "block-8", "block-9"),
+        ("block-14", "block-15", "block-16"),
+    ]
+    for chunk in result.chunks:
+        overlap = [part for part in chunk.parts if part.id in chunk.overlap_part_ids]
+        assert CharacterEstimator().estimate("\n\n".join(part.text for part in overlap)) <= 20
+        assert _chunk_cost(chunk, cost) <= 300
+        assert chunk.token_count == CharacterEstimator().estimate(chunk.text)
+
+
+def test_part_cost_overlap_gives_way_to_the_first_new_part() -> None:
+    # Invented blocks: four small parts (cost 30 each), then one large part (cost 285).
+    # The overlap budget would take the last small parts by plain text, but the large
+    # part fits only with one of them. The overlap gives way, and the chunk fits.
+    def cost(part: SourceChunkPart) -> int:
+        return len(part.text) + 25
+
+    document = _text_document((*(f"Q{index}ok!" for index in range(4)), "x" * 260))
+
+    result = chunk_document(
+        document,
+        max_tokens=320,
+        overlap_tokens=30,
+        estimator=CharacterEstimator(),
+        part_cost=cost,
+    )
+
+    assert [chunk.new_block_ids for chunk in result.chunks] == [
+        ("block-0", "block-1", "block-2", "block-3"),
+        ("block-4",),
+    ]
+    assert result.chunks[1].overlap_block_ids == ("block-3",)
+    assert all(_chunk_cost(chunk, cost) <= 320 for chunk in result.chunks)
+
+
+def test_part_cost_splits_text_so_each_wrapped_part_fits() -> None:
+    # The invented cost doubles each character, as escaping can, and adds a 20-token label.
+    def cost(part: SourceChunkPart) -> int:
+        return 2 * len(part.text) + 20
+
+    text = "word " * 60
+    document = _text_document((text,))
+
+    result = chunk_document(
+        document, max_tokens=100, estimator=CharacterEstimator(), part_cost=cost
+    )
+    new_parts = [
+        part for chunk in result.chunks for part in chunk.parts if part.id in chunk.new_part_ids
+    ]
+
+    assert "".join(part.text for part in new_parts) == text
+    assert all(cost(part) <= 100 for part in new_parts)
+    assert all(_chunk_cost(chunk, cost) <= 100 for chunk in result.chunks)
+    assert [part.part_index for part in new_parts] == list(range(1, len(new_parts) + 1))
+    assert {part.part_count for part in new_parts} == {len(new_parts)}
+    assert len(new_parts) == 8
+
+
+def test_part_cost_rejects_a_table_whose_cost_passes_the_limit() -> None:
+    rows = (("x" * 20,),)
+    provenance = SourceProvenance(source_name="questionnaire.csv", row_start=1, row_end=1)
+    table = SourceTable(id="table-1", rows=rows, provenance=provenance)
+    document = SourceDocument(
+        source_name="questionnaire.csv",
+        media_type="text/csv",
+        blocks=(
+            SourceBlock(
+                id="block-1",
+                order=0,
+                kind="table",
+                text=render_table(rows),
+                provenance=provenance,
+                table=table,
+            ),
+        ),
+    )
+
+    plain = chunk_document(document, max_tokens=50, estimator=CharacterEstimator())
+    with pytest.raises(SourceLimitError, match="cannot be split safely") as raised:
+        chunk_document(
+            document, max_tokens=50, estimator=CharacterEstimator(), part_cost=_envelope_cost
+        )
+
+    assert len(plain.chunks) == 1
+    assert raised.value.limit == "max_tokens"

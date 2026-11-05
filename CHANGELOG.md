@@ -39,6 +39,11 @@ project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - PDF options reject noninteger heading limits and unsupported OCR language settings.
 - Packed extraction requests account for serialized source-part metadata and overlap
   before they are sent to a provider.
+- Variable extraction chunking counts each part as the request sends it: the escaped
+  text, the JSON label and the block id. The first chunking now fits the request limit,
+  also for documents with many short OCR blocks. The overlap still counts the plain
+  text, so each chunk repeats the same prior text as before. `chunk_document` has a new
+  optional `part_cost` argument. Without it, the chunks do not change.
 
 ### Security
 
