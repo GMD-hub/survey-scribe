@@ -20,11 +20,20 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from survey_scribe.errors import SurveyScribeError
 
 LocalSource: TypeAlias = str | os.PathLike[str]
+ExternalLinkPolicy: TypeAlias = Literal["refuse", "strip"]
+EXTERNAL_LINK_STRIPPED = "EXTERNAL_LINK_STRIPPED"
 
 
 @dataclass(frozen=True, slots=True)
 class SourceLimits:
-    """Resource ceilings applied before or during local source conversion."""
+    """Resource ceilings and safety policies applied during local source conversion.
+
+    ``external_links`` controls DOCX and XLSX packages that declare external
+    relationships (hyperlinks, linked workbooks, remote templates). ``"refuse"``
+    rejects the package; ``"strip"`` drops those relationships without following
+    them and records an ``EXTERNAL_LINK_STRIPPED`` warning. Formulas and macros
+    are refused under both policies.
+    """
 
     max_source_bytes: int = 250 * 1024 * 1024
     max_pages: int = 2_000
@@ -39,6 +48,7 @@ class SourceLimits:
     max_cells: int = 2_000_000
     max_companions: int = 100
     deadline_seconds: float = 30 * 60.0
+    external_links: ExternalLinkPolicy = "refuse"
 
     def __post_init__(self) -> None:
         for name in (
@@ -73,6 +83,8 @@ class SourceLimits:
             or self.deadline_seconds <= 0
         ):
             raise ValueError("deadline_seconds must be greater than 0")
+        if self.external_links not in ("refuse", "strip"):
+            raise ValueError("external_links must be 'refuse' or 'strip'")
 
 
 DEFAULT_SOURCE_LIMITS = SourceLimits()
@@ -240,6 +252,16 @@ class SourceDiagnostic(BaseModel):
         if (self.unit is None) != (self.unit_index is None):
             raise ValueError("diagnostic unit and unit_index must be provided together")
         return self
+
+
+def external_links_stripped_diagnostic(count: int, source_kind: str) -> SourceDiagnostic:
+    """Report stripped external relationships by count only; targets stay unrecorded."""
+    noun = "relationship" if count == 1 else "relationships"
+    return SourceDiagnostic(
+        code=EXTERNAL_LINK_STRIPPED,
+        message=f"{source_kind} external link {noun} stripped without being followed: {count}",
+        severity="warning",
+    )
 
 
 class SourceDocument(BaseModel):

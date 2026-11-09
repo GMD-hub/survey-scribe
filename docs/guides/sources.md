@@ -94,6 +94,7 @@ Default `SourceLimits` protect local processing:
 | `max_cells` | 2,000,000 |
 | `max_companions` | 100 |
 | `deadline_seconds` | 1,800 seconds |
+| `external_links` | `"refuse"` |
 
 Set smaller limits for internet-facing or multi-tenant workloads:
 
@@ -259,6 +260,29 @@ OCR enabled it also holds the approved EasyOCR archives described above.
 The XLSX adapter opens workbooks in read-only mode and rejects formulas, macros,
 external links, malformed cell references, archive expansion violations, and
 excessive worksheet dimensions. It does not calculate workbook formulas.
+
+## External links in DOCX and XLSX
+
+By default a DOCX or XLSX package that declares an external relationship (a
+hyperlink, a linked workbook, or a remote template) is refused with
+`SourceSecurityError`. Questionnaire workbooks often carry such a link, so the
+policy is configurable:
+
+```python
+from dataclasses import replace
+
+from survey_scribe.sources import DEFAULT_SOURCE_LIMITS, SourceRegistry
+
+limits = replace(DEFAULT_SOURCE_LIMITS, external_links="strip")
+document = SourceRegistry.default().convert("questionnaire.xlsx", limits=limits)
+```
+
+With `external_links="strip"` the external relationships are dropped and never
+followed: the adapters read only cell values and document text, so a hyperlinked
+cell or paragraph keeps its visible text. The document carries one
+`EXTERNAL_LINK_STRIPPED` warning diagnostic with the number of stripped links;
+link targets are not recorded. Formulas and macros remain refused under both
+policies, including formulas that reference a linked workbook.
 
 The XLSForm support matrix is version `1.0`. Groups become containment; repeats
 remain logical templates; reference comparisons, `selected()`, and Boolean

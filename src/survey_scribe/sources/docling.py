@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import signal
 import socket
 import time
 import zipfile
@@ -39,6 +40,7 @@ from survey_scribe.sources.base import (
     SourceSecurityError,
     SourceTable,
     SourceTimeoutError,
+    external_links_stripped_diagnostic,
     inspect_zip_archive,
     read_utf8_text,
     render_table,
@@ -656,7 +658,7 @@ class DocxAdapter:
         try:
             with zipfile.ZipFile(source.primary) as archive:
                 _inspect_docx_content_types(archive, names, limits, deadline)
-                _inspect_relationships(archive, names, limits, deadline)
+                stripped_links = _inspect_relationships(archive, names, limits, deadline)
                 document_xml = _read_zip_part(
                     archive,
                     "word/document.xml",
@@ -733,6 +735,8 @@ class DocxAdapter:
             )
             for _ in range(unsupported_containers)
         )
+        if stripped_links:
+            diagnostics += (external_links_stripped_diagnostic(stripped_links, "DOCX"),)
         coverage = (
             SourceCoverage(total_units=1, converted_units=(), failed_units=(1,))
             if unsupported_containers
@@ -843,6 +847,7 @@ def _run_pdf_worker(
             _bounded_process_cleanup(process)
             raise SourceConversionError(
                 f"{kind} conversion worker exited before returning a result"
+                f"{_exit_note(process)}"
             ) from None
         _bounded_process_cleanup(process)
         if status == "ok" and isinstance(payload, PdfConversion):
@@ -944,7 +949,7 @@ def _run_pdf_preflight(path: Path, *, max_pages: int, timeout: float) -> int:
         except ChildProcessError:
             _bounded_process_cleanup(process)
             raise SourceConversionError(
-                "PDF inspection worker exited before returning a result"
+                f"PDF inspection worker exited before returning a result{_exit_note(process)}"
             ) from None
         _bounded_process_cleanup(process)
         if status == "ok" and isinstance(payload, int) and not isinstance(payload, bool):
@@ -964,6 +969,21 @@ def _run_pdf_preflight(path: Path, *, max_pages: int, timeout: float) -> int:
     finally:
         output.close()
         output.join_thread()
+
+
+def _exit_note(process: Any) -> str:
+    """How the worker ended, for the error a caller sees: a negative exit code is the signal that killed it
+    (-9: the kernel's OOM killer, the usual cause in a memory-capped container; -11: a native crash)."""
+    code = getattr(process, "exitcode", None)
+    if code is None:
+        return ""
+    if code < 0:
+        try:
+            name = signal.Signals(-code).name
+        except ValueError:
+            name = "unknown signal"
+        return f" (killed by signal {-code} {name}" + (", likely out of memory)" if -code == 9 else ")")
+    return f" (exit code {code})"
 
 
 def _wait_for_worker_message(output: Any, process: Any, timeout: float) -> Any:
@@ -1077,7 +1097,9 @@ def _inspect_relationships(
     names: set[str],
     limits: SourceLimits,
     deadline: float,
-) -> None:
+) -> int:
+    """Validate package relationships and return how many external ones were stripped."""
+    stripped = 0
     for original_name in archive.namelist():
         name = original_name.replace("\\", "/").lower()
         if not name.endswith(".rels") or name not in names:
@@ -1100,7 +1122,10 @@ def _inspect_relationships(
             mode = relationship.attrib.get("TargetMode", "").lower()
             target = relationship.attrib.get("Target", "")
             if mode == "external" or re.match(r"^[a-z][a-z0-9+.-]*:", target, re.IGNORECASE):
-                raise SourceSecurityError("DOCX external relationship is prohibited")
+                if limits.external_links == "refuse":
+                    raise SourceSecurityError("DOCX external relationship is prohibited")
+                stripped += 1
+    return stripped
 
 
 def _read_zip_part(

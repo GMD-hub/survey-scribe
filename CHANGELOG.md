@@ -18,6 +18,11 @@ project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   them with LibreOffice and parses them with its Word and Excel pipelines, in the same
   killable, network-disabled worker as PDF conversion. A workbook's coverage is counted
   by sheet. LibreOffice (`soffice`) must be on PATH; no model artifacts are needed.
+- `SourceLimits.external_links` (`"refuse"` by default, or `"strip"`): DOCX and XLSX
+  packages with external relationships (hyperlinks, linked workbooks, remote
+  templates) can be converted with the links dropped and never followed, reported by
+  one `EXTERNAL_LINK_STRIPPED` warning diagnostic with a count. Formulas and macros
+  stay refused.
 
 ### Changed
 
