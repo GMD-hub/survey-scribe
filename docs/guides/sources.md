@@ -244,12 +244,46 @@ registry = SourceRegistry.default(
 | `max_heading_level` | `6` | the deepest inferred level |
 | `include_furniture` | `False` | keep page headers and footers; the layout model files a page-top section title as a page header |
 | `table_mode` | `"accurate"` | TableFormer `"accurate"` or `"fast"` |
+| `pages_per_chunk` | `None` | `None` converts the document in one call, as before. A number converts that many pages per Docling call (models load once); progress is reported and finished pages are kept after each one. Inferred heading levels are then computed per chunk; the section path carries across chunks. |
+| `first_pages` | `None` | convert only the first N pages (a smoke-test read); the remaining pages are listed as not converted |
+| `partial_on_deadline` | `False` | at the deadline, return the chunks already converted instead of raising `SourceTimeoutError`; needs `pages_per_chunk` |
 
 The same options are read from the environment by `SourceRegistry.default()`
 when no `pdf_options` are passed: `SURVEY_SCRIBE_PDF_OCR`,
 `SURVEY_SCRIBE_PDF_OCR_LANGUAGES` (comma-separated),
 `SURVEY_SCRIBE_PDF_HEADING_LEVELS`, `SURVEY_SCRIBE_PDF_MAX_HEADING_LEVEL`,
-`SURVEY_SCRIBE_PDF_INCLUDE_FURNITURE`, `SURVEY_SCRIBE_PDF_TABLE_MODE`.
+`SURVEY_SCRIBE_PDF_INCLUDE_FURNITURE`, `SURVEY_SCRIBE_PDF_TABLE_MODE`,
+`SURVEY_SCRIBE_PDF_PAGES_PER_CHUNK` (`0` for one call),
+`SURVEY_SCRIBE_PDF_FIRST_PAGES`, `SURVEY_SCRIBE_PDF_PARTIAL_ON_DEADLINE`.
+
+### Progress and partial results
+
+One `SourceLimits.deadline_seconds` deadline covers PDF inspection and
+conversion together. By default a PDF is converted in one call. Set
+`pages_per_chunk` to convert it in page ranges; `progress` is then called in
+your process after each range with the pages done and the pages requested
+(without chunking it is called once, at the end):
+
+```python
+from survey_scribe.sources.docling import PdfConversionOptions
+from survey_scribe.sources.registry import SourceRegistry
+
+registry = SourceRegistry.default(
+    pdf_options=PdfConversionOptions(pages_per_chunk=25, partial_on_deadline=True),
+)
+document = registry.convert(
+    "questionnaire.pdf",
+    progress=lambda done, total: print(f"{done}/{total} pages"),
+)
+```
+
+With `partial_on_deadline=True`, a conversion that reaches the deadline
+returns the finished pages: `coverage.converted_units` lists them,
+`coverage.failed_units` lists the rest (each with a `PDF_PAGE_NOT_CONVERTED`
+error), and one `PDF_DEADLINE_PARTIAL` warning names the cut. If no page
+finished, `SourceTimeoutError` is still raised. `first_pages` produces the same
+coverage shape with a `PDF_FIRST_PAGES` warning. The extraction pipeline
+reports the unconverted pages as failed blocks and returns a `partial` result.
 
 With `ocr="never"` the artifacts directory holds Docling's layout and table
 models only (`docling-tools models download layout tableformer -o <dir>`); with

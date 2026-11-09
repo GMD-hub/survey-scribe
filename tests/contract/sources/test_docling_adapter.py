@@ -6,8 +6,9 @@ import os
 import socket
 import time
 import zipfile
+from collections.abc import Iterator
 from contextlib import nullcontext
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from queue import Empty
 from types import SimpleNamespace
@@ -1275,6 +1276,8 @@ def test_pdf_conversion_block_synchronizes_page_and_pages() -> None:
 def _install_docling_result(
     monkeypatch: pytest.MonkeyPatch,
     result: object,
+    *,
+    document_converter: type | None = None,
 ) -> None:
     class FakePipelineOptions:
         pass
@@ -1294,7 +1297,7 @@ def _install_docling_result(
             PdfPipelineOptions=FakePipelineOptions,
         ),
         "docling.document_converter": SimpleNamespace(
-            DocumentConverter=FakeDocumentConverter,
+            DocumentConverter=document_converter or FakeDocumentConverter,
             PdfFormatOption=lambda **_kwargs: object(),
         ),
     }
@@ -1650,6 +1653,281 @@ def test_default_registry_passes_pdf_options_to_the_adapter(
     monkeypatch.setenv("SURVEY_SCRIBE_PDF_OCR", "never")
     adapter = cast(Any, SourceRegistry.default()._adapters[".pdf"])
     assert cast(DoclingConverter, adapter._converter).options.ocr == "never"
+
+
+@dataclass(frozen=True)
+class RangePdfConverter:
+    """Pickle-safe range converter: one text block per page, optionally slow after a range."""
+
+    page_count: int
+    slow_after: int | None = None
+    failed_page: int | None = None
+
+    def __call__(self, path: str, artifacts_path: str | None) -> PdfConversion:
+        del path, artifacts_path
+        return PdfConversion(
+            page_count=self.page_count,
+            blocks=(PdfConversionBlock(text="Whole document", page=1),),
+        )
+
+    def convert_pages(
+        self,
+        path: str,
+        artifacts_path: str | None,
+        ranges: tuple[tuple[int, int], ...],
+    ) -> Iterator[PdfConversion]:
+        del path, artifacts_path
+        for index, (first, last) in enumerate(ranges):
+            if self.slow_after is not None and index >= self.slow_after:
+                time.sleep(60)
+            pages = [page for page in range(first, last + 1) if page != self.failed_page]
+            failed = self.failed_page if first <= (self.failed_page or 0) <= last else None
+            yield PdfConversion(
+                page_count=self.page_count,
+                blocks=tuple(PdfConversionBlock(text=f"Page {page}", page=page) for page in pages),
+                coverage=SourceCoverage(
+                    unit="page",
+                    total_units=self.page_count,
+                    converted_units=tuple(pages),
+                    failed_units=tuple(
+                        page for page in range(1, self.page_count + 1) if page not in pages
+                    ),
+                ),
+                diagnostics=(
+                    (
+                        SourceDiagnostic(
+                            code="PDF_PAGE_CONVERSION_FAILED",
+                            message="PDF page conversion failed",
+                            unit="page",
+                            unit_index=failed,
+                        ),
+                    )
+                    if failed is not None
+                    else ()
+                ),
+            )
+
+
+def _range_adapter(converter: RangePdfConverter, **options: Any) -> DoclingPdfAdapter:
+    return DoclingPdfAdapter(
+        converter=converter,
+        options=docling_source.PdfConversionOptions(**options),
+    )
+
+
+def test_pdf_range_conversion_reports_progress_per_range(tmp_path: Path) -> None:
+    from survey_scribe.sources.registry import SourceRegistry
+
+    path = tmp_path / "questionnaire.pdf"
+    _write_pdf(path, 7)
+    calls: list[tuple[int, int]] = []
+    registry = SourceRegistry(
+        {".pdf": _range_adapter(RangePdfConverter(page_count=7), pages_per_chunk=3)}
+    )
+
+    document = registry.convert(
+        path,
+        limits=replace(DEFAULT_SOURCE_LIMITS, deadline_seconds=30),
+        progress=lambda done, total: calls.append((done, total)),
+    )
+
+    assert calls == [(3, 7), (6, 7), (7, 7)]
+    assert [block.text for block in document.blocks] == [f"Page {page}" for page in range(1, 8)]
+    assert [block.id for block in document.blocks] == [
+        f"block-{index:06d}" for index in range(1, 8)
+    ]
+    assert document.coverage.complete
+    assert document.coverage.converted_units == tuple(range(1, 8))
+    assert document.diagnostics == ()
+
+
+def test_pdf_range_conversion_merges_failed_pages_and_first_pages(tmp_path: Path) -> None:
+    path = tmp_path / "questionnaire.pdf"
+    _write_pdf(path, 7)
+    calls: list[tuple[int, int]] = []
+    adapter = _range_adapter(
+        RangePdfConverter(page_count=7, failed_page=2), pages_per_chunk=2, first_pages=3
+    )
+
+    document = adapter.convert_with_progress(
+        resolve_local_source(path),
+        limits=replace(DEFAULT_SOURCE_LIMITS, deadline_seconds=30),
+        progress=lambda done, total: calls.append((done, total)),
+    )
+
+    assert calls == [(2, 3), (3, 3)]
+    assert [block.text for block in document.blocks] == ["Page 1", "Page 3"]
+    assert document.coverage.total_units == 7
+    assert document.coverage.converted_units == (1, 3)
+    assert document.coverage.failed_units == (2, 4, 5, 6, 7)
+    codes = [(item.code, item.severity, item.unit_index) for item in document.diagnostics]
+    assert ("PDF_PAGE_CONVERSION_FAILED", "error", 2) in codes
+    assert ("PDF_FIRST_PAGES", "warning", None) in codes
+    assert [code for code in codes if code[0] == "PDF_PAGE_NOT_CONVERTED"] == [
+        ("PDF_PAGE_NOT_CONVERTED", "error", page) for page in (4, 5, 6, 7)
+    ]
+
+
+def test_pdf_deadline_returns_finished_pages_when_partial_results_are_enabled(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "long.pdf"
+    _write_pdf(path, 60)
+    converter = RangePdfConverter(page_count=60, slow_after=1)
+    limits = replace(DEFAULT_SOURCE_LIMITS, deadline_seconds=15)
+    partial = _range_adapter(converter, pages_per_chunk=20, partial_on_deadline=True)
+
+    started = time.monotonic()
+    document = partial.convert(resolve_local_source(path), limits=limits)
+
+    assert time.monotonic() - started < 25
+    assert document.coverage.converted_units == tuple(range(1, 21))
+    assert document.coverage.failed_units == tuple(range(21, 61))
+    assert all(
+        block.provenance.page is not None and block.provenance.page <= 20
+        for block in document.blocks
+    )
+    warnings = [item for item in document.diagnostics if item.code == "PDF_DEADLINE_PARTIAL"]
+    assert len(warnings) == 1
+    assert warnings[0].severity == "warning"
+    assert "after 20 of 60 pages" in warnings[0].message
+    not_converted = [
+        item.unit_index for item in document.diagnostics if item.code == "PDF_PAGE_NOT_CONVERTED"
+    ]
+    assert not_converted == list(range(21, 61))
+
+    with pytest.raises(SourceTimeoutError, match="deadline"):
+        _range_adapter(converter, pages_per_chunk=20).convert(
+            resolve_local_source(path), limits=limits
+        )
+
+
+def test_pdf_partial_deadline_still_raises_when_no_page_finished(tmp_path: Path) -> None:
+    path = tmp_path / "slow.pdf"
+    _write_pdf(path, 2)
+    converter = RangePdfConverter(page_count=2, slow_after=0)
+    adapter = _range_adapter(converter, pages_per_chunk=1, partial_on_deadline=True)
+    limits = replace(DEFAULT_SOURCE_LIMITS, deadline_seconds=5)
+
+    with pytest.raises(SourceTimeoutError, match="deadline"):
+        adapter.convert(resolve_local_source(path), limits=limits)
+
+
+def test_pdf_default_options_convert_in_one_call_even_with_a_range_converter(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "questionnaire.pdf"
+    _write_pdf(path, 3)
+    calls: list[tuple[int, int]] = []
+
+    document = _range_adapter(RangePdfConverter(page_count=3)).convert_with_progress(
+        resolve_local_source(path),
+        limits=replace(DEFAULT_SOURCE_LIMITS, deadline_seconds=30),
+        progress=lambda done, total: calls.append((done, total)),
+    )
+
+    assert [block.text for block in document.blocks] == ["Whole document"]
+    assert calls == [(3, 3)]
+    assert document.coverage.complete
+    assert document.diagnostics == ()
+
+
+def test_pdf_page_ranges_cover_the_requested_pages_in_order() -> None:
+    assert docling_source._page_ranges(7, 3) == ((1, 3), (4, 6), (7, 7))
+    assert docling_source._page_ranges(6, 3) == ((1, 3), (4, 6))
+    assert docling_source._page_ranges(5, None) == ((1, 5),)
+    assert docling_source._page_ranges(1, 25) == ((1, 1),)
+
+
+def test_docling_converter_reads_ranges_with_one_converter_and_carries_headings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[object] = []
+    documents = {
+        (1, 1): SimpleNamespace(
+            pages={1: object()},
+            iterate_items=lambda: iter(
+                ((SimpleNamespace(label="section_header", text="Part I", level=1), 0),)
+            ),
+        ),
+        (2, 2): SimpleNamespace(
+            pages={2: object()},
+            iterate_items=lambda: iter(
+                (
+                    (
+                        SimpleNamespace(
+                            label="text",
+                            text="Question",
+                            prov=(SimpleNamespace(page_no=2),),
+                        ),
+                        0,
+                    ),
+                )
+            ),
+        ),
+    }
+
+    class RangeDocumentConverter:
+        def __init__(self, **_kwargs: object) -> None:
+            calls.append("init")
+
+        def convert(self, _path: str, *, page_range: tuple[int, int]) -> object:
+            calls.append(page_range)
+            document = documents[page_range]
+            return SimpleNamespace(document=document, input=SimpleNamespace(page_count=2))
+
+    _install_docling_result(monkeypatch, None, document_converter=RangeDocumentConverter)
+    artifacts = tmp_path / "models"
+    artifacts.mkdir()
+
+    conversions = list(
+        DoclingConverter(docling_source.PdfConversionOptions(ocr="never")).convert_pages(
+            str(tmp_path / "questionnaire.pdf"), str(artifacts), ((1, 1), (2, 2))
+        )
+    )
+
+    assert calls == ["init", (1, 1), (2, 2)]
+    assert [conversion.page_count for conversion in conversions] == [2, 2]
+    assert conversions[0].coverage is not None
+    assert conversions[0].coverage.converted_units == (1,)
+    assert conversions[1].coverage is not None
+    assert conversions[1].coverage.converted_units == (2,)
+    assert conversions[1].blocks[0].section_path == ("Part I",)
+    assert isinstance(DoclingConverter(), docling_source.PdfPageRangeConverter)
+    assert not isinstance(fake_pdf_conversion, docling_source.PdfPageRangeConverter)
+
+
+def test_pdf_range_options_default_validate_and_read_the_environment() -> None:
+    options = docling_source.PdfConversionOptions()
+    assert (options.pages_per_chunk, options.first_pages, options.partial_on_deadline) == (
+        None,
+        None,
+        False,
+    )
+    for invalid in (
+        {"pages_per_chunk": 0},
+        {"pages_per_chunk": True},
+        {"first_pages": -1},
+        {"partial_on_deadline": "yes"},
+    ):
+        with pytest.raises(ValueError):
+            docling_source.PdfConversionOptions(**cast(Any, invalid))
+    options = docling_source.PdfConversionOptions.from_environment(
+        {
+            "SURVEY_SCRIBE_PDF_PAGES_PER_CHUNK": "0",
+            "SURVEY_SCRIBE_PDF_FIRST_PAGES": "20",
+            "SURVEY_SCRIBE_PDF_PARTIAL_ON_DEADLINE": "true",
+        }
+    )
+    assert (options.pages_per_chunk, options.first_pages, options.partial_on_deadline) == (
+        None,
+        20,
+        True,
+    )
+    with pytest.raises(ValueError, match="FIRST_PAGES must be an integer"):
+        docling_source.PdfConversionOptions.from_environment(
+            {"SURVEY_SCRIBE_PDF_FIRST_PAGES": "twenty"}
+        )
 
 
 def fake_xls_conversion(path: str, artifacts_path: str | None) -> PdfConversion:

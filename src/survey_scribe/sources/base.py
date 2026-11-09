@@ -8,7 +8,7 @@ import re
 import tempfile
 import time
 import zipfile
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from math import isfinite
@@ -21,6 +21,7 @@ from survey_scribe.errors import SurveyScribeError
 
 LocalSource: TypeAlias = str | os.PathLike[str]
 ExternalLinkPolicy: TypeAlias = Literal["refuse", "strip"]
+SourceProgress: TypeAlias = Callable[[int, int], None]  # progress(units_done, units_total)
 EXTERNAL_LINK_STRIPPED = "EXTERNAL_LINK_STRIPPED"
 
 

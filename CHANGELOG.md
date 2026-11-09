@@ -23,6 +23,16 @@ project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   templates) can be converted with the links dropped and never followed, reported by
   one `EXTERNAL_LINK_STRIPPED` warning diagnostic with a count. Formulas and macros
   stay refused.
+- PDF conversion by page range (`PdfConversionOptions.pages_per_chunk`; the default
+  `None` converts in one call, as before): `SourceRegistry.convert(..., progress=...)`
+  and `DoclingPdfAdapter(progress=...)` report pages done after each range;
+  `partial_on_deadline=True` returns the finished ranges at the deadline
+  (`PDF_DEADLINE_PARTIAL` warning, the rest as failed coverage) instead of raising;
+  `first_pages=N` converts only the first N pages. Also read from
+  `SURVEY_SCRIBE_PDF_PAGES_PER_CHUNK`, `SURVEY_SCRIBE_PDF_FIRST_PAGES`, and
+  `SURVEY_SCRIBE_PDF_PARTIAL_ON_DEADLINE`.
+- A PDF or legacy Office worker that dies reports its exit code or the signal that
+  killed it (a likely out-of-memory kill for signal 9).
 
 ### Changed
 

@@ -19,6 +19,7 @@ from survey_scribe.sources.base import (
     SourceDocument,
     SourceFormatError,
     SourceLimits,
+    SourceProgress,
     resolve_local_source,
     snapshot_resolved_source,
 )
@@ -62,6 +63,21 @@ class NativeSourceAdapter(SourceAdapter, Protocol):
         limits: SourceLimits,
     ) -> NativeRoutingSemantics | None:
         """Return native semantics from the active private source snapshot."""
+        ...
+
+
+@runtime_checkable
+class ProgressSourceAdapter(SourceAdapter, Protocol):
+    """Adapter extension that reports conversion progress to the caller."""
+
+    def convert_with_progress(
+        self,
+        source: ResolvedSource,
+        *,
+        limits: SourceLimits,
+        progress: SourceProgress,
+    ) -> SourceDocument:
+        """Normalize a source, calling ``progress(done, total)`` as units finish."""
         ...
 
 
@@ -176,12 +192,15 @@ class SourceRegistry:
         source: LocalSource | SourceBundle,
         *,
         limits: SourceLimits = DEFAULT_SOURCE_LIMITS,
+        progress: SourceProgress | None = None,
     ) -> SourceDocument:
         """Resolve one local source, verify its format, and normalize it.
 
         Args:
             source: Existing local file or confined source bundle.
             limits: Resource ceilings for validation and conversion.
+            progress: Optional ``progress(done, total)`` callback, called in this
+                process by adapters that report progress (PDF: pages converted).
 
         Returns:
             Deterministic ordered blocks with physical source provenance.
@@ -203,7 +222,7 @@ class SourceRegistry:
             raise SourceFormatError(f"Unsupported source format: {suffix or '<none>'}")
         with snapshot_resolved_source(resolved, limits=limits) as snapshot:
             _verify_signature(snapshot.primary, suffix)
-            document = _convert_adapter(adapter, snapshot, limits)
+            document = _convert_adapter(adapter, snapshot, limits, progress=progress)
             payload = document.model_dump(mode="python")
             payload["snapshot_sha256"] = snapshot.primary_sha256
             return SourceDocument.model_validate(payload)
@@ -291,7 +310,10 @@ def _convert_adapter(
     limits: SourceLimits,
     *,
     deadline: float | None = None,
+    progress: SourceProgress | None = None,
 ) -> SourceDocument:
+    if progress is not None and isinstance(adapter, ProgressSourceAdapter):
+        return adapter.convert_with_progress(source, limits=limits, progress=progress)
     if isinstance(adapter, DeadlineSourceAdapter):
         active_deadline = (
             deadline if deadline is not None else time.monotonic() + limits.deadline_seconds
