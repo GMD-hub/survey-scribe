@@ -85,6 +85,27 @@ def security_pdf_conversion(path: str, artifacts_path: str | None) -> PdfConvers
     raise SourceSecurityError("unsafe PDF")
 
 
+def boom_pdf_conversion(path: str, artifacts_path: str | None) -> PdfConversion:
+    """Raise an unexpected error, chained to its cause, inside the worker."""
+    del path, artifacts_path
+    try:
+        raise OSError("model file missing")
+    except OSError as error:
+        raise RuntimeError("boom") from error
+
+
+def incomplete_pdf_conversion(path: str, artifacts_path: str | None) -> PdfConversion:
+    """Raise the converter's own typed conversion error inside the worker."""
+    del path, artifacts_path
+    raise SourceConversionError("PDF conversion was incomplete without page coverage")
+
+
+def format_pdf_conversion(path: str, artifacts_path: str | None) -> PdfConversion:
+    """Raise a typed format error inside the worker."""
+    del path, artifacts_path
+    raise SourceFormatError("unreadable page tree")
+
+
 def table_pdf_conversion(path: str, artifacts_path: str | None) -> PdfConversion:
     """Return table, empty, and page-provenance blocks for adapter normalization."""
     del path, artifacts_path
@@ -293,11 +314,105 @@ def test_pdf_worker_blocks_network_even_for_an_injected_converter(tmp_path: Path
     path = tmp_path / "questionnaire.pdf"
     _write_pdf(path)
 
-    with pytest.raises(SourceConversionError, match="PDF conversion failed"):
+    with pytest.raises(SourceConversionError, match="PDF conversion failed") as raised:
         DoclingPdfAdapter(converter=network_pdf_conversion).convert(
             resolve_local_source(path),
             limits=replace(DEFAULT_SOURCE_LIMITS, deadline_seconds=10),
         )
+    assert raised.value.detail is not None
+    assert "Network access is disabled" in raised.value.detail
+
+
+def test_pdf_worker_surfaces_the_underlying_error(tmp_path: Path) -> None:
+    path = tmp_path / "questionnaire.pdf"
+    _write_pdf(path)
+
+    with pytest.raises(SourceConversionError, match="boom") as raised:
+        DoclingPdfAdapter(converter=boom_pdf_conversion).convert(
+            resolve_local_source(path),
+            limits=replace(DEFAULT_SOURCE_LIMITS, deadline_seconds=20),
+        )
+
+    detail = raised.value.detail
+    assert detail is not None
+    assert detail.startswith("RuntimeError: boom (at test_docling_adapter.py:")
+    assert "in boom_pdf_conversion)" in detail
+    assert "; caused by OSError: model file missing" in detail
+    assert str(raised.value).startswith("PDF conversion failed in the isolated worker: ")
+    assert raised.value.diagnostic.message == str(raised.value)
+
+
+@pytest.mark.parametrize(
+    ("converter", "error_type", "message"),
+    [
+        (incomplete_pdf_conversion, SourceConversionError, "incomplete without page coverage"),
+        (format_pdf_conversion, SourceFormatError, "unreadable page tree"),
+    ],
+)
+def test_pdf_worker_keeps_typed_conversion_and_format_messages(
+    tmp_path: Path, converter: object, error_type: type[Exception], message: str
+) -> None:
+    path = tmp_path / "questionnaire.pdf"
+    _write_pdf(path)
+
+    with pytest.raises(error_type, match=message):
+        DoclingPdfAdapter(converter=converter).convert(  # type: ignore[arg-type]
+            resolve_local_source(path),
+            limits=replace(DEFAULT_SOURCE_LIMITS, deadline_seconds=20),
+        )
+
+
+def test_error_detail_is_one_bounded_line_with_the_raising_frame() -> None:
+    def fail() -> None:
+        raise ValueError("first line\nsecond\tline " + "x" * 1000)
+
+    try:
+        fail()
+    except ValueError as error:
+        detail = docling_source._error_detail(error)
+
+    assert detail.startswith("ValueError: first line second line xxx")
+    assert len(detail) == 500
+    assert detail.endswith("...")
+    assert "\n" not in detail
+
+    try:
+        raise KeyError
+    except KeyError as error:
+        assert docling_source._error_detail(error).startswith("KeyError (at ")
+
+
+def test_pdf_preflight_names_pdfium_failures() -> None:
+    raw = SimpleNamespace(
+        FPDF_ERR_FILE=2,
+        FPDF_ERR_FORMAT=3,
+        FPDF_ERR_PASSWORD=4,
+        FPDF_ERR_SECURITY=5,
+    )
+    error = RuntimeError("Failed to load document")
+    open_error = docling_source._pdfium_open_error
+
+    assert open_error(4, raw, error)[1:] == (
+        SourceSecurityError.code,
+        "encrypted PDF sources are not supported",
+    )
+    assert open_error(5, raw, error)[1] == SourceSecurityError.code
+    assert open_error(3, raw, error)[1:] == (
+        SourceFormatError.code,
+        "PDF content is damaged or not a valid PDF (PDFium could not parse it)",
+    )
+    code, message = open_error(2, raw, error)[1:]
+    assert code == SourceConversionError.code
+    assert message.startswith("PDFium could not open the file: RuntimeError: Failed to load")
+    assert "(error 99)" in open_error(99, raw, error)[2]
+
+
+def test_pdf_preflight_reports_damaged_pdf_as_a_format_error(tmp_path: Path) -> None:
+    damaged = tmp_path / "damaged.pdf"
+    damaged.write_bytes(b"%PDF-1.4\nnot really a document")
+
+    with pytest.raises(SourceFormatError, match="damaged or not a valid PDF"):
+        docling_source._inspect_pdf(damaged, replace(DEFAULT_SOURCE_LIMITS, deadline_seconds=20))
 
 
 @pytest.mark.skipif(
@@ -1830,6 +1945,41 @@ def test_pdf_default_options_convert_in_one_call_even_with_a_range_converter(
     assert calls == [(3, 3)]
     assert document.coverage.complete
     assert document.diagnostics == ()
+
+
+@dataclass(frozen=True)
+class BoomRangeConverter:
+    """Pickle-safe range converter that fails on its second range."""
+
+    def __call__(self, path: str, artifacts_path: str | None) -> PdfConversion:
+        raise AssertionError("expected range conversion")
+
+    def convert_pages(
+        self,
+        path: str,
+        artifacts_path: str | None,
+        ranges: tuple[tuple[int, int], ...],
+    ) -> Iterator[PdfConversion]:
+        del path, artifacts_path
+        yield PdfConversion(page_count=2, blocks=(PdfConversionBlock(text="Page 1", page=1),))
+        raise MemoryError("out of pages")
+
+
+def test_pdf_range_worker_surfaces_the_underlying_error(tmp_path: Path) -> None:
+    path = tmp_path / "questionnaire.pdf"
+    _write_pdf(path, 2)
+    adapter = DoclingPdfAdapter(
+        converter=BoomRangeConverter(),
+        options=docling_source.PdfConversionOptions(pages_per_chunk=1),
+    )
+
+    with pytest.raises(SourceConversionError, match="MemoryError: out of pages") as raised:
+        adapter.convert(
+            resolve_local_source(path),
+            limits=replace(DEFAULT_SOURCE_LIMITS, deadline_seconds=20),
+        )
+    assert raised.value.detail is not None
+    assert "in convert_pages)" in raised.value.detail
 
 
 def test_pdf_page_ranges_cover_the_requested_pages_in_order() -> None:

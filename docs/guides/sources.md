@@ -340,3 +340,18 @@ except SourceError as error:
 
 Use `SourceLimitError.limit` to identify the exceeded ceiling. Source exceptions
 provide stable diagnostic codes for application-level handling.
+
+When the isolated PDF or legacy Office worker fails unexpectedly,
+`SourceConversionError.detail` names the underlying error: its type, message,
+and the file, line, and function that raised it, followed by up to two chained
+causes, on one line of at most 500 characters. The detail is also appended to
+the error message. A worker that dies without reporting gives its exit code or
+the signal that killed it instead. The detail comes from third-party code and
+may echo file paths, so treat it as untrusted text: record or log it, but do
+not pass it to a model prompt. Library results and manifests keep their fixed
+messages and do not include it.
+
+PDF inspection separates its PDFium failures: an encrypted file or an
+unsupported security handler raises `SourceSecurityError`, a damaged file
+raises `SourceFormatError`, and a file PDFium cannot open raises
+`SourceConversionError` with the detail.

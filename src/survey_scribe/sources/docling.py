@@ -8,6 +8,7 @@ import shutil
 import signal
 import socket
 import time
+import traceback
 import zipfile
 from collections.abc import Iterable, Iterator, Mapping
 from contextlib import AbstractContextManager, contextmanager, nullcontext
@@ -1128,13 +1129,20 @@ def _run_pdf_worker(
 
 
 def _worker_error(code: object, payload: object, kind: str) -> SourceError:
+    message = str(payload)
     if code == SourceDependencyError.code:
-        return SourceDependencyError(str(payload))
+        return SourceDependencyError(message)
     if code == SourceSecurityError.code:
-        return SourceSecurityError(str(payload))
+        return SourceSecurityError(message)
     if code == SourceLimitError.code:
-        return SourceLimitError("max_cells", str(payload))
-    return SourceConversionError(f"{kind} conversion failed in the isolated worker")
+        return SourceLimitError("max_cells", message)
+    if code == SourceFormatError.code:
+        return SourceFormatError(message)
+    if code == SourceTimeoutError.code:
+        return SourceTimeoutError(message)
+    return SourceConversionError(
+        f"{kind} conversion failed in the isolated worker", detail=message or None
+    )
 
 
 def _run_pdf_range_worker(
@@ -1241,9 +1249,9 @@ def _pdf_worker(
             _validate_pdf_table_cells(conversion, max_cells)
         output.put(("ok", "", conversion))
     except SourceError as error:
-        output.put(("error", error.code, str(error)))
-    except BaseException:
-        output.put(("error", SourceConversionError.code, "PDF conversion failed"))
+        output.put(("error", error.code, _bounded_text(str(error))))
+    except BaseException as error:
+        output.put(("error", SourceConversionError.code, _error_detail(error)))
 
 
 def _pdf_range_worker(
@@ -1338,7 +1346,9 @@ def _run_pdf_preflight(path: Path, *, max_pages: int, timeout: float) -> int:
             raise SourceDependencyError(str(payload))
         if code == SourceFormatError.code:
             raise SourceFormatError(str(payload))
-        raise SourceConversionError("PDF source could not be inspected")
+        raise SourceConversionError(
+            "PDF source could not be inspected", detail=str(payload) or None
+        )
     except (KeyboardInterrupt, SystemExit):
         _bounded_process_cleanup(process)
         raise
@@ -1364,6 +1374,39 @@ def _exit_note(process: Any) -> str:
         cause = ", likely out of memory)" if -code == 9 else ")"
         return f" (killed by signal {-code} {name}{cause}"
     return f" (exit code {code})"
+
+
+_MAX_ERROR_DETAIL_CHARS = 500
+
+
+def _bounded_text(text: str, limit: int = _MAX_ERROR_DETAIL_CHARS) -> str:
+    """One line of printable text, at most ``limit`` characters."""
+    text = " ".join("".join(ch if ch.isprintable() else " " for ch in text).split())
+    return text if len(text) <= limit else text[: limit - 3] + "..."
+
+
+def _error_detail(error: BaseException) -> str:
+    """``Type: message (at file.py:line in function)`` for an unexpected worker failure.
+
+    The location is the frame that raised, by file name only. Up to two chained causes follow.
+    The text is untrusted: it is for a record or a log, never for a prompt.
+    """
+    parts: list[str] = []
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen and len(parts) < 3:
+        seen.add(id(current))
+        message = str(current).strip()
+        part = f"{type(current).__name__}: {message}" if message else type(current).__name__
+        frames = traceback.extract_tb(current.__traceback__)
+        if frames:
+            last = frames[-1]
+            part += f" (at {Path(last.filename).name}:{last.lineno} in {last.name})"
+        parts.append(part)
+        current = current.__cause__ or (
+            None if current.__suppress_context__ else current.__context__
+        )
+    return _bounded_text("; caused by ".join(parts))
 
 
 def _wait_for_worker_message(output: Any, process: Any, timeout: float) -> Any:
@@ -1418,7 +1461,11 @@ def _pdf_preflight_worker(path: str, max_pages: int, output: Any) -> None:
         return
     document = None
     try:
-        document = pdfium.PdfDocument(path)
+        try:
+            document = pdfium.PdfDocument(path)
+        except pdfium.PdfiumError as error:
+            output.put(_pdfium_open_error(int(pdfium_raw.FPDF_GetLastError()), pdfium_raw, error))
+            return
         if pdfium_raw.FPDF_GetSecurityHandlerRevision(document.raw) >= 0:
             output.put(
                 ("error", SourceSecurityError.code, "encrypted PDF sources are not supported")
@@ -1429,19 +1476,38 @@ def _pdf_preflight_worker(path: str, max_pages: int, output: Any) -> None:
             output.put(("error", SourceLimitError.code, "PDF exceeds the configured page limit"))
             return
         output.put(("ok", "", page_count))
-    except BaseException:
-        last_error = int(pdfium_raw.FPDF_GetLastError())
-        if last_error == int(pdfium_raw.FPDF_ERR_PASSWORD):
-            output.put(
-                ("error", SourceSecurityError.code, "encrypted PDF sources are not supported")
-            )
-        else:
-            output.put(
-                ("error", SourceFormatError.code, "PDF extension does not match file content")
-            )
+    except BaseException as error:
+        output.put(("error", SourceConversionError.code, _error_detail(error)))
     finally:
         if document is not None:
             document.close()
+
+
+def _pdfium_open_error(
+    last_error: int, pdfium_raw: Any, error: BaseException
+) -> tuple[str, str, str]:
+    """The preflight's answer when PDFium cannot open a file that starts with ``%PDF-``."""
+    if last_error == int(pdfium_raw.FPDF_ERR_PASSWORD):
+        return ("error", SourceSecurityError.code, "encrypted PDF sources are not supported")
+    if last_error == int(pdfium_raw.FPDF_ERR_SECURITY):
+        return ("error", SourceSecurityError.code, "PDF security handler is not supported")
+    if last_error == int(pdfium_raw.FPDF_ERR_FORMAT):
+        return (
+            "error",
+            SourceFormatError.code,
+            "PDF content is damaged or not a valid PDF (PDFium could not parse it)",
+        )
+    if last_error == int(pdfium_raw.FPDF_ERR_FILE):
+        return (
+            "error",
+            SourceConversionError.code,
+            f"PDFium could not open the file: {_error_detail(error)}",
+        )
+    return (
+        "error",
+        SourceConversionError.code,
+        f"PDFium could not open the PDF (error {last_error}): {_error_detail(error)}",
+    )
 
 
 def _inspect_docx_content_types(

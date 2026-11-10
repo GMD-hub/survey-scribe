@@ -33,9 +33,18 @@ project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `SURVEY_SCRIBE_PDF_PARTIAL_ON_DEADLINE`.
 - A PDF or legacy Office worker that dies reports its exit code or the signal that
   killed it (a likely out-of-memory kill for signal 9).
+- `SourceConversionError.detail`: an unexpected failure inside the PDF or legacy Office
+  worker now reports the underlying error type, message, raising location, and up to
+  two chained causes (one line, at most 500 characters), also appended to the message,
+  instead of a bare "conversion failed". Typed conversion, format, and timeout errors
+  raised inside the worker keep their own messages.
 
 ### Changed
 
+- PDF inspection distinguishes PDFium failures: a damaged PDF raises
+  `SourceFormatError` ("damaged or not a valid PDF") instead of "extension does not
+  match file content", a file PDFium cannot open raises `SourceConversionError` with
+  the detail, and an unsupported security handler raises `SourceSecurityError`.
 - Chunking keeps a table with the text printed above it: a table joins the running
   chunk while the token budget allows instead of always opening a chunk of its own.
 - PDF section headings keep their ancestors when heading levels are inferred; with

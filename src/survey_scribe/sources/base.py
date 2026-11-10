@@ -353,9 +353,18 @@ class SourceDependencyError(SourceError, ImportError):
 
 
 class SourceConversionError(SourceError):
-    """An adapter could not normalize the source safely."""
+    """An adapter could not normalize the source safely.
+
+    ``detail`` carries the underlying failure when one is known (for example the exception
+    type, message, and raising location from an isolated worker). It is untrusted, bounded
+    text for a record or log; it is appended to the message.
+    """
 
     code = "SOURCE_CONVERSION_FAILED"
+
+    def __init__(self, message: str, *, detail: str | None = None) -> None:
+        self.detail = detail
+        super().__init__(f"{message}: {detail}" if detail else message)
 
 
 class SourceTimeoutError(SourceError, TimeoutError):
