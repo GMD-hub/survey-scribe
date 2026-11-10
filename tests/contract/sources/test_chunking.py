@@ -515,8 +515,61 @@ def test_split_table_part_halves_whole_and_split_parts_by_rows() -> None:
     assert third.table.rows == (header, rows[3])
     assert fourth.table.rows == (header, *rows[4:])
     assert (fourth.provenance.row_start, fourth.provenance.row_end) == (9, 10)
+    left, right = split_table_part(third, block)                    # one row: halved by columns
+
+    assert left.columns == (0, 1) and right.columns == (1, 2)
+    assert left.table is not None and right.table is not None
+    assert left.table.rows == (("code",), ("r2",)) and right.table.rows == (("label",), ("item",))
+    assert (left.provenance.row_start, left.provenance.row_end) == (8, 8)
+    assert left.text == render_table(left.table.rows)
     with pytest.raises(SourceTableLimitError):
-        split_table_part(third, block)
+        split_table_part(left, block)                               # one row of one column
+
+
+def _banded_document() -> SourceDocument:
+    """A grid whose header carries the questions: header plus any one row exceeds the limit."""
+    header = tuple(f"Q{index}. " + "w" * 12 for index in range(6))
+    rows = (header, *(tuple(f"{row}.{col}" for col in range(6)) for row in range(4)))
+    return _wide_table_document(rows, row_start=1)
+
+
+def test_a_row_too_wide_for_the_limit_is_split_into_column_bands_then_rows() -> None:
+    document = _banded_document()
+    table = document.blocks[1].table
+    assert table is not None
+    assert len(render_table(table.rows[:2])) > 80  # by rows alone it cannot be done
+    result = chunk_document(document, max_tokens=80, estimator=CharacterEstimator())
+    parts = [part for chunk in result.chunks for part in chunk.parts
+             if part.id in chunk.new_part_ids and part.table is not None]
+
+    assert all(chunk.token_count <= 80 for chunk in result.chunks)
+    bands = list(dict.fromkeys(part.columns for part in parts))
+    assert len(bands) >= 2 and bands[0][0] == 0 and bands[-1][1] == 6
+    assert all(a[1] == b[0] for a, b in zip(bands, bands[1:]))     # consecutive, every column once
+    for part in parts:
+        assert part.columns is not None and part.table is not None
+        start, end = part.columns
+        assert part.table.rows[0] == table.rows[0][start:end]  # the header's own cells, repeated
+        assert part.text == render_table(part.table.rows)
+        assert part.table.provenance == part.provenance
+    for band in bands:  # every cell delivered once, in order
+        cells = [
+            row
+            for part in parts
+            if part.columns == band and part.table
+            for row in part.table.rows[1:]
+        ]
+        assert cells == [row[band[0]:band[1]] for row in table.rows[1:]]
+    [split] = result.split_tables
+    assert split.column_bands == len(bands) and split.part_count == len(parts)
+
+
+def test_a_single_cell_too_large_still_fails_with_its_table() -> None:
+    header = ("Q1. " + "w" * 40, "Q2")
+    document = _wide_table_document((header, ("1", "2")), row_start=1)
+    with pytest.raises(SourceTableLimitError) as raised:
+        chunk_document(document, max_tokens=30, estimator=CharacterEstimator())
+    assert raised.value.table_id == "table-9" and "split by columns" in str(raised.value)
 
 
 def test_chunk_parts_transport_table_cells_without_flattening() -> None:

@@ -424,6 +424,68 @@ async def test_pipeline_splits_an_oversized_table_by_rows_and_warns(
         "part_count": len(table_parts),
     }
 
+
+@pytest.mark.asyncio
+async def test_pipeline_splits_a_table_whose_header_is_too_wide_into_column_bands() -> None:
+    """A grid whose header carries the questions (an NSO form).
+
+    Header plus one row exceeds any request, so the table is cut into column bands,
+    each split by rows; every cell is extracted, none dropped.
+    """
+    header = tuple(f"Q{index}. " + "\u00e9" * 60 for index in range(8))
+    rows = (header, *(tuple(f"{row}" for _ in range(8)) for row in range(1, 4)))
+    document = _table_document(rows)
+    requests: list[FakeRequest] = []
+
+    async def respond(request: FakeRequest) -> object:
+        requests.append(request)
+        if request.response_model is ExtractedMetadata:
+            return ExtractedMetadata(
+                survey_id="TST_2026_SYN", country_code="TST", year=2026, survey_name="Survey"
+            )
+        return BlockExtraction(
+            block_id=_chunk_id(request),
+            variables=(
+                ExtractedVariable(
+                    variable=SurveyVariable(
+                        raw_name=f"v_{_chunk_id(request).replace('-', '_')}",
+                        data_type=DataType.text,
+                        extraction_confidence=1.0,
+                    ),
+                    source_block_ids=(_source_block_ids(request)[-1],),
+                ),
+            ),
+        )
+
+    provider = DeterministicFakeProvider(capabilities=_capabilities(), responder=respond)
+    pipeline = ExtractionPipeline(
+        provider, config=PipelineConfig(max_request_tokens=2_200, overlap_tokens=200)
+    )
+    result = await pipeline.extract(document)
+
+    assert result.status is ResultStatus.success
+    assert all(provider.estimate_tokens(request.messages) <= 2_200 for request in requests)
+    chunked = pipeline._chunk_document(document)
+    table_parts = [
+        part
+        for chunk in chunked.chunks
+        for part in chunk.parts
+        if part.id in chunk.new_part_ids and part.table is not None
+    ]
+    bands = list(dict.fromkeys(part.columns for part in table_parts))
+    assert len(bands) >= 2 and bands[0][0] == 0 and bands[-1][1] == 8
+    for band in bands:
+        assert [row for part in table_parts if part.columns == band and part.table
+                for row in part.table.rows[1:]] == [row[band[0]:band[1]] for row in rows[1:]]
+    [warning] = [d for d in result.diagnostics if d.code == DiagnosticCode.source_table_split]
+    assert warning.details == {
+        "table_id": "table-7",
+        "block_id": "block-1",
+        "part_count": len(table_parts),
+        "column_bands": len(bands),
+    }
+    assert "column bands" in warning.message
+
 @pytest.mark.asyncio
 async def test_pipeline_uses_metadata_fallback_and_accounts_for_unreadable_units() -> None:
     document = _document().model_copy(

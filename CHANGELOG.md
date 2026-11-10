@@ -73,6 +73,15 @@ project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `SOURCE_TABLE_SPLIT` warning with the table id and part count. Only a row that cannot
   fit with the header is an error, a `SOURCE_LIMIT_EXCEEDED` diagnostic naming the
   table and block.
+- A table whose header plus a single row exceeds the request budget — a header row
+  carrying the questions' full text, as NSO forms print them — no longer fails the
+  whole document. Chunking first cuts it into column bands, each as wide as every row
+  allows, each repeating the header's cells of its own columns, and splits each band
+  by rows; a part carries its band as `SourceChunkPart.columns` (zero-based,
+  end-exclusive), and every cell is delivered once. When a serialized request still
+  does not fit, a one-row part is halved by columns. The `SOURCE_TABLE_SPLIT` warning
+  adds `column_bands`. Only one column of one row that alone exceeds the budget is
+  still an error.
 - A merged table cell in a Docling-converted document (PDF, `.doc`, `.xls`) is written
   once instead of in every column it spans: table rows are read from Docling's cell
   grid, the text in the first column of the span and the columns it continues into

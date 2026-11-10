@@ -221,8 +221,8 @@ class ExtractionPipeline:
                     Diagnostic(
                         code=error.code,
                         message=(
-                            "A source table row cannot fit within provider limits, "
-                            "even after splitting the table by rows."
+                            "A source table cell cannot fit within provider limits, "
+                            "even after splitting the table by rows and its rows by columns."
                         ),
                         severity=DiagnosticSeverity.error,
                         details={"table_id": error.table_id, "block_id": error.block_id},
@@ -255,12 +255,18 @@ class ExtractionPipeline:
         diagnostics.extend(
             Diagnostic(
                 code=DiagnosticCode.source_table_split,
-                message="A source table exceeded the request budget and was split by rows.",
+                message=(
+                    "A source table exceeded the request budget and was split by rows."
+                    if split.column_bands == 1
+                    else "A source table exceeded the request budget and was split into "
+                    "column bands (a row was too wide for one request), each split by rows."
+                ),
                 severity=DiagnosticSeverity.warning,
                 details={
                     "table_id": split.table_id,
                     "block_id": split.block_id,
                     "part_count": split.part_count,
+                    **({"column_bands": split.column_bands} if split.column_bands > 1 else {}),
                 },
             )
             for split in chunked.split_tables
