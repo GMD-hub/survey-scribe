@@ -290,7 +290,7 @@ async def test_pipeline_splits_escaped_text_without_losing_source_part_provenanc
 @pytest.mark.asyncio
 async def test_pipeline_rejects_a_table_that_cannot_fit_the_serialized_request() -> None:
     provenance = SourceProvenance(source_name="survey.pdf", page=1)
-    rows = (("\u00e9" * 250,),)
+    rows = (("\u200b" * 250,),)  # zero-width spaces: 3 bytes as text, 6 escaped in the request
     table = SourceTable(id="table-1", rows=rows, provenance=provenance)
     document = SourceDocument(
         source_name="survey.pdf",

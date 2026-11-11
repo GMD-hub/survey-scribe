@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import hashlib
 import inspect
 import json
 import re
+import sys
+import unicodedata
 from collections import Counter
 from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass
@@ -45,6 +48,8 @@ from survey_scribe.sources.base import (
     SourceLimitError,
     SourceLimits,
     SourceProvenance,
+    SourceTable,
+    render_table,
 )
 from survey_scribe.sources.chunking import (
     ChunkedDocument,
@@ -976,35 +981,31 @@ def _validate_custom_pipeline_inputs(
 
 
 def _document_payload(document: SourceDocument) -> str:
-    return json.dumps(
+    return _model_json(
         {
             "source_name": document.source_name,
             "blocks": [
                 {
                     "block_id": block.id,
                     "kind": block.kind,
-                    "text": block.text,
+                    "text": _model_text(block.text, block.table),
                 }
                 for block in document.blocks
             ],
-        },
-        ensure_ascii=True,
-        separators=(",", ":"),
+        }
     )
 
 
 def _custom_chunk_payload(chunk: SourceChunk) -> str:
-    return json.dumps(
+    return _model_json(
         [
             {
                 "part_id": part.id,
                 "block_id": part.block_id,
-                "text": part.text,
+                "text": _model_text(part.text, part.table),
             }
             for part in chunk.parts
-        ],
-        ensure_ascii=True,
-        separators=(",", ":"),
+        ]
     )
 
 
@@ -1303,13 +1304,14 @@ def _repeated_row_inventory(document: ChunkedDocument, chunk: SourceChunk) -> st
         for repeated in document.repeated_rows
         if any(origin.table_id in tables for origin in repeated.origins)
     ]
-    encoded = json.dumps(rows, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
+    canonical = json.dumps(rows, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
+    encoded = _model_json(rows, sort_keys=True)
     if len(encoded) <= 256:
         return encoded
     summary = {
         "records": len(rows),
         "total_repeated_rows": sum(int(item["count"]) for item in rows),
-        "sha256": hashlib.sha256(encoded.encode("utf-8")).hexdigest(),
+        "sha256": hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
     }
     return json.dumps(summary, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
 
@@ -1320,11 +1322,68 @@ def _chunk_payload(chunk: SourceChunk) -> str:
             "part_id": part.id,
             "block_id": part.block_id,
             "overlap": part.id in chunk.overlap_part_ids,
-            "text": part.text,
+            "text": _model_text(part.text, part.table),
         }
         for part in chunk.parts
     ]
-    return json.dumps(parts, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
+    return _model_json(parts, sort_keys=True)
+
+
+# Characters a model request carries escaped (`\uXXXX`) although the rest of the text is sent as
+# UTF-8: they render as nothing or reorder what is shown (controls, format characters such as bidi
+# marks and zero-width spaces, line / paragraph separators, private-use and surrogate code points),
+# so untrusted text cannot hide instructions in them. Every other character goes as itself: a
+# Cyrillic, Arabic or Bengali letter escaped is 6 bytes and several tokens, unescaped 2-3 bytes and
+# a fraction of one.
+_INVISIBLE_CATEGORIES = frozenset({"Cc", "Cf", "Co", "Cs", "Zl", "Zp"})
+
+
+@functools.lru_cache(maxsize=1)
+def _invisible_pattern() -> re.Pattern[str]:
+    ranges: list[tuple[int, int]] = []
+    for code_point in range(sys.maxunicode + 1):
+        if unicodedata.category(chr(code_point)) in _INVISIBLE_CATEGORIES:
+            if ranges and ranges[-1][1] == code_point - 1:
+                ranges[-1] = (ranges[-1][0], code_point)
+            else:
+                ranges.append((code_point, code_point))
+    body = "".join(
+        f"\\U{first:08x}" if first == last else f"\\U{first:08x}-\\U{last:08x}"
+        for first, last in ranges
+    )
+    return re.compile(f"[{body}]")
+
+
+def _json_escape(match: re.Match[str]) -> str:
+    code_point = ord(match.group())
+    if code_point <= 0xFFFF:
+        return f"\\u{code_point:04x}"
+    code_point -= 0x10000
+    return f"\\u{0xD800 + (code_point >> 10):04x}\\u{0xDC00 + (code_point & 0x3FF):04x}"
+
+
+def _model_json(value: object, *, sort_keys: bool = False) -> str:
+    """Compact JSON for a model request: text as UTF-8, invisible characters escaped."""
+    encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=sort_keys)
+    if encoded.isascii():
+        return encoded
+    return _invisible_pattern().sub(_json_escape, encoded)
+
+
+def _model_text(text: str, table: SourceTable | None) -> str:
+    """The text a model reads for one block or part: a table rendered without each row's trailing
+    empty cells (an instrument's grid is labelled and mostly blank; the remaining cells keep their
+    column positions), any other text as it is."""
+    if table is None:
+        return text
+    return render_table(tuple(_without_trailing_blanks(row) for row in table.rows))
+
+
+def _without_trailing_blanks(row: tuple[str, ...]) -> tuple[str, ...]:
+    end = len(row)
+    while end and not row[end - 1].strip():
+        end -= 1
+    return row[:end]
 
 
 def _variable_messages(

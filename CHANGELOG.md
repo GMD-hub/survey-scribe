@@ -41,6 +41,18 @@ project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Model requests carry source text as UTF-8 instead of ASCII-escaped JSON: a
+  Cyrillic, Arabic or Bengali character was sent as a 6-byte `\uXXXX` escape (several
+  tokens each, counted against the request budget). Characters that render invisibly
+  or reorder text — controls, format characters such as bidi marks and zero-width
+  spaces, line and paragraph separators, private-use and surrogate code points — stay
+  escaped, so untrusted text cannot hide instructions in them. Measured on
+  harmonization questionnaires at a 16,000-token budget, extraction requests take
+  70-77% fewer tokens for Cyrillic forms and 50-60% fewer for Bengali and Arabic ones,
+  in fewer calls (36 to 15 for a Kazakh form). A table is shown to the model without
+  each row's trailing empty cells (an instrument's grid is labelled and mostly blank),
+  which alone saves 10-20% on English forms; the remaining cells keep their columns,
+  and the source block and chunk part are unchanged.
 - PDF inspection distinguishes PDFium failures: a damaged PDF raises
   `SourceFormatError` ("damaged or not a valid PDF") instead of "extension does not
   match file content", a file PDFium cannot open raises `SourceConversionError` with
