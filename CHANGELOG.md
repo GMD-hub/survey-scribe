@@ -8,6 +8,11 @@ project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `SurveyVariable.review_reasons` (`ReviewReason` values, empty by default): why
+  `needs_review` is set — `model_flagged`, `low_confidence`, `missing_categories`,
+  `duplicate_raw_name`, `possible_duplicate`, `unsupported_type` (XLSForm). The quality
+  policy sets it; it is left out of the JSON schema, so the model's request schema is
+  unchanged. Older SVIS files without it still load.
 - `PdfConversionOptions` for the PDF adapter (`SourceRegistry.default(pdf_options=...)`
   or `SURVEY_SCRIBE_PDF_*` variables): OCR `always | auto | never` (`never` reads the
   text layer alone, any script, no EasyOCR artifacts), inferred heading levels with
@@ -41,6 +46,9 @@ project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The quality policy no longer sets `needs_review` when it replaces the extracted
+  `module` with the source section heading (`QUALITY_MODULE_RECONCILED` is still
+  reported). The heading is authoritative, and the flag was set on most variables.
 - Model requests carry source text as UTF-8 instead of ASCII-escaped JSON: a
   Cyrillic, Arabic or Bengali character was sent as a 6-byte `\uXXXX` escape (several
   tokens each, counted against the request budget). Characters that render invisibly

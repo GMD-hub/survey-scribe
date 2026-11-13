@@ -20,7 +20,13 @@ from typing import Any, Generic, TypeVar, cast
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from survey_scribe.config import GenerationConfig, RetryConfig
-from survey_scribe.models.svis import DataType, StudyType, SurveySVIS, SurveyVariable
+from survey_scribe.models.svis import (
+    DataType,
+    ReviewReason,
+    StudyType,
+    SurveySVIS,
+    SurveyVariable,
+)
 from survey_scribe.providers.base import (
     ConcurrencyLimiter,
     ProviderError,
@@ -1086,8 +1092,11 @@ def apply_quality_policy(
             continue
 
         updates: dict[str, object] = {}
+        reasons: list[ReviewReason] = (
+            [ReviewReason.model_flagged] if variable.needs_review else []
+        )
         if variable.extraction_confidence < confidence_threshold:
-            updates["needs_review"] = True
+            reasons.append(ReviewReason.low_confidence)
             diagnostics.append(
                 Diagnostic(
                     code=DiagnosticCode.quality_low_confidence,
@@ -1103,7 +1112,7 @@ def apply_quality_policy(
             }
             and not variable.categories
         ):
-            updates["needs_review"] = True
+            reasons.append(ReviewReason.missing_categories)
             diagnostics.append(
                 Diagnostic(
                     code=DiagnosticCode.quality_missing_categories,
@@ -1117,7 +1126,8 @@ def apply_quality_policy(
             else record.provenance.sheet
         )
         if source_module and variable.module != source_module:
-            updates.update({"module": source_module, "needs_review": True})
+            # The source heading is authoritative, so the replacement alone is no reason for review.
+            updates["module"] = source_module
             diagnostics.append(
                 Diagnostic(
                     code=DiagnosticCode.quality_module_reconciled,
@@ -1125,8 +1135,9 @@ def apply_quality_policy(
                     details={"block_id": record.block_id},
                 )
             )
-        if updates:
-            variable = variable.model_copy(update=updates)
+        updates["needs_review"] = bool(reasons)
+        updates["review_reasons"] = tuple(reasons)
+        variable = variable.model_copy(update=updates)
         kept.append(
             QualityRecord(
                 variable=variable,
@@ -1145,7 +1156,7 @@ def apply_quality_policy(
         )
     for index, record in enumerate(kept):
         if raw_name_counts[record.variable.raw_name.casefold()] > 1:
-            kept[index] = _mark_review(record)
+            kept[index] = _mark_review(record, ReviewReason.duplicate_raw_name)
     for raw_name, count in raw_name_counts.items():
         if count > 1:
             diagnostics.append(
@@ -1162,8 +1173,8 @@ def apply_quality_policy(
             if _similar_question(kept[left].variable, kept[right].variable):
                 possible_pairs.add((left, right))
     for left, right in sorted(possible_pairs):
-        kept[left] = _mark_review(kept[left])
-        kept[right] = _mark_review(kept[right])
+        kept[left] = _mark_review(kept[left], ReviewReason.possible_duplicate)
+        kept[right] = _mark_review(kept[right], ReviewReason.possible_duplicate)
         diagnostics.append(
             Diagnostic(
                 code=DiagnosticCode.quality_possible_duplicate,
@@ -1181,9 +1192,15 @@ def apply_quality_policy(
     )
 
 
-def _mark_review(record: QualityRecord) -> QualityRecord:
+def _mark_review(record: QualityRecord, reason: ReviewReason) -> QualityRecord:
+    reasons = record.variable.review_reasons
     return QualityRecord(
-        variable=record.variable.model_copy(update={"needs_review": True}),
+        variable=record.variable.model_copy(
+            update={
+                "needs_review": True,
+                "review_reasons": reasons if reason in reasons else (*reasons, reason),
+            }
+        ),
         block_id=record.block_id,
         source_order=record.source_order,
         provenance=record.provenance,

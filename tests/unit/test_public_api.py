@@ -13,6 +13,7 @@ def test_public_api_exports_models_and_version() -> None:
         "AnswerCategory",
         "DataType",
         "NumericRange",
+        "ReviewReason",
         "StudyType",
         "SurveySVIS",
         "SurveyVariable",

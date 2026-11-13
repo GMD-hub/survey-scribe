@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from survey_scribe.models.svis import DataType, NumericRange, SurveyVariable
+from survey_scribe.models.svis import DataType, NumericRange, ReviewReason, SurveyVariable
 from survey_scribe.pipeline import QualityRecord, apply_quality_policy
 from survey_scribe.results import DiagnosticCode
 from survey_scribe.sources.base import SourceProvenance
@@ -65,6 +65,11 @@ def test_quality_policy_applies_review_reconciliation_and_overlap_rules() -> Non
     assert outcome.variables[0].module == "Roster"
     assert outcome.variables[1].needs_review is True
     assert outcome.variables[2].needs_review is True
+    assert [variable.review_reasons for variable in outcome.variables] == [
+        (ReviewReason.low_confidence,),
+        (ReviewReason.missing_categories, ReviewReason.possible_duplicate),
+        (ReviewReason.possible_duplicate,),
+    ]
     codes = {diagnostic.code for diagnostic in outcome.diagnostics}
     assert DiagnosticCode.quality_low_confidence in codes
     assert DiagnosticCode.quality_missing_categories in codes
@@ -84,9 +89,44 @@ def test_distinct_duplicate_raw_names_are_retained_and_flagged() -> None:
 
     assert len(outcome.variables) == 2
     assert all(variable.needs_review for variable in outcome.variables)
+    assert all(
+        variable.review_reasons == (ReviewReason.duplicate_raw_name,)
+        for variable in outcome.variables
+    )
     assert DiagnosticCode.quality_duplicate_raw_name in {
         diagnostic.code for diagnostic in outcome.diagnostics
     }
+
+
+def test_a_module_difference_alone_is_reconciled_without_review() -> None:
+    outcome = apply_quality_policy(
+        (_record("age", "What is your age?", order=0, module="Wrong"),),
+        confidence_threshold=0.70,
+    )
+
+    [variable] = outcome.variables
+    assert variable.module == "Roster"
+    assert (variable.needs_review, variable.review_reasons) == (False, ())
+    assert [diagnostic.code for diagnostic in outcome.diagnostics] == [
+        DiagnosticCode.quality_module_reconciled
+    ]
+
+
+def test_the_models_own_review_flag_is_kept_with_its_reason() -> None:
+    record = _record("age", "What is your age?", order=0, module="Roster")
+    flagged = QualityRecord(
+        variable=record.variable.model_copy(update={"needs_review": True}),
+        block_id=record.block_id,
+        source_order=record.source_order,
+        provenance=record.provenance,
+        source_block_ids=record.source_block_ids,
+    )
+
+    [variable] = apply_quality_policy((flagged,), confidence_threshold=0.70).variables
+    assert (variable.needs_review, variable.review_reasons) == (
+        True,
+        (ReviewReason.model_flagged,),
+    )
 
 
 def test_quality_policy_preserves_threshold_and_diagnostic_order() -> None:

@@ -1735,6 +1735,7 @@ def test_routed_model_preserves_legacy_field_definitions_and_order() -> None:
         "source_page",
         "extraction_confidence",
         "needs_review",
+        "review_reasons",
         "notes",
     ]
     assert list(RoutedSurveyVariable.model_fields)[-1] == "routing_node_id"
