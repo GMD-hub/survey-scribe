@@ -15,7 +15,26 @@ from survey_scribe.sources.base import (
     SourceLimitError,
     SourceProvenance,
     SourceTable,
+    render_table,
 )
+
+
+class SourceTableLimitError(SourceLimitError):
+    """One cell of a source table cannot fit within the token limit, even alone.
+
+    A table is split by rows, and a row too wide for the limit by columns (bands that repeat the
+    header's cells of the same columns); what is left is a single column of a single row — its
+    header cell and its value — that alone exceeds the limit.
+    """
+
+    def __init__(self, *, table_id: str, block_id: str) -> None:
+        self.table_id = table_id
+        self.block_id = block_id
+        super().__init__(
+            "max_tokens",
+            f"A cell of source table {table_id!r} cannot fit within the token limit, even "
+            "with its row split by columns",
+        )
 
 
 class TokenEstimator(Protocol):
@@ -54,7 +73,16 @@ class RepeatedRow(BaseModel):
 
 
 class SourceChunkPart(BaseModel):
-    """One typed whole block or deterministic text-block segment."""
+    """One typed whole block, deterministic text-block segment, or table row group.
+
+    A table that exceeds the token limit is split into row groups. Each group's
+    ``table`` repeats the physical table's first (header) row followed by the
+    group's rows, keeps the physical table ``id``, and its ``provenance`` row
+    range names only the group's own source rows. A table whose header plus a
+    single row exceeds the limit is first split into column bands: ``columns``
+    is the band's ``(start, end)`` zero-based, end-exclusive column range, and
+    every row of the part (the header included) holds only those cells.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -66,6 +94,7 @@ class SourceChunkPart(BaseModel):
     text: str
     provenance: SourceProvenance
     table: SourceTable | None = None
+    columns: tuple[int, int] | None = None
 
     @model_validator(mode="after")
     def validate_part(self) -> SourceChunkPart:
@@ -75,6 +104,12 @@ class SourceChunkPart(BaseModel):
             raise ValueError("table chunk parts must retain their typed table")
         if self.table is not None and self.table.provenance != self.provenance:
             raise ValueError("chunk-part table provenance must match its part provenance")
+        if self.columns is not None:
+            if self.table is None:
+                raise ValueError("only a table part may carry a column range")
+            start, end = self.columns
+            if start < 0 or end <= start:
+                raise ValueError("a column range is (start, end) with 0 <= start < end")
         return self
 
 
@@ -96,6 +131,18 @@ class SourceChunk(BaseModel):
     token_count: int = Field(ge=0)
 
 
+class TableSplit(BaseModel):
+    """One physical table delivered as more than one part (row groups, and column bands when a
+    row is too wide for the limit)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    table_id: str
+    block_id: str
+    part_count: int = Field(ge=2)
+    column_bands: int = Field(default=1, ge=1)
+
+
 class ChunkedDocument(BaseModel):
     """Deterministic chunks and completeness inventory for one source."""
 
@@ -105,6 +152,30 @@ class ChunkedDocument(BaseModel):
     chunks: tuple[SourceChunk, ...]
     repeated_rows: tuple[RepeatedRow, ...]
 
+    @property
+    def split_tables(self) -> tuple[TableSplit, ...]:
+        """Return tables split into row groups (and column bands), in source order."""
+        splits: dict[str, TableSplit] = {}
+        bands: dict[str, set[tuple[int, int] | None]] = defaultdict(set)
+        for chunk in self.chunks:
+            for part in chunk.parts:
+                if part.table is None or part.part_count < 2 or part.id not in chunk.new_part_ids:
+                    continue
+                bands[part.block_id].add(part.columns)
+                if part.block_id in splits:
+                    continue
+                splits[part.block_id] = TableSplit(
+                    table_id=part.table.id,
+                    block_id=part.block_id,
+                    part_count=part.part_count,
+                )
+        return tuple(
+            split.model_copy(update={"column_bands": len(bands[block_id])})
+            if len(bands[block_id]) > 1
+            else split
+            for block_id, split in splits.items()
+        )
+
 
 def chunk_document(
     document: SourceDocument,
@@ -113,7 +184,13 @@ def chunk_document(
     overlap_tokens: int = 0,
     estimator: TokenEstimator | None = None,
 ) -> ChunkedDocument:
-    """Chunk without dropping preamble, complete tables, or source order.
+    """Chunk without dropping preamble, table rows, or source order.
+
+    A table that fits ``max_tokens`` stays whole. A larger table is split into
+    row groups that each repeat the table's first (header) row; a table whose
+    header plus a single row does not fit is first split into column bands (each
+    repeating the header's cells of its columns), then each band by rows; see
+    ``ChunkedDocument.split_tables``.
 
     Args:
         document: Normalized source document to chunk.
@@ -129,6 +206,9 @@ def chunk_document(
     Raises:
         ValueError: ``max_tokens`` is below one, or ``overlap_tokens`` is negative
             or not smaller than ``max_tokens``.
+        SourceTableLimitError: One column of a table's header plus one of its rows
+            cannot fit within ``max_tokens``.
+        SourceLimitError: Content cannot otherwise fit within ``max_tokens``.
     """
     if isinstance(max_tokens, bool) or not isinstance(max_tokens, int):
         raise ValueError("max_tokens must be an integer")
@@ -170,7 +250,7 @@ def chunk_document(
                 block_ids=tuple(part.block.id for part in all_parts),
                 new_block_ids=tuple(part.block.id for part in new_parts),
                 overlap_block_ids=tuple(part.block.id for part in overlap),
-                provenance=tuple(part.block.provenance for part in all_parts),
+                provenance=tuple(part.provenance for part in all_parts),
                 parts=tuple(_to_chunk_part(part) for part in all_parts),
                 new_part_ids=tuple(part.id for part in new_parts),
                 overlap_part_ids=tuple(part.id for part in overlap),
@@ -192,6 +272,9 @@ class _BlockPart:
     part_index: int
     part_count: int
     text: str
+    provenance: SourceProvenance
+    table: SourceTable | None = None
+    columns: tuple[int, int] | None = None
 
 
 def _split_blocks(
@@ -203,24 +286,24 @@ def _split_blocks(
 ) -> tuple[_BlockPart, ...]:
     parts: list[_BlockPart] = []
     for block in blocks:
-        if block.kind == "table":
-            if estimator.estimate(block.text) > max_tokens:
-                raise SourceLimitError(
-                    "max_tokens",
-                    "A source table exceeds the token limit and cannot be split safely",
+        pieces: tuple[tuple[str, SourceProvenance, SourceTable | None, tuple[int, int] | None], ...]
+        if block.table is not None:
+            if estimator.estimate(block.text) <= max_tokens:
+                pieces = ((block.text, block.provenance, block.table, None),)
+            else:
+                pieces = _split_table(
+                    block,
+                    block.table,
+                    max_tokens=max_tokens,
+                    group_budget=text_budget,
+                    estimator=estimator,
                 )
-            parts.append(
-                _BlockPart(
-                    block=block,
-                    id=f"{block.id}:part-000001",
-                    part_index=1,
-                    part_count=1,
-                    text=block.text,
-                )
+        else:
+            pieces = tuple(
+                (text, block.provenance, None, None)
+                for text in _split_text(block.text, max_tokens=text_budget, estimator=estimator)
             )
-            continue
-        text_parts = _split_text(block.text, max_tokens=text_budget, estimator=estimator)
-        part_count = len(text_parts)
+        part_count = len(pieces)
         parts.extend(
             _BlockPart(
                 block=block,
@@ -228,10 +311,201 @@ def _split_blocks(
                 part_index=index,
                 part_count=part_count,
                 text=text,
+                provenance=provenance,
+                table=table,
+                columns=columns,
             )
-            for index, text in enumerate(text_parts, start=1)
+            for index, (text, provenance, table, columns) in enumerate(pieces, start=1)
         )
     return tuple(parts)
+
+
+def _table_width(table: SourceTable) -> int:
+    return max((len(row) for row in table.rows), default=0)
+
+
+def _band(row: tuple[str, ...], columns: tuple[int, int] | None) -> tuple[str, ...]:
+    return row if columns is None else row[columns[0] : columns[1]]
+
+
+def _split_table(
+    block: SourceBlock,
+    table: SourceTable,
+    *,
+    max_tokens: int,
+    group_budget: int,
+    estimator: TokenEstimator,
+) -> tuple[tuple[str, SourceProvenance, SourceTable, tuple[int, int] | None], ...]:
+    """Split a table into header-repeating row groups in source order.
+
+    Rows are packed greedily up to ``group_budget`` so a part leaves room for
+    overlap context; a group holding a single row may use up to ``max_tokens``.
+    When the header plus a single row exceeds ``max_tokens`` — a header row of
+    long question texts — the table is first cut into column bands, each as wide
+    as every row allows, and each band is split by rows; the parts run band by
+    band, rows in source order within each.
+    """
+    try:
+        return _row_groups(
+            block,
+            table,
+            None,
+            max_tokens=max_tokens,
+            group_budget=group_budget,
+            estimator=estimator,
+        )
+    except SourceTableLimitError:
+        pass
+    pieces: list[tuple[str, SourceProvenance, SourceTable, tuple[int, int] | None]] = []
+    for columns in _column_bands(block, table, max_tokens=max_tokens, estimator=estimator):
+        pieces.extend(
+            _row_groups(
+                block,
+                table,
+                columns,
+                max_tokens=max_tokens,
+                group_budget=group_budget,
+                estimator=estimator,
+            )
+        )
+    return tuple(pieces)
+
+
+def _row_groups(
+    block: SourceBlock,
+    table: SourceTable,
+    columns: tuple[int, int] | None,
+    *,
+    max_tokens: int,
+    group_budget: int,
+    estimator: TokenEstimator,
+) -> tuple[tuple[str, SourceProvenance, SourceTable, tuple[int, int] | None], ...]:
+    """The header-repeating row groups of the table (of one column band of it)."""
+    header = _band(table.rows[0], columns) if table.rows else ()
+    body = table.rows[1:]
+    if not body:
+        raise SourceTableLimitError(table_id=table.id, block_id=block.id)
+    groups: list[tuple[int, int]] = []
+    start = 1
+    end = 1
+    while end <= len(body):
+        band_rows = (_band(row, columns) for row in table.rows[start : end + 1])
+        candidate = render_table((header, *band_rows))
+        limit = max_tokens if end == start else group_budget
+        if estimator.estimate(candidate) <= limit:
+            end += 1
+            continue
+        if end == start:
+            raise SourceTableLimitError(table_id=table.id, block_id=block.id)
+        groups.append((start, end))
+        start = end
+    groups.append((start, end))
+    return tuple(
+        (*_table_row_group(table, first, last, columns), columns) for first, last in groups
+    )
+
+
+def _column_bands(
+    block: SourceBlock,
+    table: SourceTable,
+    *,
+    max_tokens: int,
+    estimator: TokenEstimator,
+) -> tuple[tuple[int, int], ...]:
+    """Consecutive column ranges, each as wide as the header plus ANY single row allows within
+    ``max_tokens`` (so every band can then be split by rows)."""
+    width = _table_width(table)
+    header = table.rows[0] if table.rows else ()
+    body = table.rows[1:] or ((),)
+
+    def fits(first: int, last: int) -> bool:
+        head = header[first:last]
+        return all(
+            estimator.estimate(render_table((head, row[first:last]))) <= max_tokens for row in body
+        )
+
+    bands: list[tuple[int, int]] = []
+    start = 0
+    while start < width:
+        if not fits(start, start + 1):
+            raise SourceTableLimitError(table_id=table.id, block_id=block.id)
+        end = start + 1
+        while end < width and fits(start, end + 1):
+            end += 1
+        bands.append((start, end))
+        start = end
+    if len(bands) < 2:
+        raise SourceTableLimitError(table_id=table.id, block_id=block.id)
+    return tuple(bands)
+
+
+def _table_row_group(
+    table: SourceTable, first: int, last: int, columns: tuple[int, int] | None = None
+) -> tuple[str, SourceProvenance, SourceTable]:
+    """Build the part for ``table.rows[first:last]`` with the header row repeated (only the cells of
+    ``columns`` in every row, when a column band)."""
+    rows = tuple(_band(row, columns) for row in (table.rows[0], *table.rows[first:last]))
+    base = table.provenance.row_start or 1
+    provenance = SourceProvenance.model_validate(
+        {
+            **table.provenance.model_dump(),
+            "row_start": base + first,
+            "row_end": base + last - 1,
+        }
+    )
+    return (
+        render_table(rows),
+        provenance,
+        SourceTable(id=table.id, rows=rows, provenance=provenance),
+    )
+
+
+def split_table_part(
+    part: SourceChunkPart, block: SourceBlock
+) -> tuple[SourceChunkPart, SourceChunkPart]:
+    """Halve one table part, repeating the header row in both halves: by rows, or — a part of a
+    single row — by columns (each half repeats the header's cells of its own columns).
+
+    The halves keep ``part``'s identifiers and indexes; callers renumber them.
+
+    Raises:
+        SourceTableLimitError: ``part`` holds one row of one column.
+    """
+    if part.table is None or block.table is None or part.block_id != block.id:
+        raise ValueError("split_table_part requires a table part and its source block")
+    table = block.table
+    if part.table == table:
+        first, last = 1, len(table.rows)
+    else:
+        base = table.provenance.row_start or 1
+        row_start = part.provenance.row_start
+        row_end = part.provenance.row_end
+        if row_start is None or row_end is None:
+            raise ValueError("a split table part must carry its source row range")
+        first, last = row_start - base, row_end - base + 1
+    columns = part.columns or (0, _table_width(table))
+    if last - first >= 2:
+        middle = first + (last - first) // 2
+        ranges = (((first, middle), part.columns), ((middle, last), part.columns))
+    elif columns[1] - columns[0] >= 2:
+        middle = columns[0] + (columns[1] - columns[0]) // 2
+        ranges = (((first, last), (columns[0], middle)), ((first, last), (middle, columns[1])))
+    else:
+        raise SourceTableLimitError(table_id=table.id, block_id=block.id)
+    halves: list[SourceChunkPart] = []
+    for (start, end), band in ranges:
+        text, provenance, group_table = _table_row_group(table, start, end, band)
+        halves.append(
+            part.model_copy(
+                update={
+                    "text": text,
+                    "provenance": provenance,
+                    "table": group_table,
+                    "columns": band,
+                }
+            )
+        )
+    return halves[0], halves[1]
 
 
 def _group_parts(
@@ -245,8 +519,8 @@ def _group_parts(
     current_tokens = 0
     for part in parts:
         part_tokens = estimator.estimate(part.text)
-        # A table is never split, but it is not isolated either: the text printed above a grid is
-        # the question it answers, and a reader shown the grid alone cannot know that. The table
+        # A table (or table row group) is not isolated: the text printed above a grid is the
+        # question it answers, and a reader shown the grid alone cannot know that. The table
         # joins the current group when it fits the budget and opens a new one only when it does not.
         separator_tokens = estimator.estimate("\n\n") if current else 0
         if current and current_tokens + separator_tokens + part_tokens > max_tokens:
@@ -335,8 +609,9 @@ def _to_chunk_part(part: _BlockPart) -> SourceChunkPart:
         part_count=part.part_count,
         kind=part.block.kind,
         text=part.text,
-        provenance=part.block.provenance,
-        table=part.block.table,
+        provenance=part.provenance,
+        table=part.table,
+        columns=part.columns,
     )
 
 

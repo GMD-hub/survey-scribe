@@ -871,6 +871,7 @@ class RoutedSurveyVariable(SurveyVariable):
             source_page=self.source_page,
             extraction_confidence=self.extraction_confidence,
             needs_review=self.needs_review,
+            review_reasons=self.review_reasons,
             notes=self.notes,
         )
 

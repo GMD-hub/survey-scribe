@@ -6,6 +6,7 @@ from datetime import date
 from enum import Enum
 
 from pydantic import BaseModel, Field
+from pydantic.json_schema import SkipJsonSchema
 
 
 class DataType(str, Enum):
@@ -38,6 +39,17 @@ class UnitLevel(str, Enum):
     individual = "individual"
     household = "household"
     other = "other"
+
+
+class ReviewReason(str, Enum):
+    """Why the quality policy set `needs_review` on a variable."""
+
+    model_flagged = "model_flagged"
+    low_confidence = "low_confidence"
+    missing_categories = "missing_categories"
+    duplicate_raw_name = "duplicate_raw_name"
+    possible_duplicate = "possible_duplicate"
+    unsupported_type = "unsupported_type"
 
 
 class AnswerCategory(BaseModel):
@@ -100,6 +112,11 @@ class SurveyVariable(BaseModel):
         ),
     )
     needs_review: bool = Field(default=False, description="Whether human review is required.")
+    # Set by the package's quality policy, never by the model: kept out of the JSON schema so the
+    # provider request schema does not ask for it.
+    review_reasons: SkipJsonSchema[tuple[ReviewReason, ...]] = Field(
+        default=(), description="Why the quality policy set needs_review, in first-seen order."
+    )
     notes: str | None = Field(default=None, description="Extraction uncertainty or context.")
 
 

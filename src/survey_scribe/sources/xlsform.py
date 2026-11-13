@@ -10,7 +10,13 @@ from pathlib import Path, PurePosixPath
 from types import MappingProxyType
 
 from survey_scribe.models.routing import RepeatKind, TerminalKind
-from survey_scribe.models.svis import AnswerCategory, DataType, SurveySVIS, SurveyVariable
+from survey_scribe.models.svis import (
+    AnswerCategory,
+    DataType,
+    ReviewReason,
+    SurveySVIS,
+    SurveyVariable,
+)
 from survey_scribe.routing.contracts import (
     ConditionOperator,
     ExtractedRoutingCondition,
@@ -1021,6 +1027,14 @@ def _native_svis(
                 module=(sections[-1][1] if sections else None),
                 extraction_confidence=1.0,
                 needs_review=not supported or categorical_without_choices,
+                review_reasons=tuple(
+                    reason
+                    for reason, applies in (
+                        (ReviewReason.unsupported_type, not supported),
+                        (ReviewReason.missing_categories, categorical_without_choices),
+                    )
+                    if applies
+                ),
                 notes=_logic_notes(values),
             )
         )

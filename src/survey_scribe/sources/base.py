@@ -8,7 +8,7 @@ import re
 import tempfile
 import time
 import zipfile
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from math import isfinite
@@ -20,11 +20,21 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from survey_scribe.errors import SurveyScribeError
 
 LocalSource: TypeAlias = str | os.PathLike[str]
+ExternalLinkPolicy: TypeAlias = Literal["refuse", "strip"]
+SourceProgress: TypeAlias = Callable[[int, int], None]  # progress(units_done, units_total)
+EXTERNAL_LINK_STRIPPED = "EXTERNAL_LINK_STRIPPED"
 
 
 @dataclass(frozen=True, slots=True)
 class SourceLimits:
-    """Resource ceilings applied before or during local source conversion."""
+    """Resource ceilings and safety policies applied during local source conversion.
+
+    ``external_links`` controls DOCX and XLSX packages that declare external
+    relationships (hyperlinks, linked workbooks, remote templates). ``"refuse"``
+    rejects the package; ``"strip"`` drops those relationships without following
+    them and records an ``EXTERNAL_LINK_STRIPPED`` warning. Formulas and macros
+    are refused under both policies.
+    """
 
     max_source_bytes: int = 250 * 1024 * 1024
     max_pages: int = 2_000
@@ -39,6 +49,7 @@ class SourceLimits:
     max_cells: int = 2_000_000
     max_companions: int = 100
     deadline_seconds: float = 30 * 60.0
+    external_links: ExternalLinkPolicy = "refuse"
 
     def __post_init__(self) -> None:
         for name in (
@@ -73,6 +84,8 @@ class SourceLimits:
             or self.deadline_seconds <= 0
         ):
             raise ValueError("deadline_seconds must be greater than 0")
+        if self.external_links not in ("refuse", "strip"):
+            raise ValueError("external_links must be 'refuse' or 'strip'")
 
 
 DEFAULT_SOURCE_LIMITS = SourceLimits()
@@ -242,6 +255,16 @@ class SourceDiagnostic(BaseModel):
         return self
 
 
+def external_links_stripped_diagnostic(count: int, source_kind: str) -> SourceDiagnostic:
+    """Report stripped external relationships by count only; targets stay unrecorded."""
+    noun = "relationship" if count == 1 else "relationships"
+    return SourceDiagnostic(
+        code=EXTERNAL_LINK_STRIPPED,
+        message=f"{source_kind} external link {noun} stripped without being followed: {count}",
+        severity="warning",
+    )
+
+
 class SourceDocument(BaseModel):
     """Deterministic normalized content; all source text remains untrusted data."""
 
@@ -330,9 +353,18 @@ class SourceDependencyError(SourceError, ImportError):
 
 
 class SourceConversionError(SourceError):
-    """An adapter could not normalize the source safely."""
+    """An adapter could not normalize the source safely.
+
+    ``detail`` carries the underlying failure when one is known (for example the exception
+    type, message, and raising location from an isolated worker). It is untrusted, bounded
+    text for a record or log; it is appended to the message.
+    """
 
     code = "SOURCE_CONVERSION_FAILED"
+
+    def __init__(self, message: str, *, detail: str | None = None) -> None:
+        self.detail = detail
+        super().__init__(f"{message}: {detail}" if detail else message)
 
 
 class SourceTimeoutError(SourceError, TimeoutError):

@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Generic, Literal, Protocol, TypeVar, runtime_checkable
+from typing import Generic, Literal, Protocol, Self, TypeVar, runtime_checkable
 
 from pydantic import BaseModel
 
@@ -25,6 +26,8 @@ _TRUNCATION_REASONS = frozenset(
         "truncated",
     }
 )
+
+_FILTER_CATEGORY = re.compile(r"[a-z][a-z0-9_]{0,39}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,7 +92,9 @@ class ProviderResponse(Generic[T]):
     def require_complete(self) -> ProviderResponse[T]:
         """Fail closed when a provider reports token or length truncation."""
         if self.truncated:
-            raise ProviderTruncationError()
+            error = ProviderTruncationError().with_usage(self.usage)
+            error.finish_reason = self.finish_reason
+            raise error
         return self
 
 
@@ -156,9 +161,15 @@ class ProviderError(Exception):
 
     code = "PROVIDER_ERROR"
     safe_message = "Structured provider operation failed."
+    usage: NormalizedUsage | None = None
 
     def __init__(self) -> None:
         super().__init__(self.safe_message)
+
+    def with_usage(self, usage: NormalizedUsage | None) -> Self:
+        """Attach normalized token usage to a failed call and return self."""
+        self.usage = usage
+        return self
 
 
 class ProviderDependencyError(ProviderError, ImportError):
@@ -244,6 +255,26 @@ class ProviderTruncationError(ProviderError):
 
     code = "PROVIDER_RESPONSE_TRUNCATED"
     safe_message = "The structured response was truncated."
+    finish_reason: str | None = None
+
+
+class ProviderContentFilterError(ProviderError):
+    """The provider's content filter refused the request or stopped the response."""
+
+    code = "PROVIDER_CONTENT_FILTERED"
+    safe_message = "The provider content filter blocked the request or the response."
+
+    def __init__(
+        self,
+        *,
+        stage: Literal["request", "response"] = "request",
+        categories: Sequence[str] = (),
+    ) -> None:
+        self.stage = stage
+        self.categories = tuple(sorted({c for c in categories if _FILTER_CATEGORY.fullmatch(c)}))[
+            :8
+        ]
+        super().__init__()
 
 
 @runtime_checkable
@@ -296,6 +327,7 @@ __all__ = [
     "NormalizedUsage",
     "ProviderAuthenticationError",
     "ProviderCapabilityError",
+    "ProviderContentFilterError",
     "ProviderDependencyError",
     "ProviderError",
     "ProviderMessage",

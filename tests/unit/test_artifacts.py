@@ -20,7 +20,13 @@ from survey_scribe.errors import (
     redact_text,
 )
 from survey_scribe.models import DataType, SurveySVIS, SurveyVariable
-from survey_scribe.results import Diagnostic, ExtractionResult, FailedBlock, ResultStatus
+from survey_scribe.results import (
+    Diagnostic,
+    ExtractionResult,
+    FailedBlock,
+    ModelCall,
+    ResultStatus,
+)
 from survey_scribe.serialization import artifacts
 
 
@@ -63,6 +69,36 @@ def _active_pointer(output_dir: Path, survey_id: str = "TST_2024_SYNTH") -> Path
     ]
     assert len(matching) == 1
     return matching[0]
+
+
+def test_model_calls_stay_on_the_result_but_are_excluded_from_the_sidecar(
+    tmp_path: Path,
+) -> None:
+    result = _result().model_copy(
+        update={
+            "calls": (
+                ModelCall(
+                    pass_kind="extraction",
+                    block_id="chunk-000001",
+                    outcome="ok",
+                    finish_reason="stop",
+                    input_tokens=100,
+                    output_tokens=400,
+                    total_tokens=500,
+                ),
+            )
+        }
+    )
+
+    dumped = result.model_dump(mode="json", exclude={"output"})
+    assert dumped["calls"][0]["total_tokens"] == 500
+
+    result.write(tmp_path)
+    pointer = json.loads(_active_pointer(tmp_path).read_text(encoding="utf-8"))
+    generation = _active_pointer(tmp_path).parent / pointer["path"]
+    sidecar_path = generation / "TST_2024_SYNTH_sidecar.json"
+    sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    assert "calls" not in sidecar
 
 
 def test_write_creates_valid_generation_projection_and_new_frozen_result(tmp_path: Path) -> None:

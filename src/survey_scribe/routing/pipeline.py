@@ -477,6 +477,7 @@ def _routed_variable(variable: SurveyVariable, node_id: str | None) -> RoutedSur
         source_page=variable.source_page,
         extraction_confidence=variable.extraction_confidence,
         needs_review=variable.needs_review,
+        review_reasons=variable.review_reasons,
         notes=variable.notes,
         routing_node_id=node_id,
     )

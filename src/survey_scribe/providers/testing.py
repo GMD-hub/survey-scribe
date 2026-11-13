@@ -14,10 +14,10 @@ from pydantic import BaseModel, ValidationError
 from survey_scribe.config import GenerationConfig, RetryConfig
 from survey_scribe.providers.base import (
     ConcurrencyLimiter,
+    NormalizedUsage,
     ProviderMessage,
     ProviderResponse,
     ProviderTransportError,
-    ProviderTruncationError,
     ProviderValidationError,
     SchemaDescriptor,
 )
@@ -46,6 +46,7 @@ class FakeStep(Generic[T]):
     finish_reason: str | None = "stop"
     retryable: bool = False
     delay_seconds: float = 0.0
+    usage: NormalizedUsage | None = None
 
     @classmethod
     def output(
@@ -54,12 +55,14 @@ class FakeStep(Generic[T]):
         *,
         finish_reason: str | None = "stop",
         delay_seconds: float = 0.0,
+        usage: NormalizedUsage | None = None,
     ) -> FakeStep[T]:
         return cls(
             kind="output",
             value=value,
             finish_reason=finish_reason,
             delay_seconds=delay_seconds,
+            usage=usage,
         )
 
     @classmethod
@@ -155,7 +158,7 @@ class DeterministicFakeProvider:
             try:
                 async with limiter.slot():
                     self.call_count += 1
-                    raw, finish_reason = await self._one_attempt(
+                    raw, finish_reason, usage = await self._one_attempt(
                         FakeRequest(
                             messages=materialized_messages,
                             response_model=response_model,
@@ -179,7 +182,7 @@ class DeterministicFakeProvider:
                 continue
             response = ProviderResponse(
                 output=output,
-                usage=None,
+                usage=usage,
                 finish_reason=finish_reason,
                 provider=self.provider_name,
                 model=self.model,
@@ -187,17 +190,17 @@ class DeterministicFakeProvider:
                 transport_attempts=transport_attempts,
                 validation_attempts=validation_attempts,
             )
-            if response.truncated:
-                raise ProviderTruncationError()
-            return response
+            return response.require_complete()
         raise ProviderTransportError(retryable=False)
 
-    async def _one_attempt(self, request: FakeRequest) -> tuple[object, str | None]:
+    async def _one_attempt(
+        self, request: FakeRequest
+    ) -> tuple[object, str | None, NormalizedUsage | None]:
         if self._responder is not None:
             value = self._responder(request)
             if inspect.isawaitable(value):
                 value = await cast(Awaitable[object], value)
-            return value, "stop"
+            return value, "stop", None
         if not self._steps:
             raise ProviderTransportError(retryable=False)
         step = self._steps.popleft()
@@ -210,7 +213,7 @@ class DeterministicFakeProvider:
             if not isinstance(error, BaseException):
                 raise RuntimeError("invalid fake control step")
             raise error
-        return step.value, step.finish_reason
+        return step.value, step.finish_reason, step.usage
 
 
 async def _retry_delay(retry: RetryConfig, attempt: int) -> None:

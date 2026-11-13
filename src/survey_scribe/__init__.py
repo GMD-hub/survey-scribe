@@ -35,6 +35,7 @@ from survey_scribe.models import (
     ReplacementEdge,
     ReviewAction,
     ReviewDecision,
+    ReviewReason,
     RoutedAnswerCategory,
     RoutedNumericRange,
     RoutedSurveySVIS,
@@ -58,6 +59,7 @@ from survey_scribe.results import (
     DiagnosticCode,
     ExtractionResult,
     FailedBlock,
+    ModelCall,
     ResultStatus,
 )
 from survey_scribe.routing import QuestionnaireRouter, RoutingConfig
@@ -99,6 +101,7 @@ __all__ = [
     "LoopDefinition",
     "LoopKind",
     "LocalSource",
+    "ModelCall",
     "NumericRange",
     "QuestionnaireRouter",
     "QuestionnaireRoutingGraph",
@@ -108,6 +111,7 @@ __all__ = [
     "ReplacementEdge",
     "ReviewAction",
     "ReviewDecision",
+    "ReviewReason",
     "ResultStatus",
     "RoutedAnswerCategory",
     "RoutedNumericRange",

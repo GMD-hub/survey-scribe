@@ -13,6 +13,7 @@ from survey_scribe.providers.base import (
     ConcurrencyLimiter,
     NormalizedUsage,
     ProviderCapabilityError,
+    ProviderContentFilterError,
     ProviderMessage,
     ProviderResponse,
     ProviderTransportError,
@@ -136,6 +137,30 @@ def test_provider_boundary_models_reject_invalid_safe_metadata() -> None:
         _ = invalid.request_schema
     with pytest.raises(ValueError, match="positive integer"):
         ConcurrencyLimiter(0)
+
+
+def test_content_filter_error_sanitizes_and_bounds_category_labels() -> None:
+    error = ProviderContentFilterError(
+        stage="response",
+        categories=(
+            "violence",
+            "jailbreak",
+            "jailbreak",
+            "Not A Label",
+            "has space",
+            *(f"cat{index}" for index in range(10)),
+        ),
+    )
+    assert error.stage == "response"
+    assert error.code == "PROVIDER_CONTENT_FILTERED"
+    assert not isinstance(error, ProviderTransportError)
+    assert len(error.categories) == 8
+    assert "Not A Label" not in error.categories
+    assert "has space" not in error.categories
+    assert error.categories == tuple(sorted(error.categories))
+    assert len(set(error.categories)) == len(error.categories)
+    assert ProviderContentFilterError().stage == "request"
+    assert ProviderContentFilterError().categories == ()
 
 
 @pytest.mark.parametrize(

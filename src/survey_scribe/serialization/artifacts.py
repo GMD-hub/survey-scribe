@@ -1648,7 +1648,7 @@ def _fsync_directory(path: Path) -> None:
 
 
 def _operational_sidecar(result: ExtractionResult[Any]) -> dict[str, Any]:
-    values = result.model_dump(mode="json", exclude={"output", "artifacts"})
+    values = result.model_dump(mode="json", exclude={"output", "artifacts", "calls"})
     values["diagnostics"] = [
         {
             "code": "OPERATIONAL_DIAGNOSTIC",

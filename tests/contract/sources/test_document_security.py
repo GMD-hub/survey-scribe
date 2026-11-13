@@ -39,11 +39,13 @@ def _write_docx(
     *,
     extra_files: dict[str, bytes | str] | None = None,
     compression: int = zipfile.ZIP_DEFLATED,
+    preamble: str = "<w:r><w:t>Survey preamble</w:t></w:r>",
 ) -> None:
-    document = """<?xml version="1.0" encoding="UTF-8"?>
-<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+    document = f"""<?xml version="1.0" encoding="UTF-8"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+  xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <w:body>
-    <w:p><w:r><w:t>Survey preamble</w:t></w:r></w:p>
+    <w:p>{preamble}</w:p>
     <w:tbl>
       <w:tr><w:tc><w:p><w:r><w:t>Code</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Label</w:t></w:r></w:p></w:tc></w:tr>
       <w:tr><w:tc><w:p><w:r><w:t>Q1</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Age</w:t></w:r></w:p></w:tc></w:tr>
@@ -432,15 +434,17 @@ def test_openpyxl_loader_reports_missing_optional_dependency(
 
 def test_xlsx_relationship_validation_rejects_malformed_and_remote_targets() -> None:
     with pytest.raises(SourceFormatError, match="relationship XML is malformed"):
-        tabular_source._reject_external_relationships(b"<Relationships", "XLSX")
+        tabular_source._external_relationship_count(b"<Relationships", "XLSX")
+    remote = b'<Relationships><Relationship Target="https://example.invalid" /></Relationships>'
     with pytest.raises(SourceSecurityError, match="external relationship"):
-        tabular_source._reject_external_relationships(
-            b'<Relationships><Relationship Target="https://example.invalid" /></Relationships>',
+        tabular_source._external_relationship_count(remote, "XLSX")
+    assert tabular_source._external_relationship_count(remote, "XLSX", policy="strip") == 1
+    assert (
+        tabular_source._external_relationship_count(
+            b'<Relationships><Relationship Target="worksheet.xml" /></Relationships>',
             "XLSX",
         )
-    tabular_source._reject_external_relationships(
-        b'<Relationships><Relationship Target="worksheet.xml" /></Relationships>',
-        "XLSX",
+        == 0
     )
 
 
@@ -460,6 +464,141 @@ def test_xlsx_preflight_accepts_local_relationships(tmp_path: Path) -> None:
     )
 
     assert document.blocks == ()
+
+
+STRIP_EXTERNAL_LINKS = replace(DEFAULT_SOURCE_LIMITS, external_links="strip")
+_RELATIONSHIPS_OPEN = (
+    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+)
+_EXTERNAL_HYPERLINK_RELS = (
+    f"{_RELATIONSHIPS_OPEN}"
+    '<Relationship Id="rId1" Target="https://example.invalid/form" TargetMode="External" />'
+    "</Relationships>"
+)
+
+
+def test_xlsx_strip_policy_drops_external_hyperlink_and_keeps_cell_text(tmp_path: Path) -> None:
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    worksheet = workbook.active
+    assert worksheet is not None
+    worksheet.title = "Survey"
+    worksheet.append(["code", "label"])
+    worksheet.append(["Q1", "Website"])
+    plain = tmp_path / "plain.xlsx"
+    workbook.save(plain)
+    worksheet["B2"].hyperlink = "https://example.invalid/form"
+    linked = tmp_path / "linked.xlsx"
+    workbook.save(linked)
+
+    with pytest.raises(SourceSecurityError, match="external relationship"):
+        SourceRegistry.default().convert(linked)
+
+    expected = SourceRegistry.default().convert(plain, limits=STRIP_EXTERNAL_LINKS)
+    document = SourceRegistry.default().convert(linked, limits=STRIP_EXTERNAL_LINKS)
+
+    assert [block.text for block in document.blocks] == [block.text for block in expected.blocks]
+    assert [table.rows for table in document.tables] == [table.rows for table in expected.tables]
+    assert expected.diagnostics == ()
+    assert [(item.code, item.severity) for item in document.diagnostics] == [
+        ("EXTERNAL_LINK_STRIPPED", "warning")
+    ]
+    assert document.diagnostics[0].message.endswith(": 1")
+    assert "example.invalid" not in document.model_dump_json()
+
+
+def test_xlsx_strip_policy_counts_linked_workbook_once_and_keeps_formulas_refused(
+    tmp_path: Path,
+) -> None:
+    linked_workbook = {
+        "xl/_rels/workbook.xml.rels": (
+            f"{_RELATIONSHIPS_OPEN}"
+            '<Relationship Id="rId9" Target="externalLinks/externalLink1.xml" /></Relationships>'
+        ),
+        "xl/externalLinks/externalLink1.xml": "<x/>",
+        "xl/externalLinks/_rels/externalLink1.xml.rels": (
+            f"{_RELATIONSHIPS_OPEN}"
+            '<Relationship Id="rId1" Target="file:///codes.xlsx" TargetMode="External" />'
+            "</Relationships>"
+        ),
+        "xl/worksheets/_rels/sheet1.xml.rels": _EXTERNAL_HYPERLINK_RELS,
+    }
+    path = tmp_path / "linked.xlsx"
+    _write_xlsx_container(path, extra_files=linked_workbook)
+
+    document = XlsxAdapter(workbook_loader=lambda _path, **_kwargs: FakeWorkbook([])).convert(
+        resolve_local_source(path), limits=STRIP_EXTERNAL_LINKS
+    )
+    assert [item.code for item in document.diagnostics] == ["EXTERNAL_LINK_STRIPPED"]
+    assert document.diagnostics[0].message.endswith(": 2")
+
+    formula = tmp_path / "formula.xlsx"
+    _write_xlsx_container(
+        formula,
+        extra_files=linked_workbook,
+        sheet_xml="""<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<sheetData><row r="1"><c r="A1"><f>[1]Codes!A1</f></c></row></sheetData>
+</worksheet>""",
+    )
+    with pytest.raises(SourceSecurityError, match="formula"):
+        XlsxAdapter(workbook_loader=lambda _path, **_kwargs: FakeWorkbook([])).convert(
+            resolve_local_source(formula), limits=STRIP_EXTERNAL_LINKS
+        )
+
+    macro = tmp_path / "macro.xlsx"
+    _write_xlsx_container(macro, extra_files={"xl/vbaProject.bin": "macro", **linked_workbook})
+    with pytest.raises(SourceSecurityError, match="macro"):
+        XlsxAdapter(workbook_loader=lambda _path, **_kwargs: FakeWorkbook([])).convert(
+            resolve_local_source(macro), limits=STRIP_EXTERNAL_LINKS
+        )
+
+
+def test_docx_strip_policy_drops_external_relationships_and_keeps_text(tmp_path: Path) -> None:
+    plain = tmp_path / "plain.docx"
+    _write_docx(plain)
+    linked = tmp_path / "linked.docx"
+    _write_docx(
+        linked,
+        preamble=(
+            "<w:r><w:t>Survey </w:t></w:r>"
+            '<w:hyperlink r:id="rId1"><w:r><w:t>preamble</w:t></w:r></w:hyperlink>'
+        ),
+        extra_files={
+            "word/_rels/document.xml.rels": _EXTERNAL_HYPERLINK_RELS,
+            "word/_rels/settings.xml.rels": (
+                f"{_RELATIONSHIPS_OPEN}"
+                '<Relationship Id="rId1" Target="file:///template.dotx" TargetMode="External" />'
+                "</Relationships>"
+            ),
+        },
+    )
+
+    with pytest.raises(SourceSecurityError, match="external relationship"):
+        SourceRegistry.default().convert(linked)
+
+    expected = SourceRegistry.default().convert(plain, limits=STRIP_EXTERNAL_LINKS)
+    document = SourceRegistry.default().convert(linked, limits=STRIP_EXTERNAL_LINKS)
+
+    assert [block.text for block in document.blocks] == [block.text for block in expected.blocks]
+    assert [table.rows for table in document.tables] == [table.rows for table in expected.tables]
+    assert document.coverage == expected.coverage
+    assert [(item.code, item.severity) for item in document.diagnostics] == [
+        ("EXTERNAL_LINK_STRIPPED", "warning")
+    ]
+    assert document.diagnostics[0].message.endswith(": 2")
+    assert "example.invalid" not in document.model_dump_json()
+
+    macro = tmp_path / "macro.docx"
+    _write_docx(
+        macro,
+        extra_files={
+            "word/vbaProject.bin": b"macro",
+            "word/_rels/document.xml.rels": _EXTERNAL_HYPERLINK_RELS,
+        },
+    )
+    with pytest.raises(SourceSecurityError, match="macro"):
+        SourceRegistry.default().convert(macro, limits=STRIP_EXTERNAL_LINKS)
 
 
 def test_xlsx_rejects_malformed_worksheet_and_package_io_errors(

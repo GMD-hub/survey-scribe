@@ -2,6 +2,7 @@
 
 from survey_scribe.sources.base import (
     DEFAULT_SOURCE_LIMITS,
+    ExternalLinkPolicy,
     LocalSource,
     ResolvedSource,
     SourceAdapter,
@@ -17,6 +18,7 @@ from survey_scribe.sources.base import (
     SourceInputError,
     SourceLimitError,
     SourceLimits,
+    SourceProgress,
     SourceProvenance,
     SourceSecurityError,
     SourceTable,
@@ -29,6 +31,7 @@ from survey_scribe.sources.registry import SourceRegistry
 
 __all__ = [
     "DEFAULT_SOURCE_LIMITS",
+    "ExternalLinkPolicy",
     "LocalSource",
     "ResolvedSource",
     "SourceAdapter",
@@ -44,6 +47,7 @@ __all__ = [
     "SourceInputError",
     "SourceLimitError",
     "SourceLimits",
+    "SourceProgress",
     "SourceProvenance",
     "SourceRegistry",
     "SourceSecurityError",

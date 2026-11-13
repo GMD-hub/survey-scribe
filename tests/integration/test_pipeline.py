@@ -19,9 +19,18 @@ from survey_scribe.pipeline import (
     ExtractionPipeline,
     PipelineConfig,
 )
+from survey_scribe.providers.base import (
+    NormalizedUsage,
+    ProviderCapabilityError,
+    ProviderContentFilterError,
+    ProviderError,
+    ProviderRateLimitError,
+    ProviderTruncationError,
+    ProviderValidationError,
+)
 from survey_scribe.providers.capabilities import CapabilityEvidence, ModelCapabilities
 from survey_scribe.providers.testing import DeterministicFakeProvider, FakeRequest, FakeStep
-from survey_scribe.results import DiagnosticCode, ResultStatus
+from survey_scribe.results import Diagnostic, DiagnosticCode, ResultStatus
 from survey_scribe.sources.base import (
     SourceBlock,
     SourceCoverage,
@@ -290,7 +299,7 @@ async def test_pipeline_splits_escaped_text_without_losing_source_part_provenanc
 @pytest.mark.asyncio
 async def test_pipeline_rejects_a_table_that_cannot_fit_the_serialized_request() -> None:
     provenance = SourceProvenance(source_name="survey.pdf", page=1)
-    rows = (("\u00e9" * 250,),)
+    rows = (("\u200b" * 250,),)  # zero-width spaces: 3 bytes as text, 6 escaped in the request
     table = SourceTable(id="table-1", rows=rows, provenance=provenance)
     document = SourceDocument(
         source_name="survey.pdf",
@@ -315,6 +324,181 @@ async def test_pipeline_rejects_a_table_that_cannot_fit_the_serialized_request()
     assert result.output is None
     assert provider.call_count == 0
     assert [diagnostic.code for diagnostic in result.diagnostics] == ["SOURCE_LIMIT_EXCEEDED"]
+    assert result.diagnostics[0].details == {"table_id": "table-1", "block_id": "table-1"}
+
+
+def _table_document(rows: tuple[tuple[str, ...], ...]) -> SourceDocument:
+    provenance = SourceProvenance(source_name="survey.pdf", page=3, row_start=1, row_end=len(rows))
+    table = SourceTable(id="table-7", rows=rows, provenance=provenance)
+    return SourceDocument(
+        source_name="survey.pdf",
+        media_type="application/pdf",
+        blocks=(
+            SourceBlock(
+                id="block-0",
+                order=0,
+                kind="text",
+                text="Q5. Expenditure in the last 7 days",
+                provenance=SourceProvenance(source_name="survey.pdf", page=3),
+            ),
+            SourceBlock(
+                id="block-1",
+                order=1,
+                kind="table",
+                text=render_table(rows),
+                provenance=provenance,
+                table=table,
+            ),
+        ),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "rows",
+    [
+        (("code", "item", "amount"),)
+        + tuple((f"{index:03d}", f"Expenditure item {index}", "____") for index in range(80)),
+        (("code", "item"),) + tuple((f"{index:03d}", "\u00e9" * 40) for index in range(12)),
+    ],
+    ids=["raw-budget", "serialized-budget"],
+)
+async def test_pipeline_splits_an_oversized_table_by_rows_and_warns(
+    rows: tuple[tuple[str, ...], ...],
+) -> None:
+    document = _table_document(rows)
+    requests: list[FakeRequest] = []
+
+    async def respond(request: FakeRequest) -> object:
+        requests.append(request)
+        if request.response_model is ExtractedMetadata:
+            return ExtractedMetadata(
+                survey_id="TST_2026_SYN", country_code="TST", year=2026, survey_name="Survey"
+            )
+        return BlockExtraction(
+            block_id=_chunk_id(request),
+            variables=(
+                ExtractedVariable(
+                    variable=SurveyVariable(
+                        raw_name=f"v_{_chunk_id(request).replace('-', '_')}",
+                        data_type=DataType.text,
+                        extraction_confidence=1.0,
+                    ),
+                    source_block_ids=(_source_block_ids(request)[-1],),
+                ),
+            ),
+        )
+
+    provider = DeterministicFakeProvider(capabilities=_capabilities(), responder=respond)
+    pipeline = ExtractionPipeline(
+        provider, config=PipelineConfig(max_request_tokens=2_200, overlap_tokens=200)
+    )
+    result = await pipeline.extract(document)
+
+    assert result.status is ResultStatus.success
+    assert result.output is not None
+    assert all(provider.estimate_tokens(request.messages) <= 2_200 for request in requests)
+    chunked = pipeline._chunk_document(document)
+    table_parts = [
+        part
+        for chunk in chunked.chunks
+        for part in chunk.parts
+        if part.id in chunk.new_part_ids and part.table is not None
+    ]
+    assert len(table_parts) > 1
+    assert [part.part_index for part in table_parts] == list(range(1, len(table_parts) + 1))
+    assert {part.part_count for part in table_parts} == {len(table_parts)}
+    for part in table_parts:
+        assert part.table is not None
+        assert part.table.id == "table-7"
+        assert part.table.rows[0] == rows[0]
+        assert part.provenance.page == 3
+        assert part.provenance.row_start is not None
+        assert part.provenance.row_end == part.provenance.row_start + len(part.table.rows) - 2
+    assert [row for part in table_parts if part.table for row in part.table.rows[1:]] == list(
+        rows[1:]
+    )
+    assert table_parts[0].provenance.row_start == 2
+    assert table_parts[-1].provenance.row_end == len(rows)
+    warnings = [
+        diagnostic
+        for diagnostic in result.diagnostics
+        if diagnostic.code == DiagnosticCode.source_table_split
+    ]
+    assert len(warnings) == 1
+    assert warnings[0].severity == "warning"
+    assert warnings[0].details == {
+        "table_id": "table-7",
+        "block_id": "block-1",
+        "part_count": len(table_parts),
+    }
+
+
+@pytest.mark.asyncio
+async def test_pipeline_splits_a_table_whose_header_is_too_wide_into_column_bands() -> None:
+    """A grid whose header carries the questions (an NSO form).
+
+    Header plus one row exceeds any request, so the table is cut into column bands,
+    each split by rows; every cell is extracted, none dropped.
+    """
+    header = tuple(f"Q{index}. " + "\u00e9" * 60 for index in range(8))
+    rows = (header, *(tuple(f"{row}" for _ in range(8)) for row in range(1, 4)))
+    document = _table_document(rows)
+    requests: list[FakeRequest] = []
+
+    async def respond(request: FakeRequest) -> object:
+        requests.append(request)
+        if request.response_model is ExtractedMetadata:
+            return ExtractedMetadata(
+                survey_id="TST_2026_SYN", country_code="TST", year=2026, survey_name="Survey"
+            )
+        return BlockExtraction(
+            block_id=_chunk_id(request),
+            variables=(
+                ExtractedVariable(
+                    variable=SurveyVariable(
+                        raw_name=f"v_{_chunk_id(request).replace('-', '_')}",
+                        data_type=DataType.text,
+                        extraction_confidence=1.0,
+                    ),
+                    source_block_ids=(_source_block_ids(request)[-1],),
+                ),
+            ),
+        )
+
+    provider = DeterministicFakeProvider(capabilities=_capabilities(), responder=respond)
+    pipeline = ExtractionPipeline(
+        provider, config=PipelineConfig(max_request_tokens=2_200, overlap_tokens=200)
+    )
+    result = await pipeline.extract(document)
+
+    assert result.status is ResultStatus.success
+    assert all(provider.estimate_tokens(request.messages) <= 2_200 for request in requests)
+    chunked = pipeline._chunk_document(document)
+    table_parts = [
+        part
+        for chunk in chunked.chunks
+        for part in chunk.parts
+        if part.id in chunk.new_part_ids and part.table is not None
+    ]
+    assert all(part.columns is not None for part in table_parts)
+    bands = list(dict.fromkeys(part.columns for part in table_parts if part.columns is not None))
+    assert len(bands) >= 2 and bands[0][0] == 0 and bands[-1][1] == 8
+    for band in bands:
+        assert [
+            row
+            for part in table_parts
+            if part.columns == band and part.table
+            for row in part.table.rows[1:]
+        ] == [row[band[0] : band[1]] for row in rows[1:]]
+    [warning] = [d for d in result.diagnostics if d.code == DiagnosticCode.source_table_split]
+    assert warning.details == {
+        "table_id": "table-7",
+        "block_id": "block-1",
+        "part_count": len(table_parts),
+        "column_bands": len(bands),
+    }
+    assert "column bands" in warning.message
 
 
 @pytest.mark.asyncio
@@ -406,6 +590,348 @@ async def test_pipeline_returns_failed_when_all_blocks_fail_and_propagates_cance
             cancelled_provider,
             extraction_date=date(2026, 9, 3),
         ).extract(_document())
+
+
+def _metadata() -> ExtractedMetadata:
+    return ExtractedMetadata(
+        survey_id="TST_2026_SYN",
+        country_code="TST",
+        year=2026,
+        survey_name="Synthetic Survey",
+    )
+
+
+def _block_diagnostic(result: object) -> Diagnostic:
+    codes = {
+        DiagnosticCode.provider_failed,
+        DiagnosticCode.validation_failed,
+        DiagnosticCode.provider_truncated,
+    }
+    return next(
+        diagnostic
+        for diagnostic in result.diagnostics  # type: ignore[attr-defined]
+        if diagnostic.code in codes
+    )
+
+
+@pytest.mark.asyncio
+async def test_pipeline_failed_block_diagnostics_carry_reason() -> None:
+    async def rate_limited(request: FakeRequest) -> object:
+        if request.response_model is ExtractedMetadata:
+            return _metadata()
+        raise ProviderRateLimitError()
+
+    rate_result = await ExtractionPipeline(
+        DeterministicFakeProvider(capabilities=_capabilities(), responder=rate_limited),
+        config=PipelineConfig(retry=RetryConfig(max_attempts=1)),
+        extraction_date=date(2026, 9, 3),
+    ).extract(_document())
+    rate_diagnostic = _block_diagnostic(rate_result)
+    assert rate_diagnostic.code is DiagnosticCode.provider_failed
+    assert rate_diagnostic.details["reason"] == "PROVIDER_RATE_LIMITED"
+    assert rate_diagnostic.details["retryable"] is True
+
+    async def timed_out(request: FakeRequest) -> object:
+        if request.response_model is ExtractedMetadata:
+            return _metadata()
+        raise TimeoutError("private source text")
+
+    timeout_result = await ExtractionPipeline(
+        DeterministicFakeProvider(capabilities=_capabilities(), responder=timed_out),
+        extraction_date=date(2026, 9, 3),
+    ).extract(_document())
+    assert _block_diagnostic(timeout_result).details["reason"] == "TIMEOUT"
+    assert "private source text" not in timeout_result.model_dump_json()
+
+    async def wrong_chunk(request: FakeRequest) -> object:
+        if request.response_model is ExtractedMetadata:
+            return _metadata()
+        return BlockExtraction(
+            block_id="chunk-999999",
+            variables=tuple(
+                ExtractedVariable(
+                    variable=SurveyVariable(
+                        raw_name=block_id,
+                        data_type=DataType.text,
+                        extraction_confidence=1.0,
+                    ),
+                    source_block_ids=(block_id,),
+                )
+                for block_id in _source_block_ids(request)
+            ),
+        )
+
+    mismatch_result = await ExtractionPipeline(
+        DeterministicFakeProvider(capabilities=_capabilities(), responder=wrong_chunk),
+        extraction_date=date(2026, 9, 3),
+    ).extract(_document())
+    mismatch_diagnostic = _block_diagnostic(mismatch_result)
+    assert mismatch_diagnostic.code is DiagnosticCode.validation_failed
+    assert mismatch_diagnostic.details["reason"] == "CHUNK_ID_MISMATCH"
+
+    async def capability(request: FakeRequest) -> object:
+        if request.response_model is ExtractedMetadata:
+            return _metadata()
+        raise ProviderCapabilityError("input_limit")
+
+    capability_result = await ExtractionPipeline(
+        DeterministicFakeProvider(capabilities=_capabilities(), responder=capability),
+        config=PipelineConfig(retry=RetryConfig(max_attempts=1)),
+        extraction_date=date(2026, 9, 3),
+    ).extract(_document())
+    assert (
+        _block_diagnostic(capability_result).details["reason"] == "PROVIDER_CAPABILITY_UNSUPPORTED"
+    )
+
+
+@pytest.mark.asyncio
+async def test_pipeline_content_filter_block_reports_filter_details() -> None:
+    long_document = SourceDocument(
+        source_name="survey.txt",
+        media_type="text/plain",
+        blocks=(
+            SourceBlock(
+                id="one",
+                order=0,
+                kind="text",
+                text="a" * 300,
+                provenance=SourceProvenance(source_name="survey.txt", page=1),
+            ),
+            SourceBlock(
+                id="two",
+                order=1,
+                kind="text",
+                text="b" * 300,
+                provenance=SourceProvenance(source_name="survey.txt", page=2),
+            ),
+        ),
+        snapshot_sha256="a" * 64,
+    )
+    filtered_chunk_calls: dict[str, int] = {}
+
+    async def respond(request: FakeRequest) -> object:
+        if request.response_model is ExtractedMetadata:
+            return _metadata()
+        block_ids = _source_block_ids(request)
+        if "one" in block_ids:
+            chunk_id = _chunk_id(request)
+            filtered_chunk_calls[chunk_id] = filtered_chunk_calls.get(chunk_id, 0) + 1
+            raise ProviderContentFilterError(
+                stage="request", categories=("jailbreak", "Not A Label")
+            )
+        return BlockExtraction(
+            block_id=_chunk_id(request),
+            variables=tuple(
+                ExtractedVariable(
+                    variable=SurveyVariable(
+                        raw_name=block_id,
+                        data_type=DataType.text,
+                        extraction_confidence=1.0,
+                    ),
+                    source_block_ids=(block_id,),
+                )
+                for block_id in block_ids
+            ),
+        )
+
+    result = await ExtractionPipeline(
+        DeterministicFakeProvider(capabilities=_capabilities(), responder=respond),
+        config=PipelineConfig(max_request_tokens=1_630, overlap_tokens=0),
+        extraction_date=date(2026, 9, 3),
+    ).extract(long_document)
+
+    assert result.status is ResultStatus.partial
+    diagnostic = _block_diagnostic(result)
+    assert diagnostic.code is DiagnosticCode.provider_failed
+    assert diagnostic.details["reason"] == "PROVIDER_CONTENT_FILTERED"
+    assert diagnostic.details["filter_stage"] == "request"
+    assert list(diagnostic.details["filter_categories"]) == ["jailbreak"]
+    assert filtered_chunk_calls
+    assert all(count == 1 for count in filtered_chunk_calls.values())
+
+
+@pytest.mark.asyncio
+async def test_pipeline_records_token_usage_for_successful_block_calls() -> None:
+    document = SourceDocument(
+        source_name="survey.txt",
+        media_type="text/plain",
+        blocks=(
+            SourceBlock(
+                id="one",
+                order=0,
+                kind="text",
+                text="a" * 100,
+                provenance=SourceProvenance(source_name="survey.txt", page=1),
+            ),
+            SourceBlock(
+                id="two",
+                order=1,
+                kind="text",
+                text="b" * 100,
+                provenance=SourceProvenance(source_name="survey.txt", page=2),
+            ),
+        ),
+        snapshot_sha256="a" * 64,
+    )
+    usage = NormalizedUsage(input_tokens=100, output_tokens=400, total_tokens=500)
+
+    def _block_step(chunk_id: str, block_id: str) -> FakeStep:
+        return FakeStep.output(
+            BlockExtraction(
+                block_id=chunk_id,
+                variables=(
+                    ExtractedVariable(
+                        variable=SurveyVariable(
+                            raw_name=block_id,
+                            data_type=DataType.text,
+                            extraction_confidence=1.0,
+                        ),
+                        source_block_ids=(block_id,),
+                    ),
+                ),
+            ),
+            usage=usage,
+        )
+
+    provider = DeterministicFakeProvider(
+        capabilities=_capabilities(),
+        steps=(
+            FakeStep.output(_metadata()),
+            FakeStep.output(_metadata()),
+            _block_step("chunk-000001", "one"),
+            _block_step("chunk-000002", "two"),
+        ),
+    )
+    result = await ExtractionPipeline(
+        provider,
+        config=PipelineConfig(max_request_tokens=1_630, overlap_tokens=0, max_concurrency=1),
+        extraction_date=date(2026, 9, 3),
+    ).extract(document)
+
+    assert result.status is ResultStatus.success
+    assert [call.pass_kind for call in result.calls] == [
+        "metadata",
+        "metadata",
+        "extraction",
+        "extraction",
+    ]
+    extraction_calls = [call for call in result.calls if call.pass_kind == "extraction"]
+    assert len(extraction_calls) == 2
+    for call in extraction_calls:
+        assert call.outcome == "ok"
+        assert call.input_tokens == 100
+        assert call.output_tokens == 400
+        assert call.total_tokens == 500
+
+
+@pytest.mark.asyncio
+async def test_pipeline_records_token_usage_on_a_truncated_block_call() -> None:
+    usage = NormalizedUsage(input_tokens=100, output_tokens=32_768, total_tokens=32_868)
+    provider = DeterministicFakeProvider(
+        capabilities=_capabilities(),
+        steps=(
+            FakeStep.output(_metadata()),
+            FakeStep.output(
+                BlockExtraction(block_id="chunk-000001", variables=()),
+                finish_reason="length",
+                usage=usage,
+            ),
+        ),
+    )
+    result = await ExtractionPipeline(
+        provider,
+        extraction_date=date(2026, 9, 3),
+    ).extract(_document())
+
+    assert DiagnosticCode.provider_truncated in {
+        diagnostic.code for diagnostic in result.diagnostics
+    }
+    truncated_calls = [call for call in result.calls if call.outcome == "truncated"]
+    assert len(truncated_calls) == 1
+    call = truncated_calls[0]
+    assert call.pass_kind == "extraction"
+    assert call.reason == "PROVIDER_RESPONSE_TRUNCATED"
+    assert call.finish_reason == "length"
+    assert call.input_tokens == 100
+    assert call.output_tokens == 32_768
+    assert call.total_tokens == 32_868
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error", "outcome", "reason", "expected_usage"),
+    [
+        (ProviderTruncationError(), "truncated", "PROVIDER_RESPONSE_TRUNCATED", (11, 7, 18)),
+        (ProviderValidationError(), "invalid", "PROVIDER_VALIDATION_FAILED", (11, 7, 18)),
+        (ProviderCapabilityError(), "failed", "PROVIDER_CAPABILITY_UNSUPPORTED", (11, 7, 18)),
+        (TimeoutError("private source text"), "failed", "TIMEOUT", (None, None, None)),
+        (ConnectionError("private source text"), "failed", "CONNECTION", (None, None, None)),
+    ],
+)
+async def test_metadata_failure_records_reason_and_available_usage(
+    error: BaseException,
+    outcome: str,
+    reason: str,
+    expected_usage: tuple[int | None, int | None, int | None],
+) -> None:
+    if isinstance(error, ProviderError):
+        error.with_usage(NormalizedUsage(input_tokens=11, output_tokens=7, total_tokens=18))
+    provider = DeterministicFakeProvider(
+        capabilities=_capabilities(),
+        steps=(
+            FakeStep.raises(error),
+            FakeStep.output(
+                BlockExtraction(
+                    block_id="chunk-000001",
+                    variables=(
+                        ExtractedVariable(
+                            variable=SurveyVariable(
+                                raw_name="age",
+                                data_type=DataType.numeric,
+                                extraction_confidence=1.0,
+                            ),
+                            source_block_ids=("block-0",),
+                        ),
+                    ),
+                )
+            ),
+        ),
+    )
+
+    result = await ExtractionPipeline(provider, extraction_date=date(2026, 9, 3)).extract(
+        _document()
+    )
+
+    assert result.status is ResultStatus.partial
+    [call] = [call for call in result.calls if call.pass_kind == "metadata"]
+    assert call.block_id == "chunk-000001"
+    assert call.outcome == outcome
+    assert call.reason == reason
+    assert (call.input_tokens, call.output_tokens, call.total_tokens) == expected_usage
+    assert "private source text" not in result.model_dump_json()
+
+
+@pytest.mark.asyncio
+async def test_pipeline_records_a_failed_call_without_token_usage_on_timeout() -> None:
+    async def timed_out(request: FakeRequest) -> object:
+        if request.response_model is ExtractedMetadata:
+            return _metadata()
+        raise TimeoutError("private source text")
+
+    result = await ExtractionPipeline(
+        DeterministicFakeProvider(capabilities=_capabilities(), responder=timed_out),
+        extraction_date=date(2026, 9, 3),
+    ).extract(_document())
+
+    extraction_calls = [call for call in result.calls if call.pass_kind == "extraction"]
+    assert len(extraction_calls) == 1
+    call = extraction_calls[0]
+    assert call.outcome == "failed"
+    assert call.reason == "TIMEOUT"
+    assert call.input_tokens is None
+    assert call.output_tokens is None
+    assert call.total_tokens is None
+    assert "private source text" not in result.model_dump_json()
 
 
 @pytest.mark.asyncio

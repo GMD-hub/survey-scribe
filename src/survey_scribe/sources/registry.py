@@ -19,6 +19,7 @@ from survey_scribe.sources.base import (
     SourceDocument,
     SourceFormatError,
     SourceLimits,
+    SourceProgress,
     resolve_local_source,
     snapshot_resolved_source,
 )
@@ -29,7 +30,7 @@ if TYPE_CHECKING:
     from survey_scribe.models.routing import RoutingSourceBinding
     from survey_scribe.models.svis import SurveySVIS
     from survey_scribe.routing.native import NativeRoutingSemantics
-    from survey_scribe.sources.docling import PdfConversionOptions
+    from survey_scribe.sources.docling import IsolationMode, PdfConversionOptions
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,6 +63,21 @@ class NativeSourceAdapter(SourceAdapter, Protocol):
         limits: SourceLimits,
     ) -> NativeRoutingSemantics | None:
         """Return native semantics from the active private source snapshot."""
+        ...
+
+
+@runtime_checkable
+class ProgressSourceAdapter(SourceAdapter, Protocol):
+    """Adapter extension that reports conversion progress to the caller."""
+
+    def convert_with_progress(
+        self,
+        source: ResolvedSource,
+        *,
+        limits: SourceLimits,
+        progress: SourceProgress,
+    ) -> SourceDocument:
+        """Normalize a source, calling ``progress(done, total)`` as units finish."""
         ...
 
 
@@ -113,6 +129,15 @@ class NativeSvisSourceAdapter(DeadlineSourceAdapter, Protocol):
         ...
 
 
+@runtime_checkable
+class CloseableSourceAdapter(SourceAdapter, Protocol):
+    """Adapter extension that owns a long-lived resource to release on registry close."""
+
+    def close(self) -> None:
+        """Release any long-lived worker or handle this adapter holds."""
+        ...
+
+
 class SourceRegistry:
     """Map verified file suffixes to minimal source adapters."""
 
@@ -129,35 +154,66 @@ class SourceRegistry:
         """Return the lower-case file suffixes this registry converts."""
         return frozenset(self._adapters)
 
+    def close(self) -> None:
+        """Release every adapter that owns a long-lived worker or handle."""
+        for adapter in dict.fromkeys(self._adapters.values()):
+            if isinstance(adapter, CloseableSourceAdapter):
+                adapter.close()
+
     @classmethod
-    def default(cls, *, pdf_options: PdfConversionOptions | None = None) -> SourceRegistry:
+    def default(
+        cls,
+        *,
+        pdf_options: PdfConversionOptions | None = None,
+        isolation: IsolationMode | None = None,
+        block_network: bool | None = None,
+    ) -> SourceRegistry:
         """Create the verified Tier 1 registry without importing optional SDKs.
 
         Args:
             pdf_options: How the PDF adapter reads a document. ``None`` reads the
                 ``SURVEY_SCRIBE_PDF_*`` environment variables, which leave the
                 established defaults in place when unset.
+            isolation: How the Docling PDF and Office adapters isolate a conversion:
+                ``"process"`` (fresh worker per document, the default), ``"worker"``
+                (one reused worker that loads the models once), or ``"inprocess"``
+                (no child). ``None`` reads ``SURVEY_SCRIBE_PDF_ISOLATION``.
+            block_network: Deny the worker's sockets in ``"process"`` and ``"worker"``
+                isolation. ``None`` reads ``SURVEY_SCRIBE_PDF_BLOCK_NETWORK`` (the
+                default blocks the network). Ignored by ``"inprocess"``.
 
         Returns:
-            A registry for PDF, DOCX, XLSX, CSV, HTML, Markdown, and text files.
+            A registry for PDF, DOCX, XLSX, CSV, HTML, Markdown, and text files, and the
+            legacy binary DOC and XLS (Docling's Word and Excel pipelines, with LibreOffice).
         """
         from survey_scribe.sources.docling import (
+            DoclingOfficeAdapter,
             DoclingPdfAdapter,
             DocxAdapter,
             HtmlAdapter,
             MarkdownAdapter,
             PdfConversionOptions,
             TextAdapter,
+            block_network_from_environment,
+            isolation_from_environment,
         )
         from survey_scribe.sources.tabular import CsvAdapter
         from survey_scribe.sources.xlsform import XlsFormAdapter
 
         options = pdf_options or PdfConversionOptions.from_environment()
+        mode = isolation_from_environment() if isolation is None else isolation
+        block = block_network_from_environment() if block_network is None else block_network
         return cls(
             {
-                ".pdf": DoclingPdfAdapter(options=options),
+                ".pdf": DoclingPdfAdapter(options=options, isolation=mode, block_network=block),
                 ".docx": DocxAdapter(),
                 ".xlsx": XlsFormAdapter(),
+                ".doc": DoclingOfficeAdapter(
+                    "doc", options=options, isolation=mode, block_network=block
+                ),
+                ".xls": DoclingOfficeAdapter(
+                    "xls", options=options, isolation=mode, block_network=block
+                ),
                 ".csv": CsvAdapter(),
                 ".html": HtmlAdapter(),
                 ".htm": HtmlAdapter(),
@@ -172,12 +228,15 @@ class SourceRegistry:
         source: LocalSource | SourceBundle,
         *,
         limits: SourceLimits = DEFAULT_SOURCE_LIMITS,
+        progress: SourceProgress | None = None,
     ) -> SourceDocument:
         """Resolve one local source, verify its format, and normalize it.
 
         Args:
             source: Existing local file or confined source bundle.
             limits: Resource ceilings for validation and conversion.
+            progress: Optional ``progress(done, total)`` callback, called in this
+                process by adapters that report progress (PDF: pages converted).
 
         Returns:
             Deterministic ordered blocks with physical source provenance.
@@ -199,7 +258,7 @@ class SourceRegistry:
             raise SourceFormatError(f"Unsupported source format: {suffix or '<none>'}")
         with snapshot_resolved_source(resolved, limits=limits) as snapshot:
             _verify_signature(snapshot.primary, suffix)
-            document = _convert_adapter(adapter, snapshot, limits)
+            document = _convert_adapter(adapter, snapshot, limits, progress=progress)
             payload = document.model_dump(mode="python")
             payload["snapshot_sha256"] = snapshot.primary_sha256
             return SourceDocument.model_validate(payload)
@@ -287,7 +346,10 @@ def _convert_adapter(
     limits: SourceLimits,
     *,
     deadline: float | None = None,
+    progress: SourceProgress | None = None,
 ) -> SourceDocument:
+    if progress is not None and isinstance(adapter, ProgressSourceAdapter):
+        return adapter.convert_with_progress(source, limits=limits, progress=progress)
     if isinstance(adapter, DeadlineSourceAdapter):
         active_deadline = (
             deadline if deadline is not None else time.monotonic() + limits.deadline_seconds
@@ -338,6 +400,8 @@ def _routed_snapshot_sha256(snapshot: ResolvedSource) -> str:
 
 __all__ = ["SourceConversionResult", "SourceRegistry", "SourceSvisConversionResult"]
 
+_OLE_SIGNATURE = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"  # a legacy binary Office file
+
 
 def _verify_signature(path: Path, suffix: str) -> None:
     if suffix == ".pdf":
@@ -348,6 +412,15 @@ def _verify_signature(path: Path, suffix: str) -> None:
                 raise SourceFormatError("PDF extension does not match file content")
         except OSError as error:
             raise SourceFormatError("PDF signature could not be inspected") from error
+        return
+    if suffix in {".doc", ".xls"}:
+        try:
+            with path.open("rb") as stream:
+                signature = stream.read(len(_OLE_SIGNATURE))
+        except OSError as error:
+            raise SourceFormatError("OLE source signature could not be inspected") from error
+        if signature != _OLE_SIGNATURE:
+            raise SourceFormatError(f"{suffix.upper()} extension does not match file content")
         return
     if suffix not in {".docx", ".xlsx"}:
         return

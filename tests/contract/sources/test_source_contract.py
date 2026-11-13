@@ -77,6 +77,7 @@ def test_source_limit_defaults_match_the_normative_contract() -> None:
         max_cells=2_000_000,
         max_companions=100,
         deadline_seconds=30 * 60.0,
+        external_links="refuse",
     )
     assert expected == DEFAULT_SOURCE_LIMITS
 
@@ -242,6 +243,8 @@ def test_normalized_models_are_frozen_and_preserve_stable_source_order() -> None
         {"max_archive_ratio": float("inf")},
         {"deadline_seconds": float("nan")},
         {"deadline_seconds": float("inf")},
+        {"external_links": "follow"},
+        {"external_links": None},
     ],
 )
 def test_source_limits_reject_wrong_types_and_non_finite_values(changes: dict[str, object]) -> None:

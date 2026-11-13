@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from survey_scribe import SurveyScribe
-from survey_scribe.models.svis import DataType, SurveySVIS, SurveyVariable
+from survey_scribe.models.svis import DataType, ReviewReason, SurveySVIS, SurveyVariable
 from survey_scribe.providers.capabilities import CapabilityEvidence, ModelCapabilities
 from survey_scribe.providers.testing import DeterministicFakeProvider
 from survey_scribe.results import DiagnosticCode, ResultStatus
@@ -510,6 +510,7 @@ def test_xlsform_diagnoses_missing_choices_unknown_types_and_bind_relevance(
     assert native_svis.svis is not None
     assert native_svis.svis.variables[0].categories is None
     assert native_svis.svis.variables[0].needs_review is True
+    assert native_svis.svis.variables[0].review_reasons == (ReviewReason.missing_categories,)
 
 
 @pytest.mark.parametrize("filename", ("/outside.csv", "https://host/choices.csv", ""))
@@ -775,6 +776,7 @@ def test_xlsform_emits_explicit_unsupported_and_unresolved_diagnostics(
     ]
     assert native_svis.svis.variables[1].data_type is DataType.other
     assert native_svis.svis.variables[1].needs_review is True
+    assert native_svis.svis.variables[1].review_reasons == (ReviewReason.unsupported_type,)
 
     public = SurveyScribe(
         DeterministicFakeProvider(

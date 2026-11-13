@@ -14,6 +14,7 @@ from typing import Any, TypeAlias
 from defusedxml import ElementTree
 
 from survey_scribe.sources.base import (
+    ExternalLinkPolicy,
     ResolvedSource,
     SourceBlock,
     SourceConversionError,
@@ -26,6 +27,7 @@ from survey_scribe.sources.base import (
     SourceSecurityError,
     SourceTable,
     SourceTimeoutError,
+    external_links_stripped_diagnostic,
     inspect_zip_archive,
     render_table,
 )
@@ -105,7 +107,11 @@ class CsvAdapter:
 
 
 class XlsxAdapter:
-    """Normalize XLSX cells without formulas, macros, links, or eager workbook loading."""
+    """Normalize XLSX cells without formulas, macros, or eager workbook loading.
+
+    External links are refused unless ``SourceLimits.external_links`` is ``"strip"``;
+    the workbook loader never resolves them under either policy.
+    """
 
     def __init__(self, *, workbook_loader: WorkbookLoader | None = None) -> None:
         self._workbook_loader = workbook_loader
@@ -125,7 +131,7 @@ class XlsxAdapter:
         deadline: float,
     ) -> SourceDocument:
         """Normalize workbook content under a caller-owned end-to-end deadline."""
-        _inspect_xlsx(source.primary, limits, deadline)
+        stripped_links = _inspect_xlsx(source.primary, limits, deadline)
         loader = self._workbook_loader or _load_openpyxl_workbook
         try:
             workbook = loader(
@@ -191,6 +197,11 @@ class XlsxAdapter:
             source_name=source.primary.name,
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             blocks=tuple(blocks),
+            diagnostics=(
+                (external_links_stripped_diagnostic(stripped_links, "XLSX"),)
+                if stripped_links
+                else ()
+            ),
         )
 
 
@@ -204,7 +215,8 @@ def _load_openpyxl_workbook(filename: Path, **kwargs: object) -> Any:
     return module.load_workbook(filename, **kwargs)
 
 
-def _inspect_xlsx(path: Path, limits: SourceLimits, deadline: float) -> None:
+def _inspect_xlsx(path: Path, limits: SourceLimits, deadline: float) -> int:
+    """Validate the package and return how many external links the policy stripped."""
     entries = inspect_zip_archive(path, limits, deadline=deadline)
     normalized_names = {entry.filename.replace("\\", "/").lower() for entry in entries}
     if any(
@@ -214,9 +226,15 @@ def _inspect_xlsx(path: Path, limits: SourceLimits, deadline: float) -> None:
         for name in normalized_names
     ):
         raise SourceSecurityError("XLSX macro content is prohibited")
-    if any(name.startswith("xl/externallinks/") for name in normalized_names):
+    linked_workbooks = sum(
+        1
+        for name in normalized_names
+        if name.startswith("xl/externallinks/") and "/_rels/" not in name
+    )
+    if linked_workbooks and limits.external_links == "refuse":
         raise SourceSecurityError("XLSX external link content is prohibited")
 
+    stripped = linked_workbooks
     cell_count = 0
     try:
         with zipfile.ZipFile(path) as archive:
@@ -224,7 +242,12 @@ def _inspect_xlsx(path: Path, limits: SourceLimits, deadline: float) -> None:
                 _check_deadline(deadline)
                 normalized = entry.filename.replace("\\", "/").lower()
                 if normalized.endswith(".rels"):
-                    _reject_external_relationships(archive.read(entry), "XLSX")
+                    external = _external_relationship_count(
+                        archive.read(entry), "XLSX", policy=limits.external_links
+                    )
+                    # A linked workbook part's own target is already counted with the part.
+                    if not normalized.startswith("xl/externallinks/"):
+                        stripped += external
                 if not (normalized.startswith("xl/worksheets/") and normalized.endswith(".xml")):
                     continue
                 declared_bound: tuple[int, int] | None = None
@@ -269,18 +292,28 @@ def _inspect_xlsx(path: Path, limits: SourceLimits, deadline: float) -> None:
         raise SourceFormatError("XLSX package XML is malformed") from error
     except (OSError, zipfile.BadZipFile, RuntimeError) as error:
         raise SourceConversionError("XLSX package could not be inspected") from error
+    return stripped
 
 
-def _reject_external_relationships(payload: bytes, source_kind: str) -> None:
+def _external_relationship_count(
+    payload: bytes,
+    source_kind: str,
+    *,
+    policy: ExternalLinkPolicy = "refuse",
+) -> int:
     try:
         root = ElementTree.fromstring(payload)
     except ElementTree.ParseError as error:
         raise SourceFormatError(f"{source_kind} relationship XML is malformed") from error
+    count = 0
     for relationship in root:
         mode = relationship.attrib.get("TargetMode", "").lower()
         target = relationship.attrib.get("Target", "")
         if mode == "external" or re.match(r"^[a-z][a-z0-9+.-]*:", target, re.IGNORECASE):
-            raise SourceSecurityError(f"{source_kind} external relationship is prohibited")
+            if policy == "refuse":
+                raise SourceSecurityError(f"{source_kind} external relationship is prohibited")
+            count += 1
+    return count
 
 
 def _dimension_bound(reference: str | None, limits: SourceLimits) -> tuple[int, int] | None:

@@ -54,6 +54,7 @@ class DiagnosticCode(StrEnum):
     quality_module_reconciled = "QUALITY_MODULE_RECONCILED"
     metadata_incomplete = "METADATA_INCOMPLETE"
     source_unreadable = "SOURCE_UNREADABLE"
+    source_table_split = "SOURCE_TABLE_SPLIT"
     provider_failed = "PROVIDER_FAILED"
     provider_truncated = "PROVIDER_TRUNCATED"
     validation_failed = "VALIDATION_FAILED"
@@ -128,6 +129,23 @@ class FailedBlock(BaseModel):
     block_id: str
     message: str
     source_order: int | None = Field(default=None, ge=0)
+
+
+class ModelCall(BaseModel):
+    """One model call's outcome and token usage, without request or response content."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    pass_kind: Literal["metadata", "extraction"]
+    block_id: str
+    outcome: Literal["ok", "truncated", "invalid", "failed"]
+    reason: str | None = None
+    finish_reason: str | None = None
+    input_tokens: int | None = Field(default=None, ge=0)
+    output_tokens: int | None = Field(default=None, ge=0)
+    total_tokens: int | None = Field(default=None, ge=0)
+    transport_attempts: int | None = Field(default=None, ge=1)
+    validation_attempts: int | None = Field(default=None, ge=1)
 
 
 class ArtifactKind(StrEnum):
@@ -215,6 +233,7 @@ class ExtractionResult(BaseModel, Generic[T]):
     run_id: str = Field(default_factory=lambda: uuid4().hex)
     diagnostics: tuple[Diagnostic, ...] = ()
     failed_blocks: tuple[FailedBlock, ...] = ()
+    calls: tuple[ModelCall, ...] = ()
     artifacts: tuple[ArtifactReference, ...] = ()
     artifact_provenance: ArtifactProvenance | None = Field(
         default=None,

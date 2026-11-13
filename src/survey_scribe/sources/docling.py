@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
+import signal
 import socket
+import threading
 import time
+import traceback
 import zipfile
-from collections.abc import Iterable, Mapping
-from contextlib import AbstractContextManager, contextmanager, nullcontext
+from collections.abc import Iterable, Iterator, Mapping
+from contextlib import AbstractContextManager, ExitStack, contextmanager, nullcontext, suppress
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from importlib import import_module
@@ -17,7 +21,7 @@ from multiprocessing import get_context
 from multiprocessing.connection import wait
 from pathlib import Path
 from queue import Empty
-from typing import Any, Protocol, cast
+from typing import Any, Literal, Protocol, cast, runtime_checkable
 from xml.etree.ElementTree import Element
 
 from defusedxml import ElementTree
@@ -34,10 +38,12 @@ from survey_scribe.sources.base import (
     SourceFormatError,
     SourceLimitError,
     SourceLimits,
+    SourceProgress,
     SourceProvenance,
     SourceSecurityError,
     SourceTable,
     SourceTimeoutError,
+    external_links_stripped_diagnostic,
     inspect_zip_archive,
     read_utf8_text,
     render_table,
@@ -130,9 +136,86 @@ class PdfConverter(Protocol):
         ...
 
 
+PageRange = tuple[int, int]
+
+
+@runtime_checkable
+class PdfPageRangeConverter(PdfConverter, Protocol):
+    """A converter that reads a PDF range by range, so the adapter can report progress and
+    keep finished pages when the deadline is reached."""
+
+    def convert_pages(
+        self,
+        path: str,
+        artifacts_path: str | None,
+        ranges: tuple[PageRange, ...],
+    ) -> Iterator[PdfConversion]:
+        """Yield one conversion per inclusive one-based page range, in order.
+
+        Each conversion's ``page_count`` is the whole document's. Its ``coverage``, when set,
+        lists the range's converted pages in ``converted_units``; pages outside the range are
+        ignored. Without ``coverage`` every page of the range counts as converted.
+        """
+        ...
+
+
+@runtime_checkable
+class PersistentPdfConverter(PdfConverter, Protocol):
+    """A converter that loads its models once and reuses them across many documents.
+
+    A long-lived worker enters :meth:`opened` for the document it processes; while the context
+    is open every :meth:`__call__` (and ``convert_pages`` on a range converter) reuses the one
+    built pipeline instead of reloading layout and table models per document.
+    """
+
+    def opened(self, artifacts_path: str | None) -> AbstractContextManager[None]:
+        """Load the models once and reuse them for every call until the context exits."""
+        ...
+
+
+IsolationMode = Literal["process", "worker", "inprocess"]
+"""How a Docling adapter isolates a conversion from the host.
+
+``"process"`` spawns a fresh killable worker per document (the default, the established
+behaviour). ``"worker"`` keeps one long-lived spawned worker per adapter instance, loading the
+models once and streaming documents through it, and kills it on a deadline or on ``close()``.
+``"inprocess"`` runs the conversion directly in the calling process with no child, for a
+container that is itself the disposable sandbox.
+"""
+
+_ISOLATION_MODES: tuple[IsolationMode, ...] = ("process", "worker", "inprocess")
+
+
 _OCR_MODES = ("always", "auto", "never")
 _TABLE_MODES = ("accurate", "fast")
 _PDF_ENV_PREFIX = "SURVEY_SCRIBE_PDF_"
+
+
+def isolation_from_environment(environ: Mapping[str, str] | None = None) -> IsolationMode:
+    """``SURVEY_SCRIBE_PDF_ISOLATION`` as an isolation mode; ``process`` when unset."""
+    env = os.environ if environ is None else environ
+    value = (env.get(_PDF_ENV_PREFIX + "ISOLATION") or "").strip().lower()
+    if not value:
+        return "process"
+    if value not in _ISOLATION_MODES:
+        raise ValueError(
+            f"{_PDF_ENV_PREFIX}ISOLATION must be one of {_ISOLATION_MODES}, not {value!r}"
+        )
+    return cast("IsolationMode", value)
+
+
+def block_network_from_environment(environ: Mapping[str, str] | None = None) -> bool:
+    """``SURVEY_SCRIBE_PDF_BLOCK_NETWORK`` as a boolean; ``True`` when unset."""
+    env = os.environ if environ is None else environ
+    value = env.get(_PDF_ENV_PREFIX + "BLOCK_NETWORK")
+    if value is None or not value.strip():
+        return True
+    lowered = value.strip().lower()
+    if lowered in ("1", "true", "yes", "on"):
+        return True
+    if lowered in ("0", "false", "no", "off"):
+        return False
+    raise ValueError(f"{_PDF_ENV_PREFIX}BLOCK_NETWORK must be a boolean, not {value!r}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,6 +238,16 @@ class PdfConversionOptions:
         include_furniture: keep page headers and footers. The layout model files a section title
             printed at the top of a page as a page header, which the default read drops.
         table_mode: TableFormer ``"accurate"`` (slower) or ``"fast"``.
+        pages_per_chunk: convert this many pages per Docling call, reporting progress and
+            keeping finished pages after each one. ``None`` (the default) converts the document
+            in one call, as before. Inferred heading levels are computed per chunk; the section
+            path carries across.
+        first_pages: convert only the first N pages (a smoke-test read); coverage lists the
+            remaining pages as not converted.
+        partial_on_deadline: when the deadline is reached, return the chunks already converted
+            (coverage lists the rest as failed, with a ``PDF_DEADLINE_PARTIAL`` warning)
+            instead of raising ``SourceTimeoutError``. Needs ``pages_per_chunk``: in one call
+            nothing finishes before the deadline, so the timeout is still raised.
     """
 
     ocr: str = "always"
@@ -163,6 +256,9 @@ class PdfConversionOptions:
     max_heading_level: int = 6
     include_furniture: bool = False
     table_mode: str = "accurate"
+    pages_per_chunk: int | None = None
+    first_pages: int | None = None
+    partial_on_deadline: bool = False
 
     def __post_init__(self) -> None:
         if self.ocr not in _OCR_MODES:
@@ -186,6 +282,14 @@ class PdfConversionOptions:
             or not 1 <= self.max_heading_level <= 6
         ):
             raise ValueError("max_heading_level must be an integer from 1 to 6")
+        for name in ("pages_per_chunk", "first_pages"):
+            value = getattr(self, name)
+            if value is not None and (
+                isinstance(value, bool) or not isinstance(value, int) or value < 1
+            ):
+                raise ValueError(f"{name} must be a positive integer or None")
+        if not isinstance(self.partial_on_deadline, bool):
+            raise ValueError("partial_on_deadline must be a boolean")
 
     @classmethod
     def from_environment(cls, environ: Mapping[str, str] | None = None) -> PdfConversionOptions:
@@ -195,7 +299,9 @@ class PdfConversionOptions:
         (comma-separated), ``SURVEY_SCRIBE_PDF_HEADING_LEVELS`` and
         ``SURVEY_SCRIBE_PDF_INCLUDE_FURNITURE`` (1 | true | yes | on),
         ``SURVEY_SCRIBE_PDF_MAX_HEADING_LEVEL`` (1-6), ``SURVEY_SCRIBE_PDF_TABLE_MODE``
-        (accurate | fast).
+        (accurate | fast), ``SURVEY_SCRIBE_PDF_PAGES_PER_CHUNK`` (a positive integer, or 0 for
+        one call), ``SURVEY_SCRIBE_PDF_FIRST_PAGES`` (a positive integer),
+        ``SURVEY_SCRIBE_PDF_PARTIAL_ON_DEADLINE`` (a boolean).
         """
         env = os.environ if environ is None else environ
 
@@ -221,6 +327,17 @@ class PdfConversionOptions:
             max_level = int(level) if level is not None else defaults.max_heading_level
         except ValueError:
             raise ValueError(f"{_PDF_ENV_PREFIX}MAX_HEADING_LEVEL must be an integer") from None
+
+        def count(name: str, default: int | None) -> int | None:
+            value = read(name)
+            if value is None:
+                return default
+            try:
+                return int(value)
+            except ValueError:
+                raise ValueError(f"{_PDF_ENV_PREFIX}{name} must be an integer") from None
+
+        pages_per_chunk = count("PAGES_PER_CHUNK", defaults.pages_per_chunk)
         return cls(
             ocr=(read("OCR") or defaults.ocr).lower(),
             ocr_languages=(
@@ -232,6 +349,9 @@ class PdfConversionOptions:
             max_heading_level=max_level,
             include_furniture=flag("INCLUDE_FURNITURE", defaults.include_furniture),
             table_mode=(read("TABLE_MODE") or defaults.table_mode).lower(),
+            pages_per_chunk=None if pages_per_chunk == 0 else pages_per_chunk,
+            first_pages=count("FIRST_PAGES", defaults.first_pages),
+            partial_on_deadline=flag("PARTIAL_ON_DEADLINE", defaults.partial_on_deadline),
         )
 
 
@@ -249,13 +369,129 @@ def _push_heading(
     return (*path, (level, text))
 
 
+def _docling_blocks(document: Any, *, include_furniture: bool) -> list[PdfConversionBlock]:
+    """A converted Docling document's items as ordered blocks, each with its section path.
+
+    Format-neutral: a PDF's items carry pages, a workbook's carry sheets (Docling files each
+    sheet as a page), a Word document's carry none.
+    """
+    return _docling_blocks_after(document, include_furniture=include_furniture)[0]
+
+
+def _docling_blocks_after(
+    document: Any,
+    *,
+    include_furniture: bool,
+    headings: tuple[tuple[int, str], ...] = (),
+) -> tuple[list[PdfConversionBlock], tuple[tuple[int, str], ...]]:
+    """``_docling_blocks`` continuing from an earlier part's heading path; returns the last one."""
+    blocks: list[PdfConversionBlock] = []
+    configured_max_cells = os.environ.get("SURVEY_SCRIBE_PDF_MAX_CELLS")
+    max_cells = int(configured_max_cells) if configured_max_cells is not None else None
+    table_cells = 0
+    current_section: tuple[str, ...] = tuple(title for _level, title in headings)
+    if include_furniture:
+        layers = import_module("docling_core.types.doc").ContentLayer
+        items = document.iterate_items(included_content_layers={layers.BODY, layers.FURNITURE})
+    else:
+        items = document.iterate_items()
+    for item, _depth in items:
+        pages = _docling_pages(item)
+        page = pages[0] if pages else None
+        label = str(getattr(item, "label", "")).lower()
+        if "table" in label:
+            remaining_cells = None if max_cells is None else max(max_cells - table_cells, 0)
+            rows = _docling_table_rows(
+                item,
+                document,
+                max_cells=remaining_cells,
+            )
+            if rows:
+                if max_cells is not None:
+                    table_cells = _add_table_cells(table_cells, rows, max_cells)
+                blocks.append(
+                    PdfConversionBlock(
+                        text=render_table(rows),
+                        page=page,
+                        pages=pages,
+                        table_rows=rows,
+                        section_path=current_section,
+                    )
+                )
+            continue
+        text = _normalize_text(str(getattr(item, "text", "")))
+        marker = _normalize_text(str(getattr(item, "marker", "") or ""))
+        if text and marker and "list" in label:
+            # a numbered question is a list item to the layout model and its number is the
+            # marker, not the text: keep it, a data column is often named by it (q8, s4q8)
+            text = f"{marker} {text}"
+        if text:
+            if any(name in label for name in ("section", "title", "heading")):
+                headings = _push_heading(headings, getattr(item, "level", 1) or 1, text)
+                current_section = tuple(title for _level, title in headings)
+            blocks.append(
+                PdfConversionBlock(
+                    text=text,
+                    page=page,
+                    pages=pages,
+                    section_path=current_section,
+                )
+            )
+    return blocks, headings
+
+
 class DoclingConverter:
     """Lazy Docling converter configured for local PDFium and, by default, full-page OCR."""
 
     def __init__(self, options: PdfConversionOptions | None = None) -> None:
         self.options = options or PdfConversionOptions()
+        self._active: Any | None = None
 
     def __call__(self, path: str, artifacts_path: str | None) -> PdfConversion:
+        with self._session(artifacts_path) as converter:
+            result = converter.convert(path)
+        return self._conversion(result)[0]
+
+    def convert_pages(
+        self,
+        path: str,
+        artifacts_path: str | None,
+        ranges: tuple[PageRange, ...],
+    ) -> Iterator[PdfConversion]:
+        """Convert range by range with one Docling converter; models load once."""
+        with self._session(artifacts_path) as converter:
+            headings: tuple[tuple[int, str], ...] = ()
+            for page_range in ranges:
+                result = converter.convert(path, page_range=page_range)
+                conversion, headings = self._conversion(
+                    result, headings=headings, page_range=page_range
+                )
+                yield conversion
+
+    @contextmanager
+    def _session(self, artifacts_path: str | None) -> Iterator[Any]:
+        """Reuse the built converter while :meth:`opened` is active; build one otherwise."""
+        if self._active is not None:
+            yield self._active
+            return
+        with self._document_converter(artifacts_path) as converter:
+            yield converter
+
+    @contextmanager
+    def opened(self, artifacts_path: str | None) -> Iterator[None]:
+        """Build the Docling converter once and reuse it for every call while open."""
+        if self._active is not None:
+            yield
+            return
+        with self._document_converter(artifacts_path) as converter:
+            self._active = converter
+            try:
+                yield
+            finally:
+                self._active = None
+
+    @contextmanager
+    def _document_converter(self, artifacts_path: str | None) -> Iterator[Any]:
         options = self.options
         if artifacts_path is None:
             raise SourceDependencyError(
@@ -327,61 +563,19 @@ class DoclingConverter:
             converter = converter_module.DocumentConverter(
                 format_options={base_module.InputFormat.PDF: format_option}
             )
-            result = converter.convert(path)
+            yield converter
+
+    def _conversion(
+        self,
+        result: Any,
+        *,
+        headings: tuple[tuple[int, str], ...] = (),
+        page_range: PageRange | None = None,
+    ) -> tuple[PdfConversion, tuple[tuple[int, str], ...]]:
         document = result.document
-        blocks: list[PdfConversionBlock] = []
-        configured_max_cells = os.environ.get("SURVEY_SCRIBE_PDF_MAX_CELLS")
-        max_cells = int(configured_max_cells) if configured_max_cells is not None else None
-        table_cells = 0
-        headings: tuple[tuple[int, str], ...] = ()
-        current_section: tuple[str, ...] = ()
-        if options.include_furniture:
-            layers = import_module("docling_core.types.doc").ContentLayer
-            items = document.iterate_items(included_content_layers={layers.BODY, layers.FURNITURE})
-        else:
-            items = document.iterate_items()
-        for item, _depth in items:
-            pages = _docling_pages(item)
-            page = pages[0] if pages else None
-            label = str(getattr(item, "label", "")).lower()
-            if "table" in label:
-                remaining_cells = None if max_cells is None else max(max_cells - table_cells, 0)
-                rows = _docling_table_rows(
-                    item,
-                    document,
-                    max_cells=remaining_cells,
-                )
-                if rows:
-                    if max_cells is not None:
-                        table_cells = _add_table_cells(table_cells, rows, max_cells)
-                    blocks.append(
-                        PdfConversionBlock(
-                            text=render_table(rows),
-                            page=page,
-                            pages=pages,
-                            table_rows=rows,
-                            section_path=current_section,
-                        )
-                    )
-                continue
-            text = _normalize_text(str(getattr(item, "text", "")))
-            marker = _normalize_text(str(getattr(item, "marker", "") or ""))
-            if text and marker and "list" in label:
-                # a numbered question is a list item to the layout model and its number is the
-                # marker, not the text: keep it, a data column is often named by it (q8, s4q8)
-                text = f"{marker} {text}"
-            if text:
-                if any(name in label for name in ("section", "title", "heading")):
-                    headings = _push_heading(headings, getattr(item, "level", 1) or 1, text)
-                    current_section = tuple(title for _level, title in headings)
-                blocks.append(
-                    PdfConversionBlock(
-                        text=text,
-                        page=page,
-                        pages=pages,
-                        section_path=current_section,
-                    )
-                )
+        blocks, headings = _docling_blocks_after(
+            document, include_furniture=self.options.include_furniture, headings=headings
+        )
         page_count = _docling_page_count(result, document, blocks)
         failed_pages = _docling_failed_pages(result)
         if failed_pages and (page_count == 0 or failed_pages[-1] > page_count):
@@ -392,13 +586,18 @@ class DoclingConverter:
         diagnostics: tuple[SourceDiagnostic, ...] = ()
         if page_count:
             failed = set(failed_pages)
+            first, last = page_range or (1, page_count)
+            converted = tuple(
+                page for page in range(first, min(last, page_count) + 1) if page not in failed
+            )
+            converted_set = set(converted)
             coverage = SourceCoverage(
                 unit="page",
                 total_units=page_count,
-                converted_units=tuple(
-                    page for page in range(1, page_count + 1) if page not in failed
+                converted_units=converted,
+                failed_units=tuple(
+                    page for page in range(1, page_count + 1) if page not in converted_set
                 ),
-                failed_units=failed_pages,
             )
             diagnostics = tuple(
                 SourceDiagnostic(
@@ -409,16 +608,408 @@ class DoclingConverter:
                 )
                 for page in failed_pages
             )
-        return PdfConversion(
+        conversion = PdfConversion(
             page_count=page_count,
             blocks=tuple(blocks),
             coverage=coverage,
             diagnostics=diagnostics,
         )
+        return conversion, headings
+
+
+class _PdfRunner(Protocol):
+    """How a Docling adapter runs a conversion: in a fresh process, a reused worker, or here.
+
+    ``run_single`` and ``run_ranges`` match the module ``_run_pdf_worker`` and
+    ``_run_pdf_range_worker`` contracts so the adapter is isolation-mode agnostic. ``close``
+    releases any long-lived worker.
+    """
+
+    def run_single(
+        self,
+        converter: PdfConverter,
+        path: Path,
+        *,
+        artifacts_path: str | None,
+        timeout: float,
+        max_cells: int | None = None,
+        kind: str = "PDF",
+    ) -> PdfConversion:
+        """Convert one document and return its serializable conversion."""
+        ...
+
+    def run_ranges(
+        self,
+        converter: PdfPageRangeConverter,
+        path: Path,
+        *,
+        artifacts_path: str | None,
+        ranges: tuple[PageRange, ...],
+        timeout: float,
+        max_cells: int | None,
+        partial_on_deadline: bool,
+        progress: SourceProgress | None,
+    ) -> tuple[list[tuple[PageRange, PdfConversion]], bool]:
+        """Convert ``ranges`` and return the finished ranges and whether time ran out."""
+        ...
+
+    def close(self) -> None:
+        """Release any long-lived worker this runner owns."""
+        ...
+
+
+class _ProcessRunner:
+    """Spawn one fresh killable worker per document (the established behaviour)."""
+
+    def __init__(self, *, block_network: bool) -> None:
+        self._block_network = block_network
+
+    def run_single(
+        self,
+        converter: PdfConverter,
+        path: Path,
+        *,
+        artifacts_path: str | None,
+        timeout: float,
+        max_cells: int | None = None,
+        kind: str = "PDF",
+    ) -> PdfConversion:
+        return _run_pdf_worker(
+            converter,
+            path,
+            artifacts_path=artifacts_path,
+            timeout=timeout,
+            max_cells=max_cells,
+            kind=kind,
+            block_network=self._block_network,
+        )
+
+    def run_ranges(
+        self,
+        converter: PdfPageRangeConverter,
+        path: Path,
+        *,
+        artifacts_path: str | None,
+        ranges: tuple[PageRange, ...],
+        timeout: float,
+        max_cells: int | None,
+        partial_on_deadline: bool,
+        progress: SourceProgress | None,
+    ) -> tuple[list[tuple[PageRange, PdfConversion]], bool]:
+        return _run_pdf_range_worker(
+            converter,
+            path,
+            artifacts_path=artifacts_path,
+            ranges=ranges,
+            timeout=timeout,
+            max_cells=max_cells,
+            partial_on_deadline=partial_on_deadline,
+            progress=progress,
+            block_network=self._block_network,
+        )
+
+    def close(self) -> None:
+        return None
+
+
+class _InProcessRunner:
+    """Run the conversion directly in the calling process, with no child and no socket patch.
+
+    For a container that is itself the disposable sandbox: there is no worker to kill, so the
+    deadline is cooperative (checked between page ranges) and otherwise the container deadline
+    is the kill switch.
+    """
+
+    def run_single(
+        self,
+        converter: PdfConverter,
+        path: Path,
+        *,
+        artifacts_path: str | None,
+        timeout: float,
+        max_cells: int | None = None,
+        kind: str = "PDF",
+    ) -> PdfConversion:
+        del timeout, kind
+        conversion = converter(str(path), artifacts_path)
+        if max_cells is not None:
+            _validate_pdf_table_cells(conversion, max_cells)
+        return conversion
+
+    def run_ranges(
+        self,
+        converter: PdfPageRangeConverter,
+        path: Path,
+        *,
+        artifacts_path: str | None,
+        ranges: tuple[PageRange, ...],
+        timeout: float,
+        max_cells: int | None,
+        partial_on_deadline: bool,
+        progress: SourceProgress | None,
+    ) -> tuple[list[tuple[PageRange, PdfConversion]], bool]:
+        stop = time.monotonic() + timeout
+        total = sum(last - first + 1 for first, last in ranges)
+        chunks: list[tuple[PageRange, PdfConversion]] = []
+        cells = 0
+        for conversion in converter.convert_pages(str(path), artifacts_path, ranges):
+            if len(chunks) == len(ranges):
+                raise SourceConversionError("PDF converter returned more ranges than requested")
+            if max_cells is not None:
+                for block in conversion.blocks:
+                    if block.table_rows:
+                        cells = _add_table_cells(cells, block.table_rows, max_cells)
+            chunks.append((ranges[len(chunks)], conversion))
+            if progress is not None:
+                progress(sum(last - first + 1 for (first, last), _ in chunks), total)
+            if len(chunks) < len(ranges) and time.monotonic() >= stop:
+                if partial_on_deadline:
+                    return chunks, True
+                raise SourceTimeoutError("PDF conversion exceeded the configured deadline")
+        if len(chunks) != len(ranges):
+            raise SourceConversionError("PDF converter returned fewer ranges than requested")
+        return chunks, False
+
+    def close(self) -> None:
+        return None
+
+
+class _WorkerRunner:
+    """Keep one long-lived spawned worker, loading models once and streaming documents through.
+
+    Access is serialized: one worker converts one document at a time. The worker is killed and
+    forgotten on a deadline (the next call starts a fresh one) and on ``close()``. A converter
+    error leaves the worker alive and reusable.
+    """
+
+    def __init__(self, *, block_network: bool) -> None:
+        self._block_network = block_network
+        self._context = get_context("spawn")
+        self._lock = threading.Lock()
+        self._process: Any | None = None
+        self._requests: Any | None = None
+        self._responses: Any | None = None
+        self._converter: PdfConverter | None = None
+
+    def _ensure_started(self, converter: PdfConverter) -> None:
+        if self._process is not None and self._process.is_alive() and self._converter is converter:
+            return
+        self._shutdown()
+        self._converter = converter
+        self._requests = self._context.Queue()
+        self._responses = self._context.Queue(maxsize=1)
+        process = self._context.Process(
+            target=_persistent_pdf_worker,
+            args=(converter, self._block_network, self._requests, self._responses),
+        )
+        process.daemon = True
+        process.start()
+        self._process = process
+
+    def _kill(self) -> None:
+        if self._process is not None:
+            _bounded_process_cleanup(self._process)
+        self._discard()
+
+    def _discard(self) -> None:
+        for queue in (self._requests, self._responses):
+            if queue is not None:
+                queue.close()
+                queue.join_thread()
+        self._process = None
+        self._requests = None
+        self._responses = None
+        self._converter = None
+
+    def _shutdown(self) -> None:
+        if self._process is None:
+            return
+        if self._process.is_alive() and self._requests is not None:
+            with suppress(ValueError, OSError):
+                self._requests.put(None)
+        _bounded_process_cleanup(self._process)
+        self._discard()
+
+    def run_single(
+        self,
+        converter: PdfConverter,
+        path: Path,
+        *,
+        artifacts_path: str | None,
+        timeout: float,
+        max_cells: int | None = None,
+        kind: str = "PDF",
+    ) -> PdfConversion:
+        with self._lock:
+            self._ensure_started(converter)
+            process = self._process
+            responses = self._responses
+            assert process is not None and responses is not None and self._requests is not None
+            self._requests.put(("single", str(path), artifacts_path, max_cells, None))
+            try:
+                status, code, payload = _wait_for_worker_message(responses, process, timeout)
+            except Empty:
+                self._kill()
+                raise SourceTimeoutError(
+                    f"{kind} conversion exceeded the configured deadline"
+                ) from None
+            except ChildProcessError:
+                note = _exit_note(process)
+                self._kill()
+                raise SourceConversionError(
+                    f"{kind} conversion worker exited before returning a result{note}"
+                ) from None
+            if status == "ok" and isinstance(payload, PdfConversion):
+                if max_cells is not None:
+                    _validate_pdf_table_cells(payload, max_cells)
+                return payload
+            raise _worker_error(code, payload, kind)
+
+    def run_ranges(
+        self,
+        converter: PdfPageRangeConverter,
+        path: Path,
+        *,
+        artifacts_path: str | None,
+        ranges: tuple[PageRange, ...],
+        timeout: float,
+        max_cells: int | None,
+        partial_on_deadline: bool,
+        progress: SourceProgress | None,
+    ) -> tuple[list[tuple[PageRange, PdfConversion]], bool]:
+        with self._lock:
+            self._ensure_started(converter)
+            process = self._process
+            responses = self._responses
+            assert process is not None and responses is not None and self._requests is not None
+            stop = time.monotonic() + timeout
+            total = sum(last - first + 1 for first, last in ranges)
+            self._requests.put(("ranges", str(path), artifacts_path, max_cells, ranges))
+            chunks: list[tuple[PageRange, PdfConversion]] = []
+            cells = 0
+            while True:
+                try:
+                    remaining = stop - time.monotonic()
+                    if remaining <= 0:
+                        raise Empty
+                    status, code, payload = _wait_for_worker_message(responses, process, remaining)
+                except Empty:
+                    self._kill()
+                    if partial_on_deadline and chunks:
+                        return chunks, True
+                    raise SourceTimeoutError(
+                        "PDF conversion exceeded the configured deadline"
+                    ) from None
+                except ChildProcessError:
+                    note = _exit_note(process)
+                    self._kill()
+                    raise SourceConversionError(
+                        f"PDF conversion worker exited before returning a result{note}"
+                    ) from None
+                if (
+                    status == "chunk"
+                    and isinstance(payload, PdfConversion)
+                    and len(chunks) < len(ranges)
+                ):
+                    try:
+                        if max_cells is not None:
+                            for block in payload.blocks:
+                                if block.table_rows:
+                                    cells = _add_table_cells(cells, block.table_rows, max_cells)
+                        chunks.append((ranges[len(chunks)], payload))
+                        if progress is not None:
+                            progress(sum(last - first + 1 for (first, last), _ in chunks), total)
+                    except BaseException:
+                        # Pending responses must not reach the next document after an abort.
+                        self._kill()
+                        raise
+                    continue
+                if status == "done" and len(chunks) == len(ranges):
+                    return chunks, False
+                raise _worker_error(code, payload, "PDF")
+
+    def close(self) -> None:
+        with self._lock:
+            self._shutdown()
+
+
+def _make_pdf_runner(isolation: IsolationMode, *, block_network: bool) -> _PdfRunner:
+    if isolation == "process":
+        return _ProcessRunner(block_network=block_network)
+    if isolation == "worker":
+        return _WorkerRunner(block_network=block_network)
+    if isolation == "inprocess":
+        return _InProcessRunner()
+    raise ValueError(f"isolation must be one of {_ISOLATION_MODES}, not {isolation!r}")
+
+
+def _persistent_pdf_worker(
+    converter: PdfConverter,
+    block_network: bool,
+    jobs: Any,
+    responses: Any,
+) -> None:
+    """One long-lived worker: load the models once, then convert each requested document."""
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    os.environ["TRANSFORMERS_OFFLINE"] = "1"
+    with ExitStack() as stack:
+        if block_network:
+            stack.enter_context(_blocked_network())
+        opened = False
+        while True:
+            try:
+                job = jobs.get()
+            except (EOFError, OSError):
+                return
+            if job is None:
+                return
+            _kind, path, artifacts_path, max_cells, ranges = job
+            if artifacts_path is not None:
+                os.environ["DOCLING_ARTIFACTS_PATH"] = artifacts_path
+            if max_cells is not None:
+                os.environ["SURVEY_SCRIBE_PDF_MAX_CELLS"] = str(max_cells)
+            else:
+                os.environ.pop("SURVEY_SCRIBE_PDF_MAX_CELLS", None)
+            try:
+                if not opened and isinstance(converter, PersistentPdfConverter):
+                    stack.enter_context(converter.opened(artifacts_path))
+                    opened = True
+                if ranges is not None:
+                    _pdf_range_worker(
+                        cast("PdfPageRangeConverter", converter),
+                        path,
+                        artifacts_path,
+                        max_cells,
+                        responses,
+                        ranges,
+                    )
+                    continue
+                conversion = converter(path, artifacts_path)
+                if max_cells is not None:
+                    _validate_pdf_table_cells(conversion, max_cells)
+                responses.put(("ok", "", conversion))
+            except SourceError as error:
+                responses.put(("error", error.code, _bounded_text(str(error))))
+            except BaseException as error:  # noqa: BLE001 - the untrusted worker's last line
+                responses.put(("error", SourceConversionError.code, _error_detail(error)))
 
 
 class DoclingPdfAdapter:
-    """Normalize a local PDF in a fresh killable, network-disabled process."""
+    """Normalize a local PDF in a fresh killable, network-disabled process.
+
+    One ``SourceLimits.deadline_seconds`` deadline covers the preflight inspection and the
+    conversion together. When ``options.pages_per_chunk`` or ``options.first_pages`` is set and
+    the converter reads page ranges (``DoclingConverter`` does), the PDF is converted range by
+    range: ``progress(pages_done, pages_total)`` is called in this process after each range,
+    and with ``options.partial_on_deadline`` the finished pages are returned when the deadline
+    is reached. Otherwise the PDF is converted in one call and ``progress`` is called once.
+
+    ``isolation`` chooses how the conversion runs: ``"process"`` (the default) spawns a fresh
+    worker per document, ``"worker"`` reuses one long-lived worker that loads the models once,
+    and ``"inprocess"`` runs it here with no child. ``block_network`` denies the worker's
+    sockets in the ``"process"`` and ``"worker"`` modes; ``"inprocess"`` never patches the host
+    process's sockets. Call ``close()`` to release a long-lived worker.
+    """
 
     def __init__(
         self,
@@ -426,71 +1017,85 @@ class DoclingPdfAdapter:
         converter: PdfConverter | None = None,
         artifacts_path: str | os.PathLike[str] | None = None,
         options: PdfConversionOptions | None = None,
+        progress: SourceProgress | None = None,
+        isolation: IsolationMode = "process",
+        block_network: bool = True,
     ) -> None:
+        if isolation not in _ISOLATION_MODES:
+            raise ValueError(f"isolation must be one of {_ISOLATION_MODES}, not {isolation!r}")
+        if not isinstance(block_network, bool):
+            raise ValueError("block_network must be a boolean")
         self._converter = converter or DoclingConverter(options)
+        self._options = options or PdfConversionOptions()
+        self._progress = progress
+        self._isolation = isolation
+        self._runner = _make_pdf_runner(isolation, block_network=block_network)
         configured = (
             os.environ.get("DOCLING_ARTIFACTS_PATH") if artifacts_path is None else artifacts_path
         )
         self._artifacts_path = os.fspath(configured) if configured is not None else None
 
+    def close(self) -> None:
+        """Release the long-lived worker, if the ``"worker"`` isolation mode holds one."""
+        self._runner.close()
+
     def convert(self, source: ResolvedSource, *, limits: SourceLimits) -> SourceDocument:
+        return self._convert(source, limits=limits, progress=self._progress)
+
+    def convert_with_progress(
+        self,
+        source: ResolvedSource,
+        *,
+        limits: SourceLimits,
+        progress: SourceProgress,
+    ) -> SourceDocument:
+        """Normalize a PDF, calling ``progress(pages_done, pages_total)`` after each range."""
+        return self._convert(source, limits=limits, progress=progress)
+
+    def _convert(
+        self,
+        source: ResolvedSource,
+        *,
+        limits: SourceLimits,
+        progress: SourceProgress | None,
+    ) -> SourceDocument:
         deadline = time.monotonic() + limits.deadline_seconds
         page_count = _inspect_pdf(
             source.primary,
             limits,
             timeout=_remaining_deadline(deadline),
+            in_process=self._isolation == "inprocess",
         )
-        conversion = _run_pdf_worker(
+        by_range = (
+            self._options.pages_per_chunk is not None or self._options.first_pages is not None
+        )
+        if by_range and page_count and isinstance(self._converter, PdfPageRangeConverter):
+            return self._convert_ranges(
+                source,
+                limits=limits,
+                deadline=deadline,
+                page_count=page_count,
+                progress=progress,
+            )
+        conversion = self._runner.run_single(
             self._converter,
             source.primary,
             artifacts_path=self._artifacts_path,
             timeout=_remaining_deadline(deadline),
             max_cells=limits.max_cells,
         )
+        if progress is not None and page_count:
+            progress(page_count, page_count)
         effective_page_count = max(page_count, conversion.page_count)
         if effective_page_count > limits.max_pages:
             raise SourceLimitError("max_pages", "PDF exceeds the configured page limit")
 
-        blocks: list[SourceBlock] = []
-        table_index = 0
         for converted in conversion.blocks:
             if converted.pages and converted.pages[-1] > limits.max_pages:
                 raise SourceLimitError("max_pages", "PDF block exceeds the configured page limit")
             if converted.pages and converted.pages[-1] > effective_page_count:
                 raise SourceConversionError("PDF block provenance exceeds the converted page count")
-            provenance = SourceProvenance(
-                source_name=source.primary.name,
-                page=converted.page,
-                pages=converted.pages,
-                section_path=converted.section_path,
-            )
-            table: SourceTable | None = None
-            kind = "text"
-            if converted.table_rows:
-                table_index += 1
-                table = SourceTable(
-                    id=f"table-{table_index:06d}",
-                    rows=converted.table_rows,
-                    provenance=provenance,
-                )
-                kind = "table"
-            text = (
-                render_table(converted.table_rows)
-                if converted.table_rows
-                else converted.text.strip()
-            )
-            if not text:
-                continue
-            blocks.append(
-                SourceBlock(
-                    id=f"block-{len(blocks) + 1:06d}",
-                    order=len(blocks),
-                    kind=kind,
-                    text=text,
-                    provenance=provenance,
-                    table=table,
-                )
-            )
+        blocks = _source_blocks(conversion.blocks, source.primary.name)
         coverage = conversion.coverage
         if coverage is not None:
             if coverage.unit != "page" or coverage.total_units != effective_page_count:
@@ -511,6 +1116,281 @@ class DoclingPdfAdapter:
             diagnostics=conversion.diagnostics,
         )
 
+    def _convert_ranges(
+        self,
+        source: ResolvedSource,
+        *,
+        limits: SourceLimits,
+        deadline: float,
+        page_count: int,
+        progress: SourceProgress | None,
+    ) -> SourceDocument:
+        options = self._options
+        target = min(page_count, options.first_pages or page_count)
+        chunks, timed_out = self._runner.run_ranges(
+            cast("PdfPageRangeConverter", self._converter),
+            source.primary,
+            artifacts_path=self._artifacts_path,
+            ranges=_page_ranges(target, options.pages_per_chunk),
+            timeout=_remaining_deadline(deadline),
+            max_cells=limits.max_cells,
+            partial_on_deadline=options.partial_on_deadline,
+            progress=progress,
+        )
+        effective_page_count = max([page_count, *(chunk.page_count for _range, chunk in chunks)])
+        if effective_page_count > limits.max_pages:
+            raise SourceLimitError("max_pages", "PDF exceeds the configured page limit")
+
+        converted_blocks: list[PdfConversionBlock] = []
+        diagnostics: list[SourceDiagnostic] = []
+        converted: set[int] = set()
+        attempted = 0
+        for (first, last), chunk in chunks:
+            for block in chunk.blocks:
+                if block.pages and block.pages[-1] > limits.max_pages:
+                    raise SourceLimitError(
+                        "max_pages", "PDF block exceeds the configured page limit"
+                    )
+                if block.pages and block.pages[-1] > effective_page_count:
+                    raise SourceConversionError(
+                        "PDF block provenance exceeds the converted page count"
+                    )
+            if chunk.coverage is None:
+                converted.update(range(first, last + 1))
+            elif (
+                chunk.coverage.unit != "page" or chunk.coverage.total_units != effective_page_count
+            ):
+                raise SourceConversionError("PDF conversion coverage does not match its page count")
+            else:
+                converted.update(
+                    page for page in chunk.coverage.converted_units if first <= page <= last
+                )
+            attempted += last - first + 1
+            converted_blocks.extend(chunk.blocks)
+            diagnostics.extend(chunk.diagnostics)
+        _validate_pdf_table_cells(
+            PdfConversion(page_count=effective_page_count, blocks=tuple(converted_blocks)),
+            limits.max_cells,
+        )
+
+        if timed_out:
+            diagnostics.append(
+                SourceDiagnostic(
+                    code="PDF_DEADLINE_PARTIAL",
+                    message=(
+                        f"PDF conversion reached the deadline after {attempted} of {target} "
+                        "pages; the remaining pages were not converted"
+                    ),
+                    severity="warning",
+                )
+            )
+        if target < page_count:
+            diagnostics.append(
+                SourceDiagnostic(
+                    code="PDF_FIRST_PAGES",
+                    message=f"Only the first {target} of {page_count} PDF pages were requested",
+                    severity="warning",
+                )
+            )
+        failed = tuple(page for page in range(1, effective_page_count + 1) if page not in converted)
+        reported = {
+            diagnostic.unit_index
+            for diagnostic in diagnostics
+            if diagnostic.severity == "error" and diagnostic.unit == "page"
+        }
+        diagnostics.extend(
+            SourceDiagnostic(
+                code="PDF_PAGE_NOT_CONVERTED",
+                message="PDF page was not converted",
+                unit="page",
+                unit_index=page,
+            )
+            for page in failed
+            if page not in reported
+        )
+        return SourceDocument(
+            source_name=source.primary.name,
+            media_type="application/pdf",
+            blocks=tuple(_source_blocks(converted_blocks, source.primary.name)),
+            coverage=SourceCoverage(
+                unit="page",
+                total_units=effective_page_count,
+                converted_units=tuple(sorted(converted)),
+                failed_units=failed,
+            ),
+            diagnostics=tuple(diagnostics),
+        )
+
+
+def _page_ranges(page_count: int, pages_per_chunk: int | None) -> tuple[PageRange, ...]:
+    step = pages_per_chunk or page_count
+    return tuple(
+        (first, min(first + step - 1, page_count)) for first in range(1, page_count + 1, step)
+    )
+
+
+_OFFICE_FORMATS = {
+    # suffix: (Docling input format, media type, coverage unit of a Docling page)
+    "doc": ("DOC", "application/msword", "document"),
+    "xls": ("XLS", "application/vnd.ms-excel", "sheet"),
+}
+_OLE_SIGNATURE = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+
+
+@dataclass(frozen=True, slots=True)
+class DoclingOfficeConverter:
+    """Docling's Word or Excel pipeline over a legacy binary Office file (``.doc``, ``.xls``).
+
+    Docling converts the file to its Open XML form with LibreOffice, then parses it; no model
+    runs. Pickle-safe, so it crosses the spawned worker boundary like the PDF converter.
+    """
+
+    suffix: str
+    include_furniture: bool = False
+
+    def __post_init__(self) -> None:
+        if self.suffix not in _OFFICE_FORMATS:
+            raise ValueError(f"suffix must be one of {tuple(_OFFICE_FORMATS)}, not {self.suffix!r}")
+
+    def __call__(self, path: str, artifacts_path: str | None) -> PdfConversion:
+        del artifacts_path  # Docling's Word and Excel pipelines use no models
+        if not libreoffice_command():
+            raise SourceDependencyError(
+                f"Converting a .{self.suffix} file needs LibreOffice: install it and put "
+                "`soffice` on PATH"
+            )
+        try:
+            base_module = import_module("docling.datamodel.base_models")
+            converter_module = import_module("docling.document_converter")
+        except ModuleNotFoundError as error:
+            raise SourceDependencyError(
+                f".{self.suffix} conversion requires the optional 'pdf' dependencies"
+            ) from error
+        input_format = getattr(base_module.InputFormat, _OFFICE_FORMATS[self.suffix][0])
+        converter = converter_module.DocumentConverter(allowed_formats=[input_format])
+        result = converter.convert(path)
+        if _docling_conversion_incomplete(result):
+            raise SourceConversionError(f".{self.suffix} conversion was incomplete")
+        document = result.document
+        blocks = _docling_blocks(document, include_furniture=self.include_furniture)
+        return PdfConversion(
+            page_count=_docling_page_count(result, document, blocks),
+            blocks=tuple(blocks),
+        )
+
+
+def libreoffice_command() -> str | None:
+    """The LibreOffice executable Docling converts legacy Office files with: on PATH, as Docling
+    looks it up (``libreoffice``, then ``soffice``)."""
+    return shutil.which("libreoffice") or shutil.which("soffice")
+
+
+class DoclingOfficeAdapter:
+    """Normalize a legacy binary Office file (``.doc``, ``.xls``) through Docling, in a fresh
+    killable, network-disabled process."""
+
+    def __init__(
+        self,
+        suffix: str,
+        *,
+        converter: PdfConverter | None = None,
+        options: PdfConversionOptions | None = None,
+        isolation: IsolationMode = "process",
+        block_network: bool = True,
+    ) -> None:
+        if isolation not in _ISOLATION_MODES:
+            raise ValueError(f"isolation must be one of {_ISOLATION_MODES}, not {isolation!r}")
+        if not isinstance(block_network, bool):
+            raise ValueError("block_network must be a boolean")
+        include_furniture = options.include_furniture if options is not None else False
+        self._suffix = suffix
+        self._converter = converter or DoclingOfficeConverter(suffix, include_furniture)
+        self._runner = _make_pdf_runner(isolation, block_network=block_network)
+
+    def close(self) -> None:
+        """Release the long-lived worker, if the ``"worker"`` isolation mode holds one."""
+        self._runner.close()
+
+    def convert(self, source: ResolvedSource, *, limits: SourceLimits) -> SourceDocument:
+        deadline = time.monotonic() + limits.deadline_seconds
+        _inspect_ole(source.primary, self._suffix)
+        conversion = self._runner.run_single(
+            self._converter,
+            source.primary,
+            artifacts_path=None,
+            timeout=_remaining_deadline(deadline),
+            max_cells=limits.max_cells,
+            kind=f".{self._suffix}",
+        )
+        _format, media_type, unit = _OFFICE_FORMATS[self._suffix]
+        units = conversion.page_count if unit == "sheet" else 0
+        return SourceDocument(
+            source_name=source.primary.name,
+            media_type=media_type,
+            blocks=tuple(_source_blocks(conversion.blocks, source.primary.name)),
+            coverage=(
+                SourceCoverage(
+                    unit="sheet",
+                    total_units=units,
+                    converted_units=tuple(range(1, units + 1)),
+                )
+                if units
+                else SourceCoverage()
+            ),
+            diagnostics=conversion.diagnostics,
+        )
+
+
+def _inspect_ole(path: Path, suffix: str) -> None:
+    try:
+        with path.open("rb") as stream:
+            signature = stream.read(len(_OLE_SIGNATURE))
+    except OSError as error:
+        raise SourceConversionError(f".{suffix} source could not be inspected") from error
+    if signature != _OLE_SIGNATURE:
+        raise SourceFormatError(f"{suffix.upper()} extension does not match file content")
+
+
+def _source_blocks(
+    converted_blocks: Iterable[PdfConversionBlock], source_name: str
+) -> list[SourceBlock]:
+    """Docling's converted blocks as source blocks, a table with its rows, empty blocks dropped."""
+    blocks: list[SourceBlock] = []
+    table_index = 0
+    for converted in converted_blocks:
+        provenance = SourceProvenance(
+            source_name=source_name,
+            page=converted.page,
+            pages=converted.pages,
+            section_path=converted.section_path,
+        )
+        table: SourceTable | None = None
+        kind = "text"
+        if converted.table_rows:
+            table_index += 1
+            table = SourceTable(
+                id=f"table-{table_index:06d}",
+                rows=converted.table_rows,
+                provenance=provenance,
+            )
+            kind = "table"
+        text = (
+            render_table(converted.table_rows) if converted.table_rows else converted.text.strip()
+        )
+        if not text:
+            continue
+        blocks.append(
+            SourceBlock(
+                id=f"block-{len(blocks) + 1:06d}",
+                order=len(blocks),
+                kind=kind,
+                text=text,
+                provenance=provenance,
+                table=table,
+            )
+        )
+    return blocks
+
 
 class DocxAdapter:
     """Parse DOCX XML as inert text after strict archive inspection."""
@@ -525,7 +1405,7 @@ class DocxAdapter:
         try:
             with zipfile.ZipFile(source.primary) as archive:
                 _inspect_docx_content_types(archive, names, limits, deadline)
-                _inspect_relationships(archive, names, limits, deadline)
+                stripped_links = _inspect_relationships(archive, names, limits, deadline)
                 document_xml = _read_zip_part(
                     archive,
                     "word/document.xml",
@@ -602,6 +1482,8 @@ class DocxAdapter:
             )
             for _ in range(unsupported_containers)
         )
+        if stripped_links:
+            diagnostics += (external_links_stripped_diagnostic(stripped_links, "DOCX"),)
         coverage = (
             SourceCoverage(total_units=1, converted_units=(), failed_units=(1,))
             if unsupported_containers
@@ -691,12 +1573,14 @@ def _run_pdf_worker(
     artifacts_path: str | None,
     timeout: float,
     max_cells: int | None = None,
+    kind: str = "PDF",
+    block_network: bool = True,
 ) -> PdfConversion:
     context = get_context("spawn")
     output = context.Queue(maxsize=1)
     process = context.Process(
         target=_pdf_worker,
-        args=(converter, str(path), artifacts_path, max_cells, output),
+        args=(converter, str(path), artifacts_path, max_cells, output, None, block_network),
     )
     try:
         process.start()
@@ -704,26 +1588,112 @@ def _run_pdf_worker(
             status, code, payload = _wait_for_worker_message(output, process, timeout)
         except Empty:
             _bounded_process_cleanup(process)
-            raise SourceTimeoutError("PDF conversion exceeded the configured deadline") from None
+            raise SourceTimeoutError(
+                f"{kind} conversion exceeded the configured deadline"
+            ) from None
         except ChildProcessError:
             _bounded_process_cleanup(process)
             raise SourceConversionError(
-                "PDF conversion worker exited before returning a result"
+                f"{kind} conversion worker exited before returning a result{_exit_note(process)}"
             ) from None
         _bounded_process_cleanup(process)
         if status == "ok" and isinstance(payload, PdfConversion):
             if max_cells is not None:
                 _validate_pdf_table_cells(payload, max_cells)
             return payload
-        if code == SourceDependencyError.code:
-            raise SourceDependencyError(str(payload))
-        if code == SourceSecurityError.code:
-            raise SourceSecurityError(str(payload))
-        if code == SourceLimitError.code:
-            raise SourceLimitError("max_cells", str(payload))
-        raise SourceConversionError("PDF conversion failed in the isolated worker")
+        raise _worker_error(code, payload, kind)
     except (KeyboardInterrupt, SystemExit):
         _bounded_process_cleanup(process)
+        raise
+    finally:
+        output.close()
+        output.join_thread()
+
+
+def _worker_error(code: object, payload: object, kind: str) -> SourceError:
+    message = str(payload)
+    if code == SourceDependencyError.code:
+        return SourceDependencyError(message)
+    if code == SourceSecurityError.code:
+        return SourceSecurityError(message)
+    if code == SourceLimitError.code:
+        return SourceLimitError("max_cells", message)
+    if code == SourceFormatError.code:
+        return SourceFormatError(message)
+    if code == SourceTimeoutError.code:
+        return SourceTimeoutError(message)
+    return SourceConversionError(
+        f"{kind} conversion failed in the isolated worker", detail=message or None
+    )
+
+
+def _run_pdf_range_worker(
+    converter: PdfPageRangeConverter,
+    path: Path,
+    *,
+    artifacts_path: str | None,
+    ranges: tuple[PageRange, ...],
+    timeout: float,
+    max_cells: int | None,
+    partial_on_deadline: bool,
+    progress: SourceProgress | None,
+    block_network: bool = True,
+) -> tuple[list[tuple[PageRange, PdfConversion]], bool]:
+    """Convert ``ranges`` in one worker; return the finished ranges and whether time ran out.
+
+    The worker sends one message per finished range, so the ranges converted before the
+    deadline survive the worker being killed.
+    """
+    stop = time.monotonic() + timeout
+    total = sum(last - first + 1 for first, last in ranges)
+    context = get_context("spawn")
+    output = context.Queue(maxsize=1)
+    process = context.Process(
+        target=_pdf_worker,
+        args=(converter, str(path), artifacts_path, max_cells, output, ranges, block_network),
+    )
+    chunks: list[tuple[PageRange, PdfConversion]] = []
+    cells = 0
+    try:
+        process.start()
+        while True:
+            try:
+                remaining = stop - time.monotonic()
+                if remaining <= 0:
+                    raise Empty
+                status, code, payload = _wait_for_worker_message(output, process, remaining)
+            except Empty:
+                _bounded_process_cleanup(process)
+                if partial_on_deadline and chunks:
+                    return chunks, True
+                raise SourceTimeoutError(
+                    "PDF conversion exceeded the configured deadline"
+                ) from None
+            except ChildProcessError:
+                _bounded_process_cleanup(process)
+                raise SourceConversionError(
+                    f"PDF conversion worker exited before returning a result{_exit_note(process)}"
+                ) from None
+            if (
+                status == "chunk"
+                and isinstance(payload, PdfConversion)
+                and len(chunks) < len(ranges)
+            ):
+                if max_cells is not None:
+                    for block in payload.blocks:
+                        if block.table_rows:
+                            cells = _add_table_cells(cells, block.table_rows, max_cells)
+                chunks.append((ranges[len(chunks)], payload))
+                if progress is not None:
+                    progress(sum(last - first + 1 for (first, last), _ in chunks), total)
+                continue
+            _bounded_process_cleanup(process)
+            if status == "done" and len(chunks) == len(ranges):
+                return chunks, False
+            raise _worker_error(code, payload, "PDF")
+    except BaseException:
+        if process.pid is not None:
+            _bounded_process_cleanup(process)
         raise
     finally:
         output.close()
@@ -736,6 +1706,8 @@ def _pdf_worker(
     artifacts_path: str | None,
     max_cells: int | None,
     output: Any,
+    ranges: tuple[PageRange, ...] | None = None,
+    block_network: bool = True,
 ) -> None:
     if artifacts_path is not None:
         os.environ["DOCLING_ARTIFACTS_PATH"] = artifacts_path
@@ -744,15 +1716,49 @@ def _pdf_worker(
     if max_cells is not None:
         os.environ["SURVEY_SCRIBE_PDF_MAX_CELLS"] = str(max_cells)
     try:
-        with _blocked_network():
+        with _blocked_network() if block_network else nullcontext():
+            if ranges is not None:
+                _pdf_range_worker(
+                    cast(PdfPageRangeConverter, converter),
+                    path,
+                    artifacts_path,
+                    max_cells,
+                    output,
+                    ranges,
+                )
+                return
             conversion = converter(path, artifacts_path)
         if max_cells is not None:
             _validate_pdf_table_cells(conversion, max_cells)
         output.put(("ok", "", conversion))
     except SourceError as error:
-        output.put(("error", error.code, str(error)))
-    except BaseException:
-        output.put(("error", SourceConversionError.code, "PDF conversion failed"))
+        output.put(("error", error.code, _bounded_text(str(error))))
+    except BaseException as error:
+        output.put(("error", SourceConversionError.code, _error_detail(error)))
+
+
+def _pdf_range_worker(
+    converter: PdfPageRangeConverter,
+    path: str,
+    artifacts_path: str | None,
+    max_cells: int | None,
+    output: Any,
+    ranges: tuple[PageRange, ...],
+) -> None:
+    cells = 0
+    sent = 0
+    for conversion in converter.convert_pages(path, artifacts_path, ranges):
+        if sent == len(ranges):
+            raise SourceConversionError("PDF converter returned more ranges than requested")
+        if max_cells is not None:
+            for block in conversion.blocks:
+                if block.table_rows:
+                    cells = _add_table_cells(cells, block.table_rows, max_cells)
+        output.put(("chunk", "", conversion))
+        sent += 1
+    if sent != len(ranges):
+        raise SourceConversionError("PDF converter returned fewer ranges than requested")
+    output.put(("done", "", None))
 
 
 @contextmanager
@@ -777,6 +1783,7 @@ def _inspect_pdf(
     limits: SourceLimits,
     *,
     timeout: float | None = None,
+    in_process: bool = False,
 ) -> int:
     try:
         with path.open("rb") as stream:
@@ -786,11 +1793,47 @@ def _inspect_pdf(
         raise
     except OSError as error:
         raise SourceConversionError("PDF source could not be inspected") from error
+    if in_process:
+        return _preflight_in_process(path, max_pages=limits.max_pages)
     return _run_pdf_preflight(
         path,
         max_pages=limits.max_pages,
         timeout=(limits.deadline_seconds if timeout is None else timeout),
     )
+
+
+class _MessageCollector:
+    """A minimal ``put``-only stand-in for a worker queue, for in-process inspection."""
+
+    def __init__(self) -> None:
+        self.message: Any = None
+
+    def put(self, message: Any) -> None:
+        self.message = message
+
+
+def _preflight_in_process(path: Path, *, max_pages: int) -> int:
+    """Count a PDF's pages here with no child, for the ``"inprocess"`` isolation mode."""
+    collector = _MessageCollector()
+    _pdf_preflight_worker(str(path), max_pages, collector)
+    if collector.message is None:
+        raise SourceConversionError("PDF source could not be inspected")
+    return _preflight_result(collector.message)
+
+
+def _preflight_result(message: Any) -> int:
+    status, code, payload = message
+    if status == "ok" and isinstance(payload, int) and not isinstance(payload, bool):
+        return payload
+    if code == SourceSecurityError.code:
+        raise SourceSecurityError(str(payload))
+    if code == SourceLimitError.code:
+        raise SourceLimitError("max_pages", str(payload))
+    if code == SourceDependencyError.code:
+        raise SourceDependencyError(str(payload))
+    if code == SourceFormatError.code:
+        raise SourceFormatError(str(payload))
+    raise SourceConversionError("PDF source could not be inspected", detail=str(payload) or None)
 
 
 def _run_pdf_preflight(path: Path, *, max_pages: int, timeout: float) -> int:
@@ -810,26 +1853,68 @@ def _run_pdf_preflight(path: Path, *, max_pages: int, timeout: float) -> int:
         except ChildProcessError:
             _bounded_process_cleanup(process)
             raise SourceConversionError(
-                "PDF inspection worker exited before returning a result"
+                f"PDF inspection worker exited before returning a result{_exit_note(process)}"
             ) from None
         _bounded_process_cleanup(process)
-        if status == "ok" and isinstance(payload, int) and not isinstance(payload, bool):
-            return payload
-        if code == SourceSecurityError.code:
-            raise SourceSecurityError(str(payload))
-        if code == SourceLimitError.code:
-            raise SourceLimitError("max_pages", str(payload))
-        if code == SourceDependencyError.code:
-            raise SourceDependencyError(str(payload))
-        if code == SourceFormatError.code:
-            raise SourceFormatError(str(payload))
-        raise SourceConversionError("PDF source could not be inspected")
+        return _preflight_result((status, code, payload))
     except (KeyboardInterrupt, SystemExit):
         _bounded_process_cleanup(process)
         raise
     finally:
         output.close()
         output.join_thread()
+
+
+def _exit_note(process: Any) -> str:
+    """How the worker ended, for the error a caller sees.
+
+    A negative exit code is the signal that killed it (-9: the kernel's OOM killer, the usual
+    cause in a memory-capped container; -11: a native crash).
+    """
+    code = getattr(process, "exitcode", None)
+    if code is None:
+        return ""
+    if code < 0:
+        try:
+            name = signal.Signals(-code).name
+        except ValueError:
+            name = "unknown signal"
+        cause = ", likely out of memory)" if -code == 9 else ")"
+        return f" (killed by signal {-code} {name}{cause}"
+    return f" (exit code {code})"
+
+
+_MAX_ERROR_DETAIL_CHARS = 500
+
+
+def _bounded_text(text: str, limit: int = _MAX_ERROR_DETAIL_CHARS) -> str:
+    """One line of printable text, at most ``limit`` characters."""
+    text = " ".join("".join(ch if ch.isprintable() else " " for ch in text).split())
+    return text if len(text) <= limit else text[: limit - 3] + "..."
+
+
+def _error_detail(error: BaseException) -> str:
+    """``Type: message (at file.py:line in function)`` for an unexpected worker failure.
+
+    The location is the frame that raised, by file name only. Up to two chained causes follow.
+    The text is untrusted: it is for a record or a log, never for a prompt.
+    """
+    parts: list[str] = []
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen and len(parts) < 3:
+        seen.add(id(current))
+        message = str(current).strip()
+        part = f"{type(current).__name__}: {message}" if message else type(current).__name__
+        frames = traceback.extract_tb(current.__traceback__)
+        if frames:
+            last = frames[-1]
+            part += f" (at {Path(last.filename).name}:{last.lineno} in {last.name})"
+        parts.append(part)
+        current = current.__cause__ or (
+            None if current.__suppress_context__ else current.__context__
+        )
+    return _bounded_text("; caused by ".join(parts))
 
 
 def _wait_for_worker_message(output: Any, process: Any, timeout: float) -> Any:
@@ -884,7 +1969,11 @@ def _pdf_preflight_worker(path: str, max_pages: int, output: Any) -> None:
         return
     document = None
     try:
-        document = pdfium.PdfDocument(path)
+        try:
+            document = pdfium.PdfDocument(path)
+        except pdfium.PdfiumError as error:
+            output.put(_pdfium_open_error(int(pdfium_raw.FPDF_GetLastError()), pdfium_raw, error))
+            return
         if pdfium_raw.FPDF_GetSecurityHandlerRevision(document.raw) >= 0:
             output.put(
                 ("error", SourceSecurityError.code, "encrypted PDF sources are not supported")
@@ -895,19 +1984,38 @@ def _pdf_preflight_worker(path: str, max_pages: int, output: Any) -> None:
             output.put(("error", SourceLimitError.code, "PDF exceeds the configured page limit"))
             return
         output.put(("ok", "", page_count))
-    except BaseException:
-        last_error = int(pdfium_raw.FPDF_GetLastError())
-        if last_error == int(pdfium_raw.FPDF_ERR_PASSWORD):
-            output.put(
-                ("error", SourceSecurityError.code, "encrypted PDF sources are not supported")
-            )
-        else:
-            output.put(
-                ("error", SourceFormatError.code, "PDF extension does not match file content")
-            )
+    except BaseException as error:
+        output.put(("error", SourceConversionError.code, _error_detail(error)))
     finally:
         if document is not None:
             document.close()
+
+
+def _pdfium_open_error(
+    last_error: int, pdfium_raw: Any, error: BaseException
+) -> tuple[str, str, str]:
+    """The preflight's answer when PDFium cannot open a file that starts with ``%PDF-``."""
+    if last_error == int(pdfium_raw.FPDF_ERR_PASSWORD):
+        return ("error", SourceSecurityError.code, "encrypted PDF sources are not supported")
+    if last_error == int(pdfium_raw.FPDF_ERR_SECURITY):
+        return ("error", SourceSecurityError.code, "PDF security handler is not supported")
+    if last_error == int(pdfium_raw.FPDF_ERR_FORMAT):
+        return (
+            "error",
+            SourceFormatError.code,
+            "PDF content is damaged or not a valid PDF (PDFium could not parse it)",
+        )
+    if last_error == int(pdfium_raw.FPDF_ERR_FILE):
+        return (
+            "error",
+            SourceConversionError.code,
+            f"PDFium could not open the file: {_error_detail(error)}",
+        )
+    return (
+        "error",
+        SourceConversionError.code,
+        f"PDFium could not open the PDF (error {last_error}): {_error_detail(error)}",
+    )
 
 
 def _inspect_docx_content_types(
@@ -943,7 +2051,9 @@ def _inspect_relationships(
     names: set[str],
     limits: SourceLimits,
     deadline: float,
-) -> None:
+) -> int:
+    """Validate package relationships and return how many external ones were stripped."""
+    stripped = 0
     for original_name in archive.namelist():
         name = original_name.replace("\\", "/").lower()
         if not name.endswith(".rels") or name not in names:
@@ -966,7 +2076,10 @@ def _inspect_relationships(
             mode = relationship.attrib.get("TargetMode", "").lower()
             target = relationship.attrib.get("Target", "")
             if mode == "external" or re.match(r"^[a-z][a-z0-9+.-]*:", target, re.IGNORECASE):
-                raise SourceSecurityError("DOCX external relationship is prohibited")
+                if limits.external_links == "refuse":
+                    raise SourceSecurityError("DOCX external relationship is prohibited")
+                stripped += 1
+    return stripped
 
 
 def _read_zip_part(
@@ -1512,12 +2625,82 @@ def _docling_table_markdown(item: object, document: object) -> str:
         return str(exporter())
 
 
+def _docling_cell_text(cell: object, document: object) -> str:
+    getter = getattr(cell, "_get_text", None)
+    if callable(getter):
+        try:
+            return str(getter(doc=document))
+        except TypeError:
+            return str(getter())
+    return str(getattr(cell, "text", ""))
+
+
+def _docling_cell_starts(cell: object, axis: str, index: int) -> bool:
+    """Whether ``cell`` begins at row or column ``index`` rather than continuing into it."""
+    return int(getattr(cell, f"start_{axis}_offset_idx", index)) >= index
+
+
+def _docling_grid_rows(item: object, document: object) -> tuple[tuple[str, ...], ...] | None:
+    """Rows from a Docling table's cell grid, a merged cell's text written once.
+
+    Docling's grid places a merged cell in every position it covers, so its exports repeat
+    the text in each spanned column. Here a body cell's text stands in the first column it
+    spans and the columns it continues into stay empty; a cell spanning rows keeps its text
+    in each row, so a row read without its neighbours (a split table) still carries it.
+    The leading column-header rows become one header row, as in Docling's DataFrame export:
+    each column joins the header cells over it with ``.``, a cell spanning header rows counts
+    once, and a column covered only by cells that start to its left has an empty header.
+    Returns None when the item has no grid.
+    """
+    grid = getattr(getattr(item, "data", None), "grid", None)
+    if not grid:
+        return None
+    rows = [list(row) for row in cast(Iterable[Iterable[object]], grid)]
+    if not all(rows):
+        return None
+    width = max(len(row) for row in rows)
+    starts = _docling_cell_starts
+
+    def text(cell: object) -> str:
+        return _docling_cell_text(cell, document)
+
+    headers = 0
+    for index, row in enumerate(rows):
+        if not any(
+            getattr(cell, "column_header", False) and starts(cell, "row", index) for cell in row
+        ):
+            break
+        headers += 1
+    header: tuple[str, ...]
+    if headers:
+        names: list[str] = []
+        for column in range(width):
+            over = [(r, rows[r][column]) for r in range(headers) if column < len(rows[r])]
+            if not any(starts(cell, "col", column) for _, cell in over):
+                names.append("")
+                continue
+            names.append(".".join(text(cell) for r, cell in over if starts(cell, "row", r)))
+        header = tuple(names)
+    else:
+        header = tuple(str(column) for column in range(width))
+    body = tuple(
+        tuple(text(cell) if starts(cell, "col", column) else "" for column, cell in enumerate(row))
+        for row in rows[headers:]
+    )
+    return (header, *body)
+
+
 def _docling_table_rows(
     item: object,
     document: object,
     *,
     max_cells: int | None,
 ) -> tuple[tuple[str, ...], ...]:
+    rows = _docling_grid_rows(item, document)
+    if rows is not None:
+        if max_cells is not None:
+            _add_table_cells(0, rows, max_cells)
+        return rows
     dataframe_exporter = getattr(item, "export_to_dataframe", None)
     if callable(dataframe_exporter):
         try:

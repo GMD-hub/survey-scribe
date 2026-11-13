@@ -40,6 +40,20 @@ Accepted values are `lsms`, `dhs`, `lfs`, `hhs`, `mics`, `cwiq`, `census`, and
 Accepted values are `individual`, `household`, and `other`. The default is
 `individual`.
 
+### `ReviewReason`
+
+| Value | Set when |
+| --- | --- |
+| `model_flagged` | The model itself set `needs_review` |
+| `low_confidence` | `extraction_confidence` is below the configured threshold |
+| `missing_categories` | A categorical variable has no answer categories |
+| `duplicate_raw_name` | Distinct questions share the `raw_name` |
+| `possible_duplicate` | A similar question was retained beside this one |
+| `unsupported_type` | An XLSForm question type the adapter does not support |
+
+Replacing the extracted `module` with the source section heading is reported as
+`QUALITY_MODULE_RECONCILED` and is not a review reason.
+
 ## `AnswerCategory`
 
 | Field | Type | Required | Default | Meaning |
@@ -79,6 +93,7 @@ maximum. Validate range order before using it for data checks.
 | `source_page` | `int \| None` | No | `None` | Zero-indexed page used by the package model |
 | `extraction_confidence` | `float` | Yes | - | Confidence from `0.0` through `1.0` |
 | `needs_review` | `bool` | No | `False` | Explicit human-review decision |
+| `review_reasons` | `tuple[ReviewReason, ...]` | No | `()` | Why the quality policy set `needs_review`; not in the JSON schema |
 | `notes` | `str \| None` | No | `None` | Uncertainty or interpretation notes |
 
 ### Review policy example

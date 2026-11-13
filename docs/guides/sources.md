@@ -11,6 +11,7 @@ provenance without calling a model provider.
 | `.pdf` | Docling PDF conversion with local OCR artifacts | `pdf` |
 | `.docx` | Inert DOCX XML parsing | Base |
 | `.xlsx` | Read-only XLSForm parsing with native SVIS and routing semantics | `tabular` |
+| `.doc`, `.xls` | Docling's Word and Excel conversion of legacy binary Office files; needs LibreOffice (`soffice`) on PATH | `pdf` |
 | `.csv` | UTF-8 CSV parsing | Base |
 | `.html`, `.htm` | Visible text and table extraction | Base |
 | `.md`, `.markdown` | Markdown paragraphs and tables | Base |
@@ -93,6 +94,7 @@ Default `SourceLimits` protect local processing:
 | `max_cells` | 2,000,000 |
 | `max_companions` | 100 |
 | `deadline_seconds` | 1,800 seconds |
+| `external_links` | `"refuse"` |
 
 Set smaller limits for internet-facing or multi-tenant workloads:
 
@@ -242,12 +244,46 @@ registry = SourceRegistry.default(
 | `max_heading_level` | `6` | the deepest inferred level |
 | `include_furniture` | `False` | keep page headers and footers; the layout model files a page-top section title as a page header |
 | `table_mode` | `"accurate"` | TableFormer `"accurate"` or `"fast"` |
+| `pages_per_chunk` | `None` | `None` converts the document in one call, as before. A number converts that many pages per Docling call (models load once); progress is reported and finished pages are kept after each one. Inferred heading levels are then computed per chunk; the section path carries across chunks. |
+| `first_pages` | `None` | convert only the first N pages (a smoke-test read); the remaining pages are listed as not converted |
+| `partial_on_deadline` | `False` | at the deadline, return the chunks already converted instead of raising `SourceTimeoutError`; needs `pages_per_chunk` |
 
 The same options are read from the environment by `SourceRegistry.default()`
 when no `pdf_options` are passed: `SURVEY_SCRIBE_PDF_OCR`,
 `SURVEY_SCRIBE_PDF_OCR_LANGUAGES` (comma-separated),
 `SURVEY_SCRIBE_PDF_HEADING_LEVELS`, `SURVEY_SCRIBE_PDF_MAX_HEADING_LEVEL`,
-`SURVEY_SCRIBE_PDF_INCLUDE_FURNITURE`, `SURVEY_SCRIBE_PDF_TABLE_MODE`.
+`SURVEY_SCRIBE_PDF_INCLUDE_FURNITURE`, `SURVEY_SCRIBE_PDF_TABLE_MODE`,
+`SURVEY_SCRIBE_PDF_PAGES_PER_CHUNK` (`0` for one call),
+`SURVEY_SCRIBE_PDF_FIRST_PAGES`, `SURVEY_SCRIBE_PDF_PARTIAL_ON_DEADLINE`.
+
+### Progress and partial results
+
+One `SourceLimits.deadline_seconds` deadline covers PDF inspection and
+conversion together. By default a PDF is converted in one call. Set
+`pages_per_chunk` to convert it in page ranges; `progress` is then called in
+your process after each range with the pages done and the pages requested
+(without chunking it is called once, at the end):
+
+```python
+from survey_scribe.sources.docling import PdfConversionOptions
+from survey_scribe.sources.registry import SourceRegistry
+
+registry = SourceRegistry.default(
+    pdf_options=PdfConversionOptions(pages_per_chunk=25, partial_on_deadline=True),
+)
+document = registry.convert(
+    "questionnaire.pdf",
+    progress=lambda done, total: print(f"{done}/{total} pages"),
+)
+```
+
+With `partial_on_deadline=True`, a conversion that reaches the deadline
+returns the finished pages: `coverage.converted_units` lists them,
+`coverage.failed_units` lists the rest (each with a `PDF_PAGE_NOT_CONVERTED`
+error), and one `PDF_DEADLINE_PARTIAL` warning names the cut. If no page
+finished, `SourceTimeoutError` is still raised. `first_pages` produces the same
+coverage shape with a `PDF_FIRST_PAGES` warning. The extraction pipeline
+reports the unconverted pages as failed blocks and returns a `partial` result.
 
 With `ocr="never"` the artifacts directory holds Docling's layout and table
 models only (`docling-tools models download layout tableformer -o <dir>`); with
@@ -258,6 +294,29 @@ OCR enabled it also holds the approved EasyOCR archives described above.
 The XLSX adapter opens workbooks in read-only mode and rejects formulas, macros,
 external links, malformed cell references, archive expansion violations, and
 excessive worksheet dimensions. It does not calculate workbook formulas.
+
+## External links in DOCX and XLSX
+
+By default a DOCX or XLSX package that declares an external relationship (a
+hyperlink, a linked workbook, or a remote template) is refused with
+`SourceSecurityError`. Questionnaire workbooks often carry such a link, so the
+policy is configurable:
+
+```python
+from dataclasses import replace
+
+from survey_scribe.sources import DEFAULT_SOURCE_LIMITS, SourceRegistry
+
+limits = replace(DEFAULT_SOURCE_LIMITS, external_links="strip")
+document = SourceRegistry.default().convert("questionnaire.xlsx", limits=limits)
+```
+
+With `external_links="strip"` the external relationships are dropped and never
+followed: the adapters read only cell values and document text, so a hyperlinked
+cell or paragraph keeps its visible text. The document carries one
+`EXTERNAL_LINK_STRIPPED` warning diagnostic with the number of stripped links;
+link targets are not recorded. Formulas and macros remain refused under both
+policies, including formulas that reference a linked workbook.
 
 The XLSForm support matrix is version `1.0`. Groups become containment; repeats
 remain logical templates; reference comparisons, `selected()`, and Boolean
@@ -281,3 +340,18 @@ except SourceError as error:
 
 Use `SourceLimitError.limit` to identify the exceeded ceiling. Source exceptions
 provide stable diagnostic codes for application-level handling.
+
+When the isolated PDF or legacy Office worker fails unexpectedly,
+`SourceConversionError.detail` names the underlying error: its type, message,
+and the file, line, and function that raised it, followed by up to two chained
+causes, on one line of at most 500 characters. The detail is also appended to
+the error message. A worker that dies without reporting gives its exit code or
+the signal that killed it instead. The detail comes from third-party code and
+may echo file paths, so treat it as untrusted text: record or log it, but do
+not pass it to a model prompt. Library results and manifests keep their fixed
+messages and do not include it.
+
+PDF inspection separates its PDFium failures: an encrypted file or an
+unsupported security handler raises `SourceSecurityError`, a damaged file
+raises `SourceFormatError`, and a file PDFium cannot open raises
+`SourceConversionError` with the detail.

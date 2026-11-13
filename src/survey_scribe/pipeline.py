@@ -3,26 +3,38 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import hashlib
 import inspect
 import json
 import re
+import sys
+import unicodedata
 from collections import Counter
 from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Any, Generic, TypeVar, cast
+from typing import Any, Generic, Literal, TypedDict, TypeVar, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from survey_scribe.config import GenerationConfig, RetryConfig
-from survey_scribe.models.svis import DataType, StudyType, SurveySVIS, SurveyVariable
+from survey_scribe.models.svis import (
+    DataType,
+    ReviewReason,
+    StudyType,
+    SurveySVIS,
+    SurveyVariable,
+)
 from survey_scribe.providers.base import (
     ConcurrencyLimiter,
+    NormalizedUsage,
+    ProviderContentFilterError,
     ProviderError,
     ProviderMessage,
     ProviderResponse,
+    ProviderTransportError,
     ProviderTruncationError,
     ProviderValidationError,
     StructuredProvider,
@@ -34,6 +46,7 @@ from survey_scribe.results import (
     DiagnosticSeverity,
     ExtractionResult,
     FailedBlock,
+    ModelCall,
     PromptArtifactProvenance,
 )
 from survey_scribe.sources.base import (
@@ -45,12 +58,16 @@ from survey_scribe.sources.base import (
     SourceLimitError,
     SourceLimits,
     SourceProvenance,
+    SourceTable,
+    render_table,
 )
 from survey_scribe.sources.chunking import (
     ChunkedDocument,
     SourceChunk,
     SourceChunkPart,
+    SourceTableLimitError,
     chunk_document,
+    split_table_part,
 )
 from survey_scribe.sources.registry import SourceRegistry
 
@@ -186,6 +203,93 @@ class _BlockOutcome:
     failure: FailedBlock | None = None
     diagnostic: Diagnostic | None = None
     response_sha256: str | None = None
+    call: ModelCall | None = None
+
+
+class _UsageFields(TypedDict):
+    input_tokens: int | None
+    output_tokens: int | None
+    total_tokens: int | None
+
+
+def _usage_fields(usage: NormalizedUsage | None) -> _UsageFields:
+    if usage is None:
+        return {"input_tokens": None, "output_tokens": None, "total_tokens": None}
+    return {
+        "input_tokens": usage.input_tokens,
+        "output_tokens": usage.output_tokens,
+        "total_tokens": usage.total_tokens,
+    }
+
+
+def _success_call(
+    pass_kind: Literal["metadata", "extraction"],
+    block_id: str,
+    response: ProviderResponse[Any],
+) -> ModelCall:
+    return ModelCall(
+        pass_kind=pass_kind,
+        block_id=block_id,
+        outcome="ok",
+        finish_reason=response.finish_reason,
+        transport_attempts=response.transport_attempts,
+        validation_attempts=response.validation_attempts,
+        **_usage_fields(response.usage),
+    )
+
+
+def _metadata_failure_call(block_id: str, error: BaseException) -> ModelCall:
+    outcome: Literal["ok", "truncated", "invalid", "failed"]
+    reason: str
+    finish: str | None
+    if isinstance(error, ProviderTruncationError):
+        outcome, reason, finish = "truncated", "PROVIDER_RESPONSE_TRUNCATED", error.finish_reason
+    elif isinstance(error, ProviderValidationError):
+        outcome, reason, finish = "invalid", "PROVIDER_VALIDATION_FAILED", None
+    elif isinstance(error, ProviderError):
+        outcome, reason, finish = "failed", error.code, None
+    elif isinstance(error, TimeoutError):
+        outcome, reason, finish = "failed", "TIMEOUT", None
+    else:
+        outcome, reason, finish = "failed", "CONNECTION", None
+    usage = error.usage if isinstance(error, ProviderError) else None
+    return ModelCall(
+        pass_kind="metadata",
+        block_id=block_id,
+        outcome=outcome,
+        reason=reason,
+        finish_reason=finish,
+        **_usage_fields(usage),
+    )
+
+
+def _identity_mismatch(
+    chunk: SourceChunk, reason: str, response: ProviderResponse[Any]
+) -> _BlockOutcome:
+    """Return a validation-failed outcome for a provider answer identity defect."""
+    return _BlockOutcome(
+        failure=FailedBlock(
+            block_id=chunk.id,
+            message="The source chunk remained invalid after bounded validation retries.",
+            source_order=chunk.order,
+        ),
+        diagnostic=Diagnostic(
+            code=DiagnosticCode.validation_failed,
+            message="One source chunk failed structured validation.",
+            severity=DiagnosticSeverity.error,
+            details={"block_id": chunk.id, "reason": reason},
+        ),
+        call=ModelCall(
+            pass_kind="extraction",
+            block_id=chunk.id,
+            outcome="invalid",
+            reason=reason,
+            finish_reason=response.finish_reason,
+            transport_attempts=response.transport_attempts,
+            validation_attempts=response.validation_attempts,
+            **_usage_fields(response.usage),
+        ),
+    )
 
 
 class ExtractionPipeline:
@@ -212,6 +316,21 @@ class ExtractionPipeline:
         active_limiter = limiter or ConcurrencyLimiter(self._config.max_concurrency)
         try:
             chunked = self._chunk_document(document)
+        except SourceTableLimitError as error:
+            return ExtractionResult[SurveySVIS](
+                output=None,
+                diagnostics=(
+                    Diagnostic(
+                        code=error.code,
+                        message=(
+                            "A source table cell cannot fit within provider limits, "
+                            "even after splitting the table by rows and its rows by columns."
+                        ),
+                        severity=DiagnosticSeverity.error,
+                        details={"table_id": error.table_id, "block_id": error.block_id},
+                    ),
+                ),
+            )
         except (SourceError, ProviderError, ValueError) as error:
             return ExtractionResult[SurveySVIS](
                 output=None,
@@ -224,9 +343,12 @@ class ExtractionPipeline:
                 ),
             )
         chunks = chunked.chunks
-        metadata, metadata_diagnostics, metadata_response_sha256 = await self._extract_metadata(
-            chunks, document, active_limiter
-        )
+        (
+            metadata,
+            metadata_diagnostics,
+            metadata_response_sha256,
+            metadata_calls,
+        ) = await self._extract_metadata(chunks, document, active_limiter)
         block_results = await _gather_cancel_on_control(
             tuple(self._extract_block(chunked, chunk, active_limiter) for chunk in chunks)
         )
@@ -234,7 +356,27 @@ class ExtractionPipeline:
         failed_blocks: list[FailedBlock] = list(_source_failures(document))
         diagnostics: list[Diagnostic] = [*metadata_diagnostics]
         response_sha256 = list(metadata_response_sha256)
+        calls: list[ModelCall] = list(metadata_calls)
         diagnostics.extend(_source_diagnostics(document))
+        diagnostics.extend(
+            Diagnostic(
+                code=DiagnosticCode.source_table_split,
+                message=(
+                    "A source table exceeded the request budget and was split by rows."
+                    if split.column_bands == 1
+                    else "A source table exceeded the request budget and was split into "
+                    "column bands (a row was too wide for one request), each split by rows."
+                ),
+                severity=DiagnosticSeverity.warning,
+                details={
+                    "table_id": split.table_id,
+                    "block_id": split.block_id,
+                    "part_count": split.part_count,
+                    **({"column_bands": split.column_bands} if split.column_bands > 1 else {}),
+                },
+            )
+            for split in chunked.split_tables
+        )
         for outcome in block_results:
             records.extend(outcome.records)
             if outcome.failure is not None:
@@ -243,6 +385,8 @@ class ExtractionPipeline:
                 diagnostics.append(outcome.diagnostic)
             if outcome.response_sha256 is not None:
                 response_sha256.append(outcome.response_sha256)
+            if outcome.call is not None:
+                calls.append(outcome.call)
 
         quality = apply_quality_policy(
             tuple(records),
@@ -264,6 +408,7 @@ class ExtractionPipeline:
                 survey_id=metadata.survey_id,
                 diagnostics=tuple(diagnostics),
                 failed_blocks=tuple(sorted(failed_blocks, key=_failed_block_order)),
+                calls=tuple(calls),
                 artifact_provenance=_artifact_provenance(document, response_sha256),
             )
 
@@ -285,6 +430,7 @@ class ExtractionPipeline:
             output=output,
             diagnostics=tuple(diagnostics),
             failed_blocks=tuple(sorted(failed_blocks, key=_failed_block_order)),
+            calls=tuple(calls),
             artifact_provenance=_artifact_provenance(document, response_sha256),
         )
 
@@ -327,6 +473,7 @@ class ExtractionPipeline:
             for part in chunk.parts
             if part.id in chunk.new_part_ids
         ]
+        blocks = {block.id: block for block in document.blocks}
         chunks: list[SourceChunk] = []
 
         def make_chunk(
@@ -390,7 +537,10 @@ class ExtractionPipeline:
                     overlap = overlap_for(part)
                     candidate = make_chunk((part,), overlap)
                 if not fits(candidate):
-                    if part.kind == "table" or len(part.text) < 2:
+                    if part.table is not None:
+                        parts[index : index + 1] = split_table_part(part, blocks[part.block_id])
+                        break
+                    if len(part.text) < 2:
                         raise SourceLimitError(
                             "max_tokens",
                             "A source part cannot fit within the serialized request limit",
@@ -412,10 +562,16 @@ class ExtractionPipeline:
         chunks: tuple[SourceChunk, ...],
         document: SourceDocument,
         limiter: ConcurrencyLimiter,
-    ) -> tuple[ExtractedMetadata, tuple[Diagnostic, ...], tuple[str, ...]]:
+    ) -> tuple[
+        ExtractedMetadata,
+        tuple[Diagnostic, ...],
+        tuple[str, ...],
+        tuple[ModelCall, ...],
+    ]:
         outcomes = await _gather_cancel_on_control(
             tuple(self._extract_metadata_chunk(chunk, limiter) for chunk in chunks)
         )
+        calls = tuple(outcome[2] for outcome in outcomes)
         successful = tuple(outcome for outcome in outcomes if outcome[0] is not None)
         if not successful:
             return (
@@ -428,6 +584,7 @@ class ExtractionPipeline:
                     ),
                 ),
                 (),
+                calls,
             )
         metadata = successful[0][0]
         assert metadata is not None
@@ -446,13 +603,13 @@ class ExtractionPipeline:
             if incomplete
             else ()
         )
-        return metadata, diagnostics, digests
+        return metadata, diagnostics, digests, calls
 
     async def _extract_metadata_chunk(
         self,
         chunk: SourceChunk,
         limiter: ConcurrencyLimiter,
-    ) -> tuple[ExtractedMetadata | None, str | None]:
+    ) -> tuple[ExtractedMetadata | None, str | None, ModelCall]:
         messages = (
             ProviderMessage(
                 role="system",
@@ -477,9 +634,13 @@ class ExtractionPipeline:
                 limiter=limiter,
             )
             complete = response.require_complete()
-            return complete.output, _response_sha256(complete.output)
-        except (ProviderError, TimeoutError, ConnectionError):
-            return None, None
+            return (
+                complete.output,
+                _response_sha256(complete.output),
+                _success_call("metadata", chunk.id, complete),
+            )
+        except (ProviderError, TimeoutError, ConnectionError) as error:
+            return None, None, _metadata_failure_call(chunk.id, error)
 
     async def _extract_block(
         self,
@@ -502,14 +663,7 @@ class ExtractionPipeline:
                 limiter=limiter,
             )
             extraction = response.require_complete().output
-            if extraction.block_id != chunk.id:
-                raise ValueError("provider chunk identity mismatch")
-            if any(
-                not set(variable.source_block_ids).issubset(chunk.block_ids)
-                for variable in extraction.variables
-            ):
-                raise ValueError("provider source block identity mismatch")
-        except ProviderTruncationError:
+        except ProviderTruncationError as error:
             return _BlockOutcome(
                 failure=FailedBlock(
                     block_id=chunk.id,
@@ -520,10 +674,18 @@ class ExtractionPipeline:
                     code=DiagnosticCode.provider_truncated,
                     message="One source chunk response was truncated.",
                     severity=DiagnosticSeverity.error,
-                    details={"block_id": chunk.id},
+                    details={"block_id": chunk.id, "reason": "PROVIDER_RESPONSE_TRUNCATED"},
+                ),
+                call=ModelCall(
+                    pass_kind="extraction",
+                    block_id=chunk.id,
+                    outcome="truncated",
+                    reason="PROVIDER_RESPONSE_TRUNCATED",
+                    finish_reason=error.finish_reason,
+                    **_usage_fields(error.usage),
                 ),
             )
-        except ProviderValidationError:
+        except ProviderValidationError as error:
             return _BlockOutcome(
                 failure=FailedBlock(
                     block_id=chunk.id,
@@ -534,10 +696,31 @@ class ExtractionPipeline:
                     code=DiagnosticCode.validation_failed,
                     message="One source chunk failed structured validation.",
                     severity=DiagnosticSeverity.error,
-                    details={"block_id": chunk.id},
+                    details={"block_id": chunk.id, "reason": "PROVIDER_VALIDATION_FAILED"},
+                ),
+                call=ModelCall(
+                    pass_kind="extraction",
+                    block_id=chunk.id,
+                    outcome="invalid",
+                    reason="PROVIDER_VALIDATION_FAILED",
+                    **_usage_fields(error.usage),
                 ),
             )
-        except (ProviderError, TimeoutError, ConnectionError, ValueError):
+        except (ProviderError, TimeoutError, ConnectionError, ValueError) as error:
+            if isinstance(error, ProviderError):
+                reason = error.code
+            elif isinstance(error, TimeoutError):
+                reason = "TIMEOUT"
+            elif isinstance(error, ConnectionError):
+                reason = "CONNECTION"
+            else:
+                reason = "INTERNAL"
+            details: dict[str, Any] = {"block_id": chunk.id, "reason": reason}
+            if isinstance(error, ProviderTransportError):
+                details["retryable"] = error.retryable
+            if isinstance(error, ProviderContentFilterError):
+                details["filter_stage"] = error.stage
+                details["filter_categories"] = list(error.categories)
             return _BlockOutcome(
                 failure=FailedBlock(
                     block_id=chunk.id,
@@ -548,9 +731,23 @@ class ExtractionPipeline:
                     code=DiagnosticCode.provider_failed,
                     message="One source chunk failed structured extraction.",
                     severity=DiagnosticSeverity.error,
-                    details={"block_id": chunk.id},
+                    details=details,
+                ),
+                call=ModelCall(
+                    pass_kind="extraction",
+                    block_id=chunk.id,
+                    outcome="failed",
+                    reason=reason,
+                    **_usage_fields(error.usage if isinstance(error, ProviderError) else None),
                 ),
             )
+        if extraction.block_id != chunk.id:
+            return _identity_mismatch(chunk, "CHUNK_ID_MISMATCH", response)
+        if any(
+            not set(variable.source_block_ids).issubset(chunk.block_ids)
+            for variable in extraction.variables
+        ):
+            return _identity_mismatch(chunk, "SOURCE_BLOCK_ID_MISMATCH", response)
         provenance_by_id = {part.block_id: part.provenance for part in chunk.parts}
 
         def source_page(item: ExtractedVariable) -> int | None:
@@ -571,6 +768,7 @@ class ExtractionPipeline:
         return _BlockOutcome(
             records=records,
             response_sha256=_response_sha256(extraction),
+            call=_success_call("extraction", chunk.id, response),
         )
 
 
@@ -936,35 +1134,31 @@ def _validate_custom_pipeline_inputs(
 
 
 def _document_payload(document: SourceDocument) -> str:
-    return json.dumps(
+    return _model_json(
         {
             "source_name": document.source_name,
             "blocks": [
                 {
                     "block_id": block.id,
                     "kind": block.kind,
-                    "text": block.text,
+                    "text": _model_text(block.text, block.table),
                 }
                 for block in document.blocks
             ],
-        },
-        ensure_ascii=True,
-        separators=(",", ":"),
+        }
     )
 
 
 def _custom_chunk_payload(chunk: SourceChunk) -> str:
-    return json.dumps(
+    return _model_json(
         [
             {
                 "part_id": part.id,
                 "block_id": part.block_id,
-                "text": part.text,
+                "text": _model_text(part.text, part.table),
             }
             for part in chunk.parts
-        ],
-        ensure_ascii=True,
-        separators=(",", ":"),
+        ]
     )
 
 
@@ -1045,8 +1239,9 @@ def apply_quality_policy(
             continue
 
         updates: dict[str, object] = {}
+        reasons: list[ReviewReason] = [ReviewReason.model_flagged] if variable.needs_review else []
         if variable.extraction_confidence < confidence_threshold:
-            updates["needs_review"] = True
+            reasons.append(ReviewReason.low_confidence)
             diagnostics.append(
                 Diagnostic(
                     code=DiagnosticCode.quality_low_confidence,
@@ -1062,7 +1257,7 @@ def apply_quality_policy(
             }
             and not variable.categories
         ):
-            updates["needs_review"] = True
+            reasons.append(ReviewReason.missing_categories)
             diagnostics.append(
                 Diagnostic(
                     code=DiagnosticCode.quality_missing_categories,
@@ -1076,7 +1271,8 @@ def apply_quality_policy(
             else record.provenance.sheet
         )
         if source_module and variable.module != source_module:
-            updates.update({"module": source_module, "needs_review": True})
+            # The source heading is authoritative, so the replacement alone is no reason for review.
+            updates["module"] = source_module
             diagnostics.append(
                 Diagnostic(
                     code=DiagnosticCode.quality_module_reconciled,
@@ -1084,8 +1280,9 @@ def apply_quality_policy(
                     details={"block_id": record.block_id},
                 )
             )
-        if updates:
-            variable = variable.model_copy(update=updates)
+        updates["needs_review"] = bool(reasons)
+        updates["review_reasons"] = tuple(reasons)
+        variable = variable.model_copy(update=updates)
         kept.append(
             QualityRecord(
                 variable=variable,
@@ -1104,7 +1301,7 @@ def apply_quality_policy(
         )
     for index, record in enumerate(kept):
         if raw_name_counts[record.variable.raw_name.casefold()] > 1:
-            kept[index] = _mark_review(record)
+            kept[index] = _mark_review(record, ReviewReason.duplicate_raw_name)
     for raw_name, count in raw_name_counts.items():
         if count > 1:
             diagnostics.append(
@@ -1121,8 +1318,8 @@ def apply_quality_policy(
             if _similar_question(kept[left].variable, kept[right].variable):
                 possible_pairs.add((left, right))
     for left, right in sorted(possible_pairs):
-        kept[left] = _mark_review(kept[left])
-        kept[right] = _mark_review(kept[right])
+        kept[left] = _mark_review(kept[left], ReviewReason.possible_duplicate)
+        kept[right] = _mark_review(kept[right], ReviewReason.possible_duplicate)
         diagnostics.append(
             Diagnostic(
                 code=DiagnosticCode.quality_possible_duplicate,
@@ -1140,9 +1337,15 @@ def apply_quality_policy(
     )
 
 
-def _mark_review(record: QualityRecord) -> QualityRecord:
+def _mark_review(record: QualityRecord, reason: ReviewReason) -> QualityRecord:
+    reasons = record.variable.review_reasons
     return QualityRecord(
-        variable=record.variable.model_copy(update={"needs_review": True}),
+        variable=record.variable.model_copy(
+            update={
+                "needs_review": True,
+                "review_reasons": reasons if reason in reasons else (*reasons, reason),
+            }
+        ),
         block_id=record.block_id,
         source_order=record.source_order,
         provenance=record.provenance,
@@ -1263,13 +1466,14 @@ def _repeated_row_inventory(document: ChunkedDocument, chunk: SourceChunk) -> st
         for repeated in document.repeated_rows
         if any(origin.table_id in tables for origin in repeated.origins)
     ]
-    encoded = json.dumps(rows, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
+    canonical = json.dumps(rows, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
+    encoded = _model_json(rows, sort_keys=True)
     if len(encoded) <= 256:
         return encoded
     summary = {
         "records": len(rows),
         "total_repeated_rows": sum(int(item["count"]) for item in rows),
-        "sha256": hashlib.sha256(encoded.encode("utf-8")).hexdigest(),
+        "sha256": hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
     }
     return json.dumps(summary, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
 
@@ -1280,11 +1484,68 @@ def _chunk_payload(chunk: SourceChunk) -> str:
             "part_id": part.id,
             "block_id": part.block_id,
             "overlap": part.id in chunk.overlap_part_ids,
-            "text": part.text,
+            "text": _model_text(part.text, part.table),
         }
         for part in chunk.parts
     ]
-    return json.dumps(parts, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
+    return _model_json(parts, sort_keys=True)
+
+
+# Characters a model request carries escaped (`\uXXXX`) although the rest of the text is sent as
+# UTF-8: they render as nothing or reorder what is shown (controls, format characters such as bidi
+# marks and zero-width spaces, line / paragraph separators, private-use and surrogate code points),
+# so untrusted text cannot hide instructions in them. Every other character goes as itself: a
+# Cyrillic, Arabic or Bengali letter escaped is 6 bytes and several tokens, unescaped 2-3 bytes and
+# a fraction of one.
+_INVISIBLE_CATEGORIES = frozenset({"Cc", "Cf", "Co", "Cs", "Zl", "Zp"})
+
+
+@functools.lru_cache(maxsize=1)
+def _invisible_pattern() -> re.Pattern[str]:
+    ranges: list[tuple[int, int]] = []
+    for code_point in range(sys.maxunicode + 1):
+        if unicodedata.category(chr(code_point)) in _INVISIBLE_CATEGORIES:
+            if ranges and ranges[-1][1] == code_point - 1:
+                ranges[-1] = (ranges[-1][0], code_point)
+            else:
+                ranges.append((code_point, code_point))
+    body = "".join(
+        f"\\U{first:08x}" if first == last else f"\\U{first:08x}-\\U{last:08x}"
+        for first, last in ranges
+    )
+    return re.compile(f"[{body}]")
+
+
+def _json_escape(match: re.Match[str]) -> str:
+    code_point = ord(match.group())
+    if code_point <= 0xFFFF:
+        return f"\\u{code_point:04x}"
+    code_point -= 0x10000
+    return f"\\u{0xD800 + (code_point >> 10):04x}\\u{0xDC00 + (code_point & 0x3FF):04x}"
+
+
+def _model_json(value: object, *, sort_keys: bool = False) -> str:
+    """Compact JSON for a model request: text as UTF-8, invisible characters escaped."""
+    encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=sort_keys)
+    if encoded.isascii():
+        return encoded
+    return _invisible_pattern().sub(_json_escape, encoded)
+
+
+def _model_text(text: str, table: SourceTable | None) -> str:
+    """The text a model reads for one block or part: a table rendered without each row's trailing
+    empty cells (an instrument's grid is labelled and mostly blank; the remaining cells keep their
+    column positions), any other text as it is."""
+    if table is None:
+        return text
+    return render_table(tuple(_without_trailing_blanks(row) for row in table.rows))
+
+
+def _without_trailing_blanks(row: tuple[str, ...]) -> tuple[str, ...]:
+    end = len(row)
+    while end and not row[end - 1].strip():
+        end -= 1
+    return row[:end]
 
 
 def _variable_messages(

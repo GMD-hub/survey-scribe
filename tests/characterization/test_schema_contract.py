@@ -127,6 +127,7 @@ def test_all_legacy_enum_values_and_field_orders_are_frozen() -> None:
         "source_page",
         "extraction_confidence",
         "needs_review",
+        "review_reasons",
         "notes",
     ]
 
@@ -152,6 +153,7 @@ def test_category_union_types_and_defaults_are_frozen() -> None:
         "source_page": None,
         "extraction_confidence": 1.0,
         "needs_review": False,
+        "review_reasons": (),
         "notes": None,
     }
 
