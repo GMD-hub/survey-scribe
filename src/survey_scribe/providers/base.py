@@ -8,7 +8,7 @@ import re
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Generic, Literal, Protocol, TypeVar, runtime_checkable
+from typing import Generic, Literal, Protocol, Self, TypeVar, runtime_checkable
 
 from pydantic import BaseModel
 
@@ -92,7 +92,9 @@ class ProviderResponse(Generic[T]):
     def require_complete(self) -> ProviderResponse[T]:
         """Fail closed when a provider reports token or length truncation."""
         if self.truncated:
-            raise ProviderTruncationError()
+            error = ProviderTruncationError().with_usage(self.usage)
+            error.finish_reason = self.finish_reason
+            raise error
         return self
 
 
@@ -159,9 +161,15 @@ class ProviderError(Exception):
 
     code = "PROVIDER_ERROR"
     safe_message = "Structured provider operation failed."
+    usage: NormalizedUsage | None = None
 
     def __init__(self) -> None:
         super().__init__(self.safe_message)
+
+    def with_usage(self, usage: NormalizedUsage | None) -> Self:
+        """Attach normalized token usage to a failed call and return self."""
+        self.usage = usage
+        return self
 
 
 class ProviderDependencyError(ProviderError, ImportError):
@@ -247,6 +255,7 @@ class ProviderTruncationError(ProviderError):
 
     code = "PROVIDER_RESPONSE_TRUNCATED"
     safe_message = "The structured response was truncated."
+    finish_reason: str | None = None
 
 
 class ProviderContentFilterError(ProviderError):

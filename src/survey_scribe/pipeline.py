@@ -15,7 +15,7 @@ from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Any, Generic, TypeVar, cast
+from typing import Any, Generic, Literal, TypeVar, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -29,6 +29,7 @@ from survey_scribe.models.svis import (
 )
 from survey_scribe.providers.base import (
     ConcurrencyLimiter,
+    NormalizedUsage,
     ProviderContentFilterError,
     ProviderError,
     ProviderMessage,
@@ -45,6 +46,7 @@ from survey_scribe.results import (
     DiagnosticSeverity,
     ExtractionResult,
     FailedBlock,
+    ModelCall,
     PromptArtifactProvenance,
 )
 from survey_scribe.sources.base import (
@@ -201,9 +203,63 @@ class _BlockOutcome:
     failure: FailedBlock | None = None
     diagnostic: Diagnostic | None = None
     response_sha256: str | None = None
+    call: ModelCall | None = None
 
 
-def _identity_mismatch(chunk: SourceChunk, reason: str) -> _BlockOutcome:
+def _usage_fields(usage: NormalizedUsage | None) -> dict[str, int | None]:
+    if usage is None:
+        return {"input_tokens": None, "output_tokens": None, "total_tokens": None}
+    return {
+        "input_tokens": usage.input_tokens,
+        "output_tokens": usage.output_tokens,
+        "total_tokens": usage.total_tokens,
+    }
+
+
+def _success_call(
+    pass_kind: Literal["metadata", "extraction"],
+    block_id: str,
+    response: ProviderResponse[Any],
+) -> ModelCall:
+    return ModelCall(
+        pass_kind=pass_kind,
+        block_id=block_id,
+        outcome="ok",
+        finish_reason=response.finish_reason,
+        transport_attempts=response.transport_attempts,
+        validation_attempts=response.validation_attempts,
+        **_usage_fields(response.usage),
+    )
+
+
+def _metadata_failure_call(block_id: str, error: BaseException) -> ModelCall:
+    outcome: Literal["ok", "truncated", "invalid", "failed"]
+    reason: str
+    finish: str | None
+    if isinstance(error, ProviderTruncationError):
+        outcome, reason, finish = "truncated", "PROVIDER_RESPONSE_TRUNCATED", error.finish_reason
+    elif isinstance(error, ProviderValidationError):
+        outcome, reason, finish = "invalid", "PROVIDER_VALIDATION_FAILED", None
+    elif isinstance(error, ProviderError):
+        outcome, reason, finish = "failed", error.code, None
+    elif isinstance(error, TimeoutError):
+        outcome, reason, finish = "failed", "TIMEOUT", None
+    else:
+        outcome, reason, finish = "failed", "CONNECTION", None
+    usage = error.usage if isinstance(error, ProviderError) else None
+    return ModelCall(
+        pass_kind="metadata",
+        block_id=block_id,
+        outcome=outcome,
+        reason=reason,
+        finish_reason=finish,
+        **_usage_fields(usage),
+    )
+
+
+def _identity_mismatch(
+    chunk: SourceChunk, reason: str, response: ProviderResponse[Any]
+) -> _BlockOutcome:
     """Return a validation-failed outcome for a provider answer identity defect."""
     return _BlockOutcome(
         failure=FailedBlock(
@@ -216,6 +272,16 @@ def _identity_mismatch(chunk: SourceChunk, reason: str) -> _BlockOutcome:
             message="One source chunk failed structured validation.",
             severity=DiagnosticSeverity.error,
             details={"block_id": chunk.id, "reason": reason},
+        ),
+        call=ModelCall(
+            pass_kind="extraction",
+            block_id=chunk.id,
+            outcome="invalid",
+            reason=reason,
+            finish_reason=response.finish_reason,
+            transport_attempts=response.transport_attempts,
+            validation_attempts=response.validation_attempts,
+            **_usage_fields(response.usage),
         ),
     )
 
@@ -271,9 +337,12 @@ class ExtractionPipeline:
                 ),
             )
         chunks = chunked.chunks
-        metadata, metadata_diagnostics, metadata_response_sha256 = await self._extract_metadata(
-            chunks, document, active_limiter
-        )
+        (
+            metadata,
+            metadata_diagnostics,
+            metadata_response_sha256,
+            metadata_calls,
+        ) = await self._extract_metadata(chunks, document, active_limiter)
         block_results = await _gather_cancel_on_control(
             tuple(self._extract_block(chunked, chunk, active_limiter) for chunk in chunks)
         )
@@ -281,6 +350,7 @@ class ExtractionPipeline:
         failed_blocks: list[FailedBlock] = list(_source_failures(document))
         diagnostics: list[Diagnostic] = [*metadata_diagnostics]
         response_sha256 = list(metadata_response_sha256)
+        calls: list[ModelCall] = list(metadata_calls)
         diagnostics.extend(_source_diagnostics(document))
         diagnostics.extend(
             Diagnostic(
@@ -309,6 +379,8 @@ class ExtractionPipeline:
                 diagnostics.append(outcome.diagnostic)
             if outcome.response_sha256 is not None:
                 response_sha256.append(outcome.response_sha256)
+            if outcome.call is not None:
+                calls.append(outcome.call)
 
         quality = apply_quality_policy(
             tuple(records),
@@ -330,6 +402,7 @@ class ExtractionPipeline:
                 survey_id=metadata.survey_id,
                 diagnostics=tuple(diagnostics),
                 failed_blocks=tuple(sorted(failed_blocks, key=_failed_block_order)),
+                calls=tuple(calls),
                 artifact_provenance=_artifact_provenance(document, response_sha256),
             )
 
@@ -351,6 +424,7 @@ class ExtractionPipeline:
             output=output,
             diagnostics=tuple(diagnostics),
             failed_blocks=tuple(sorted(failed_blocks, key=_failed_block_order)),
+            calls=tuple(calls),
             artifact_provenance=_artifact_provenance(document, response_sha256),
         )
 
@@ -482,10 +556,16 @@ class ExtractionPipeline:
         chunks: tuple[SourceChunk, ...],
         document: SourceDocument,
         limiter: ConcurrencyLimiter,
-    ) -> tuple[ExtractedMetadata, tuple[Diagnostic, ...], tuple[str, ...]]:
+    ) -> tuple[
+        ExtractedMetadata,
+        tuple[Diagnostic, ...],
+        tuple[str, ...],
+        tuple[ModelCall, ...],
+    ]:
         outcomes = await _gather_cancel_on_control(
             tuple(self._extract_metadata_chunk(chunk, limiter) for chunk in chunks)
         )
+        calls = tuple(outcome[2] for outcome in outcomes)
         successful = tuple(outcome for outcome in outcomes if outcome[0] is not None)
         if not successful:
             return (
@@ -498,6 +578,7 @@ class ExtractionPipeline:
                     ),
                 ),
                 (),
+                calls,
             )
         metadata = successful[0][0]
         assert metadata is not None
@@ -516,13 +597,13 @@ class ExtractionPipeline:
             if incomplete
             else ()
         )
-        return metadata, diagnostics, digests
+        return metadata, diagnostics, digests, calls
 
     async def _extract_metadata_chunk(
         self,
         chunk: SourceChunk,
         limiter: ConcurrencyLimiter,
-    ) -> tuple[ExtractedMetadata | None, str | None]:
+    ) -> tuple[ExtractedMetadata | None, str | None, ModelCall]:
         messages = (
             ProviderMessage(
                 role="system",
@@ -547,9 +628,13 @@ class ExtractionPipeline:
                 limiter=limiter,
             )
             complete = response.require_complete()
-            return complete.output, _response_sha256(complete.output)
-        except (ProviderError, TimeoutError, ConnectionError):
-            return None, None
+            return (
+                complete.output,
+                _response_sha256(complete.output),
+                _success_call("metadata", chunk.id, complete),
+            )
+        except (ProviderError, TimeoutError, ConnectionError) as error:
+            return None, None, _metadata_failure_call(chunk.id, error)
 
     async def _extract_block(
         self,
@@ -572,7 +657,7 @@ class ExtractionPipeline:
                 limiter=limiter,
             )
             extraction = response.require_complete().output
-        except ProviderTruncationError:
+        except ProviderTruncationError as error:
             return _BlockOutcome(
                 failure=FailedBlock(
                     block_id=chunk.id,
@@ -585,8 +670,16 @@ class ExtractionPipeline:
                     severity=DiagnosticSeverity.error,
                     details={"block_id": chunk.id, "reason": "PROVIDER_RESPONSE_TRUNCATED"},
                 ),
+                call=ModelCall(
+                    pass_kind="extraction",
+                    block_id=chunk.id,
+                    outcome="truncated",
+                    reason="PROVIDER_RESPONSE_TRUNCATED",
+                    finish_reason=error.finish_reason,
+                    **_usage_fields(error.usage),
+                ),
             )
-        except ProviderValidationError:
+        except ProviderValidationError as error:
             return _BlockOutcome(
                 failure=FailedBlock(
                     block_id=chunk.id,
@@ -598,6 +691,13 @@ class ExtractionPipeline:
                     message="One source chunk failed structured validation.",
                     severity=DiagnosticSeverity.error,
                     details={"block_id": chunk.id, "reason": "PROVIDER_VALIDATION_FAILED"},
+                ),
+                call=ModelCall(
+                    pass_kind="extraction",
+                    block_id=chunk.id,
+                    outcome="invalid",
+                    reason="PROVIDER_VALIDATION_FAILED",
+                    **_usage_fields(error.usage),
                 ),
             )
         except (ProviderError, TimeoutError, ConnectionError, ValueError) as error:
@@ -627,14 +727,23 @@ class ExtractionPipeline:
                     severity=DiagnosticSeverity.error,
                     details=details,
                 ),
+                call=ModelCall(
+                    pass_kind="extraction",
+                    block_id=chunk.id,
+                    outcome="failed",
+                    reason=reason,
+                    **_usage_fields(
+                        error.usage if isinstance(error, ProviderError) else None
+                    ),
+                ),
             )
         if extraction.block_id != chunk.id:
-            return _identity_mismatch(chunk, "CHUNK_ID_MISMATCH")
+            return _identity_mismatch(chunk, "CHUNK_ID_MISMATCH", response)
         if any(
             not set(variable.source_block_ids).issubset(chunk.block_ids)
             for variable in extraction.variables
         ):
-            return _identity_mismatch(chunk, "SOURCE_BLOCK_ID_MISMATCH")
+            return _identity_mismatch(chunk, "SOURCE_BLOCK_ID_MISMATCH", response)
         provenance_by_id = {part.block_id: part.provenance for part in chunk.parts}
 
         def source_page(item: ExtractedVariable) -> int | None:
@@ -655,6 +764,7 @@ class ExtractionPipeline:
         return _BlockOutcome(
             records=records,
             response_sha256=_response_sha256(extraction),
+            call=_success_call("extraction", chunk.id, response),
         )
 
 

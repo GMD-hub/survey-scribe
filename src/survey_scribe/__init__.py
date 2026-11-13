@@ -59,6 +59,7 @@ from survey_scribe.results import (
     DiagnosticCode,
     ExtractionResult,
     FailedBlock,
+    ModelCall,
     ResultStatus,
 )
 from survey_scribe.routing import QuestionnaireRouter, RoutingConfig
@@ -100,6 +101,7 @@ __all__ = [
     "LoopDefinition",
     "LoopKind",
     "LocalSource",
+    "ModelCall",
     "NumericRange",
     "QuestionnaireRouter",
     "QuestionnaireRoutingGraph",

@@ -295,9 +295,7 @@ class InstructorOpenAIProvider:
                 transport_attempts=transport_attempts,
                 validation_attempts=validation_attempts,
             )
-            if response.truncated:
-                raise ProviderTruncationError()
-            return response
+            return response.require_complete()
         raise ProviderTransportError(retryable=False)
 
     async def aclose(self) -> None:

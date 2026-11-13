@@ -63,6 +63,7 @@ def test_public_api_exports_models_and_version() -> None:
         "ExtractionResult",
         "FailedBlock",
         "LocalSource",
+        "ModelCall",
         "ProgrammerInputError",
         "ResultStatus",
         "RunningEventLoopError",

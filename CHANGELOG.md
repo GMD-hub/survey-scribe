@@ -8,6 +8,22 @@ project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `ExtractionResult.calls` (`ModelCall` values, empty by default): one record per
+  model call across the metadata and extraction passes, reporting `pass_kind`,
+  `block_id`, `outcome` (`ok`, `truncated`, `invalid`, `failed`), the failure
+  `reason`, the normalized `finish_reason`, token usage (`input_tokens`,
+  `output_tokens`, `total_tokens`), and transport and validation attempt counts.
+  `ModelCall` is exported from the package. Calls are carried on the result and in
+  `model_dump`, but are left out of the operational artifact sidecar.
+- `ProviderContentFilterError`: raised when a provider's content filter blocks a
+  request or response, carrying a sanitized `stage` (`request` or `response`) and a
+  bounded, normalized `categories` tuple. A filtered source block reports
+  `PROVIDER_CONTENT_FILTERED` with `filter_stage` and `filter_categories` details
+  and is not retried.
+- Failed-block diagnostics now carry a stable `reason` detail (for example
+  `PROVIDER_RATE_LIMITED`, `TIMEOUT`, `CONNECTION`, `PROVIDER_RESPONSE_TRUNCATED`,
+  `PROVIDER_VALIDATION_FAILED`, `CHUNK_ID_MISMATCH`), plus `retryable` for transport
+  failures, so callers can classify extraction failures without parsing messages.
 - `SurveyVariable.review_reasons` (`ReviewReason` values, empty by default): why
   `needs_review` is set — `model_flagged`, `low_confidence`, `missing_categories`,
   `duplicate_raw_name`, `possible_duplicate`, `unsupported_type` (XLSForm). The quality

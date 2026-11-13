@@ -20,6 +20,7 @@ from survey_scribe.pipeline import (
     PipelineConfig,
 )
 from survey_scribe.providers.base import (
+    NormalizedUsage,
     ProviderCapabilityError,
     ProviderContentFilterError,
     ProviderRateLimitError,
@@ -739,6 +740,140 @@ async def test_pipeline_content_filter_block_reports_filter_details() -> None:
     assert list(diagnostic.details["filter_categories"]) == ["jailbreak"]
     assert filtered_chunk_calls
     assert all(count == 1 for count in filtered_chunk_calls.values())
+
+
+@pytest.mark.asyncio
+async def test_pipeline_records_token_usage_for_successful_block_calls() -> None:
+    document = SourceDocument(
+        source_name="survey.txt",
+        media_type="text/plain",
+        blocks=(
+            SourceBlock(
+                id="one",
+                order=0,
+                kind="text",
+                text="a" * 100,
+                provenance=SourceProvenance(source_name="survey.txt", page=1),
+            ),
+            SourceBlock(
+                id="two",
+                order=1,
+                kind="text",
+                text="b" * 100,
+                provenance=SourceProvenance(source_name="survey.txt", page=2),
+            ),
+        ),
+        snapshot_sha256="a" * 64,
+    )
+    usage = NormalizedUsage(input_tokens=100, output_tokens=400, total_tokens=500)
+
+    def _block_step(chunk_id: str, block_id: str) -> FakeStep:
+        return FakeStep.output(
+            BlockExtraction(
+                block_id=chunk_id,
+                variables=(
+                    ExtractedVariable(
+                        variable=SurveyVariable(
+                            raw_name=block_id,
+                            data_type=DataType.text,
+                            extraction_confidence=1.0,
+                        ),
+                        source_block_ids=(block_id,),
+                    ),
+                ),
+            ),
+            usage=usage,
+        )
+
+    provider = DeterministicFakeProvider(
+        capabilities=_capabilities(),
+        steps=(
+            FakeStep.output(_metadata()),
+            FakeStep.output(_metadata()),
+            _block_step("chunk-000001", "one"),
+            _block_step("chunk-000002", "two"),
+        ),
+    )
+    result = await ExtractionPipeline(
+        provider,
+        config=PipelineConfig(
+            max_request_tokens=1_630, overlap_tokens=0, max_concurrency=1
+        ),
+        extraction_date=date(2026, 9, 3),
+    ).extract(document)
+
+    assert result.status is ResultStatus.success
+    assert [call.pass_kind for call in result.calls] == [
+        "metadata",
+        "metadata",
+        "extraction",
+        "extraction",
+    ]
+    extraction_calls = [call for call in result.calls if call.pass_kind == "extraction"]
+    assert len(extraction_calls) == 2
+    for call in extraction_calls:
+        assert call.outcome == "ok"
+        assert call.input_tokens == 100
+        assert call.output_tokens == 400
+        assert call.total_tokens == 500
+
+
+@pytest.mark.asyncio
+async def test_pipeline_records_token_usage_on_a_truncated_block_call() -> None:
+    usage = NormalizedUsage(
+        input_tokens=100, output_tokens=32_768, total_tokens=32_868
+    )
+    provider = DeterministicFakeProvider(
+        capabilities=_capabilities(),
+        steps=(
+            FakeStep.output(_metadata()),
+            FakeStep.output(
+                BlockExtraction(block_id="chunk-000001", variables=()),
+                finish_reason="length",
+                usage=usage,
+            ),
+        ),
+    )
+    result = await ExtractionPipeline(
+        provider,
+        extraction_date=date(2026, 9, 3),
+    ).extract(_document())
+
+    assert DiagnosticCode.provider_truncated in {
+        diagnostic.code for diagnostic in result.diagnostics
+    }
+    truncated_calls = [call for call in result.calls if call.outcome == "truncated"]
+    assert len(truncated_calls) == 1
+    call = truncated_calls[0]
+    assert call.pass_kind == "extraction"
+    assert call.reason == "PROVIDER_RESPONSE_TRUNCATED"
+    assert call.finish_reason == "length"
+    assert call.input_tokens == 100
+    assert call.output_tokens == 32_768
+    assert call.total_tokens == 32_868
+
+
+@pytest.mark.asyncio
+async def test_pipeline_records_a_failed_call_without_token_usage_on_timeout() -> None:
+    async def timed_out(request: FakeRequest) -> object:
+        if request.response_model is ExtractedMetadata:
+            return _metadata()
+        raise TimeoutError("private source text")
+
+    result = await ExtractionPipeline(
+        DeterministicFakeProvider(capabilities=_capabilities(), responder=timed_out),
+        extraction_date=date(2026, 9, 3),
+    ).extract(_document())
+
+    extraction_calls = [call for call in result.calls if call.pass_kind == "extraction"]
+    assert len(extraction_calls) == 1
+    call = extraction_calls[0]
+    assert call.outcome == "failed"
+    assert call.reason == "TIMEOUT"
+    assert call.input_tokens is None
+    assert call.output_tokens is None
+    assert call.total_tokens is None
+    assert "private source text" not in result.model_dump_json()
 
 
 @pytest.mark.asyncio
