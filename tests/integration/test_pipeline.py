@@ -19,9 +19,13 @@ from survey_scribe.pipeline import (
     ExtractionPipeline,
     PipelineConfig,
 )
+from survey_scribe.providers.base import (
+    ProviderCapabilityError,
+    ProviderRateLimitError,
+)
 from survey_scribe.providers.capabilities import CapabilityEvidence, ModelCapabilities
 from survey_scribe.providers.testing import DeterministicFakeProvider, FakeRequest, FakeStep
-from survey_scribe.results import DiagnosticCode, ResultStatus
+from survey_scribe.results import Diagnostic, DiagnosticCode, ResultStatus
 from survey_scribe.sources.base import (
     SourceBlock,
     SourceCoverage,
@@ -575,6 +579,99 @@ async def test_pipeline_returns_failed_when_all_blocks_fail_and_propagates_cance
             cancelled_provider,
             extraction_date=date(2026, 9, 3),
         ).extract(_document())
+
+
+def _metadata() -> ExtractedMetadata:
+    return ExtractedMetadata(
+        survey_id="TST_2026_SYN",
+        country_code="TST",
+        year=2026,
+        survey_name="Synthetic Survey",
+    )
+
+
+def _block_diagnostic(result: object) -> Diagnostic:
+    codes = {
+        DiagnosticCode.provider_failed,
+        DiagnosticCode.validation_failed,
+        DiagnosticCode.provider_truncated,
+    }
+    return next(
+        diagnostic
+        for diagnostic in result.diagnostics  # type: ignore[attr-defined]
+        if diagnostic.code in codes
+    )
+
+
+@pytest.mark.asyncio
+async def test_pipeline_failed_block_diagnostics_carry_reason() -> None:
+    async def rate_limited(request: FakeRequest) -> object:
+        if request.response_model is ExtractedMetadata:
+            return _metadata()
+        raise ProviderRateLimitError()
+
+    rate_result = await ExtractionPipeline(
+        DeterministicFakeProvider(capabilities=_capabilities(), responder=rate_limited),
+        config=PipelineConfig(retry=RetryConfig(max_attempts=1)),
+        extraction_date=date(2026, 9, 3),
+    ).extract(_document())
+    rate_diagnostic = _block_diagnostic(rate_result)
+    assert rate_diagnostic.code is DiagnosticCode.provider_failed
+    assert rate_diagnostic.details["reason"] == "PROVIDER_RATE_LIMITED"
+    assert rate_diagnostic.details["retryable"] is True
+
+    async def timed_out(request: FakeRequest) -> object:
+        if request.response_model is ExtractedMetadata:
+            return _metadata()
+        raise TimeoutError("private source text")
+
+    timeout_result = await ExtractionPipeline(
+        DeterministicFakeProvider(capabilities=_capabilities(), responder=timed_out),
+        extraction_date=date(2026, 9, 3),
+    ).extract(_document())
+    assert _block_diagnostic(timeout_result).details["reason"] == "TIMEOUT"
+    assert "private source text" not in timeout_result.model_dump_json()
+
+    async def wrong_chunk(request: FakeRequest) -> object:
+        if request.response_model is ExtractedMetadata:
+            return _metadata()
+        return BlockExtraction(
+            block_id="chunk-999999",
+            variables=tuple(
+                ExtractedVariable(
+                    variable=SurveyVariable(
+                        raw_name=block_id,
+                        data_type=DataType.text,
+                        extraction_confidence=1.0,
+                    ),
+                    source_block_ids=(block_id,),
+                )
+                for block_id in _source_block_ids(request)
+            ),
+        )
+
+    mismatch_result = await ExtractionPipeline(
+        DeterministicFakeProvider(capabilities=_capabilities(), responder=wrong_chunk),
+        extraction_date=date(2026, 9, 3),
+    ).extract(_document())
+    mismatch_diagnostic = _block_diagnostic(mismatch_result)
+    assert mismatch_diagnostic.code is DiagnosticCode.validation_failed
+    assert mismatch_diagnostic.details["reason"] == "CHUNK_ID_MISMATCH"
+
+    async def capability(request: FakeRequest) -> object:
+        if request.response_model is ExtractedMetadata:
+            return _metadata()
+        raise ProviderCapabilityError("input_limit")
+
+    capability_result = await ExtractionPipeline(
+        DeterministicFakeProvider(capabilities=_capabilities(), responder=capability),
+        config=PipelineConfig(retry=RetryConfig(max_attempts=1)),
+        extraction_date=date(2026, 9, 3),
+    ).extract(_document())
+    assert (
+        _block_diagnostic(capability_result).details["reason"]
+        == "PROVIDER_CAPABILITY_UNSUPPORTED"
+    )
 
 
 @pytest.mark.asyncio

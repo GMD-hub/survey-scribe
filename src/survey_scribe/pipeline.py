@@ -32,6 +32,7 @@ from survey_scribe.providers.base import (
     ProviderError,
     ProviderMessage,
     ProviderResponse,
+    ProviderTransportError,
     ProviderTruncationError,
     ProviderValidationError,
     StructuredProvider,
@@ -199,6 +200,23 @@ class _BlockOutcome:
     failure: FailedBlock | None = None
     diagnostic: Diagnostic | None = None
     response_sha256: str | None = None
+
+
+def _identity_mismatch(chunk: SourceChunk, reason: str) -> _BlockOutcome:
+    """Return a validation-failed outcome for a provider answer identity defect."""
+    return _BlockOutcome(
+        failure=FailedBlock(
+            block_id=chunk.id,
+            message="The source chunk remained invalid after bounded validation retries.",
+            source_order=chunk.order,
+        ),
+        diagnostic=Diagnostic(
+            code=DiagnosticCode.validation_failed,
+            message="One source chunk failed structured validation.",
+            severity=DiagnosticSeverity.error,
+            details={"block_id": chunk.id, "reason": reason},
+        ),
+    )
 
 
 class ExtractionPipeline:
@@ -553,13 +571,6 @@ class ExtractionPipeline:
                 limiter=limiter,
             )
             extraction = response.require_complete().output
-            if extraction.block_id != chunk.id:
-                raise ValueError("provider chunk identity mismatch")
-            if any(
-                not set(variable.source_block_ids).issubset(chunk.block_ids)
-                for variable in extraction.variables
-            ):
-                raise ValueError("provider source block identity mismatch")
         except ProviderTruncationError:
             return _BlockOutcome(
                 failure=FailedBlock(
@@ -571,7 +582,7 @@ class ExtractionPipeline:
                     code=DiagnosticCode.provider_truncated,
                     message="One source chunk response was truncated.",
                     severity=DiagnosticSeverity.error,
-                    details={"block_id": chunk.id},
+                    details={"block_id": chunk.id, "reason": "PROVIDER_RESPONSE_TRUNCATED"},
                 ),
             )
         except ProviderValidationError:
@@ -585,10 +596,21 @@ class ExtractionPipeline:
                     code=DiagnosticCode.validation_failed,
                     message="One source chunk failed structured validation.",
                     severity=DiagnosticSeverity.error,
-                    details={"block_id": chunk.id},
+                    details={"block_id": chunk.id, "reason": "PROVIDER_VALIDATION_FAILED"},
                 ),
             )
-        except (ProviderError, TimeoutError, ConnectionError, ValueError):
+        except (ProviderError, TimeoutError, ConnectionError, ValueError) as error:
+            if isinstance(error, ProviderError):
+                reason = error.code
+            elif isinstance(error, TimeoutError):
+                reason = "TIMEOUT"
+            elif isinstance(error, ConnectionError):
+                reason = "CONNECTION"
+            else:
+                reason = "INTERNAL"
+            details: dict[str, Any] = {"block_id": chunk.id, "reason": reason}
+            if isinstance(error, ProviderTransportError):
+                details["retryable"] = error.retryable
             return _BlockOutcome(
                 failure=FailedBlock(
                     block_id=chunk.id,
@@ -599,9 +621,16 @@ class ExtractionPipeline:
                     code=DiagnosticCode.provider_failed,
                     message="One source chunk failed structured extraction.",
                     severity=DiagnosticSeverity.error,
-                    details={"block_id": chunk.id},
+                    details=details,
                 ),
             )
+        if extraction.block_id != chunk.id:
+            return _identity_mismatch(chunk, "CHUNK_ID_MISMATCH")
+        if any(
+            not set(variable.source_block_ids).issubset(chunk.block_ids)
+            for variable in extraction.variables
+        ):
+            return _identity_mismatch(chunk, "SOURCE_BLOCK_ID_MISMATCH")
         provenance_by_id = {part.block_id: part.provenance for part in chunk.parts}
 
         def source_page(item: ExtractedVariable) -> int | None:
