@@ -23,7 +23,10 @@ from survey_scribe.providers.base import (
     NormalizedUsage,
     ProviderCapabilityError,
     ProviderContentFilterError,
+    ProviderError,
     ProviderRateLimitError,
+    ProviderTruncationError,
+    ProviderValidationError,
 )
 from survey_scribe.providers.capabilities import CapabilityEvidence, ModelCapabilities
 from survey_scribe.providers.testing import DeterministicFakeProvider, FakeRequest, FakeStep
@@ -478,11 +481,16 @@ async def test_pipeline_splits_a_table_whose_header_is_too_wide_into_column_band
         for part in chunk.parts
         if part.id in chunk.new_part_ids and part.table is not None
     ]
-    bands = list(dict.fromkeys(part.columns for part in table_parts))
+    assert all(part.columns is not None for part in table_parts)
+    bands = list(dict.fromkeys(part.columns for part in table_parts if part.columns is not None))
     assert len(bands) >= 2 and bands[0][0] == 0 and bands[-1][1] == 8
     for band in bands:
-        assert [row for part in table_parts if part.columns == band and part.table
-                for row in part.table.rows[1:]] == [row[band[0]:band[1]] for row in rows[1:]]
+        assert [
+            row
+            for part in table_parts
+            if part.columns == band and part.table
+            for row in part.table.rows[1:]
+        ] == [row[band[0] : band[1]] for row in rows[1:]]
     [warning] = [d for d in result.diagnostics if d.code == DiagnosticCode.source_table_split]
     assert warning.details == {
         "table_id": "table-7",
@@ -491,6 +499,7 @@ async def test_pipeline_splits_a_table_whose_header_is_too_wide_into_column_band
         "column_bands": len(bands),
     }
     assert "column bands" in warning.message
+
 
 @pytest.mark.asyncio
 async def test_pipeline_uses_metadata_fallback_and_accounts_for_unreadable_units() -> None:
@@ -671,8 +680,7 @@ async def test_pipeline_failed_block_diagnostics_carry_reason() -> None:
         extraction_date=date(2026, 9, 3),
     ).extract(_document())
     assert (
-        _block_diagnostic(capability_result).details["reason"]
-        == "PROVIDER_CAPABILITY_UNSUPPORTED"
+        _block_diagnostic(capability_result).details["reason"] == "PROVIDER_CAPABILITY_UNSUPPORTED"
     )
 
 
@@ -796,9 +804,7 @@ async def test_pipeline_records_token_usage_for_successful_block_calls() -> None
     )
     result = await ExtractionPipeline(
         provider,
-        config=PipelineConfig(
-            max_request_tokens=1_630, overlap_tokens=0, max_concurrency=1
-        ),
+        config=PipelineConfig(max_request_tokens=1_630, overlap_tokens=0, max_concurrency=1),
         extraction_date=date(2026, 9, 3),
     ).extract(document)
 
@@ -820,9 +826,7 @@ async def test_pipeline_records_token_usage_for_successful_block_calls() -> None
 
 @pytest.mark.asyncio
 async def test_pipeline_records_token_usage_on_a_truncated_block_call() -> None:
-    usage = NormalizedUsage(
-        input_tokens=100, output_tokens=32_768, total_tokens=32_868
-    )
+    usage = NormalizedUsage(input_tokens=100, output_tokens=32_768, total_tokens=32_868)
     provider = DeterministicFakeProvider(
         capabilities=_capabilities(),
         steps=(
@@ -851,6 +855,60 @@ async def test_pipeline_records_token_usage_on_a_truncated_block_call() -> None:
     assert call.input_tokens == 100
     assert call.output_tokens == 32_768
     assert call.total_tokens == 32_868
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error", "outcome", "reason", "expected_usage"),
+    [
+        (ProviderTruncationError(), "truncated", "PROVIDER_RESPONSE_TRUNCATED", (11, 7, 18)),
+        (ProviderValidationError(), "invalid", "PROVIDER_VALIDATION_FAILED", (11, 7, 18)),
+        (ProviderCapabilityError(), "failed", "PROVIDER_CAPABILITY_UNSUPPORTED", (11, 7, 18)),
+        (TimeoutError("private source text"), "failed", "TIMEOUT", (None, None, None)),
+        (ConnectionError("private source text"), "failed", "CONNECTION", (None, None, None)),
+    ],
+)
+async def test_metadata_failure_records_reason_and_available_usage(
+    error: BaseException,
+    outcome: str,
+    reason: str,
+    expected_usage: tuple[int | None, int | None, int | None],
+) -> None:
+    if isinstance(error, ProviderError):
+        error.with_usage(NormalizedUsage(input_tokens=11, output_tokens=7, total_tokens=18))
+    provider = DeterministicFakeProvider(
+        capabilities=_capabilities(),
+        steps=(
+            FakeStep.raises(error),
+            FakeStep.output(
+                BlockExtraction(
+                    block_id="chunk-000001",
+                    variables=(
+                        ExtractedVariable(
+                            variable=SurveyVariable(
+                                raw_name="age",
+                                data_type=DataType.numeric,
+                                extraction_confidence=1.0,
+                            ),
+                            source_block_ids=("block-0",),
+                        ),
+                    ),
+                )
+            ),
+        ),
+    )
+
+    result = await ExtractionPipeline(provider, extraction_date=date(2026, 9, 3)).extract(
+        _document()
+    )
+
+    assert result.status is ResultStatus.partial
+    [call] = [call for call in result.calls if call.pass_kind == "metadata"]
+    assert call.block_id == "chunk-000001"
+    assert call.outcome == outcome
+    assert call.reason == reason
+    assert (call.input_tokens, call.output_tokens, call.total_tokens) == expected_usage
+    assert "private source text" not in result.model_dump_json()
 
 
 @pytest.mark.asyncio

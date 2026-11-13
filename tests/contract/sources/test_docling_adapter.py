@@ -350,9 +350,7 @@ def test_inprocess_isolation_runs_the_conversion_without_a_child(tmp_path: Path)
     path = tmp_path / "questionnaire.pdf"
     _write_pdf(path)
 
-    document = DoclingPdfAdapter(
-        converter=pid_pdf_conversion, isolation="inprocess"
-    ).convert(
+    document = DoclingPdfAdapter(converter=pid_pdf_conversion, isolation="inprocess").convert(
         resolve_local_source(path),
         limits=replace(DEFAULT_SOURCE_LIMITS, deadline_seconds=10),
     )
@@ -413,9 +411,7 @@ def test_worker_isolation_deadline_is_typed_and_recreates_the_worker(
 
 
 @pytest.mark.parametrize("isolation", ["process", "worker"])
-def test_block_network_toggles_the_worker_socket_denial(
-    tmp_path: Path, isolation: str
-) -> None:
+def test_block_network_toggles_the_worker_socket_denial(tmp_path: Path, isolation: str) -> None:
     path = tmp_path / "questionnaire.pdf"
     _write_pdf(path)
     limits = replace(DEFAULT_SOURCE_LIMITS, deadline_seconds=10)
@@ -466,7 +462,6 @@ def test_isolation_from_environment_rejects_an_unknown_mode(
     monkeypatch.setenv("SURVEY_SCRIBE_PDF_ISOLATION", "vm")
     with pytest.raises(ValueError, match="ISOLATION"):
         docling_source.isolation_from_environment()
-
 
 
 def test_pdf_worker_surfaces_the_underlying_error(tmp_path: Path) -> None:
@@ -893,7 +888,7 @@ def test_docling_table_rows_write_a_merged_cell_once() -> None:
         for group in _SPANNING_CELLS
         for text, rows, cols in group
     ]
-    grid = [[None] * 6 for _ in range(4)]
+    grid: list[list[SimpleNamespace | None]] = [[None] * 6 for _ in range(4)]
     for cell in cells:  # as Docling's grid: a merged cell in every position it covers
         for r in range(cell.start_row_offset_idx, cell.end_row_offset_idx):
             for c in range(cell.start_col_offset_idx, cell.end_col_offset_idx):

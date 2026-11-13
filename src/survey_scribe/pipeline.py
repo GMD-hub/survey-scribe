@@ -15,7 +15,7 @@ from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Any, Generic, Literal, TypeVar, cast
+from typing import Any, Generic, Literal, TypedDict, TypeVar, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -206,7 +206,13 @@ class _BlockOutcome:
     call: ModelCall | None = None
 
 
-def _usage_fields(usage: NormalizedUsage | None) -> dict[str, int | None]:
+class _UsageFields(TypedDict):
+    input_tokens: int | None
+    output_tokens: int | None
+    total_tokens: int | None
+
+
+def _usage_fields(usage: NormalizedUsage | None) -> _UsageFields:
     if usage is None:
         return {"input_tokens": None, "output_tokens": None, "total_tokens": None}
     return {
@@ -732,9 +738,7 @@ class ExtractionPipeline:
                     block_id=chunk.id,
                     outcome="failed",
                     reason=reason,
-                    **_usage_fields(
-                        error.usage if isinstance(error, ProviderError) else None
-                    ),
+                    **_usage_fields(error.usage if isinstance(error, ProviderError) else None),
                 ),
             )
         if extraction.block_id != chunk.id:
@@ -1235,9 +1239,7 @@ def apply_quality_policy(
             continue
 
         updates: dict[str, object] = {}
-        reasons: list[ReviewReason] = (
-            [ReviewReason.model_flagged] if variable.needs_review else []
-        )
+        reasons: list[ReviewReason] = [ReviewReason.model_flagged] if variable.needs_review else []
         if variable.extraction_confidence < confidence_threshold:
             reasons.append(ReviewReason.low_confidence)
             diagnostics.append(

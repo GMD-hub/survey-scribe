@@ -271,9 +271,9 @@ class ProviderContentFilterError(ProviderError):
         categories: Sequence[str] = (),
     ) -> None:
         self.stage = stage
-        self.categories = tuple(
-            sorted({c for c in categories if _FILTER_CATEGORY.fullmatch(c)})
-        )[:8]
+        self.categories = tuple(sorted({c for c in categories if _FILTER_CATEGORY.fullmatch(c)}))[
+            :8
+        ]
         super().__init__()
 
 

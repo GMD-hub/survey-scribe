@@ -105,6 +105,10 @@ project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Reusable PDF workers are discarded if a progress callback or cumulative table-cell
+  limit aborts conversion, so pending results cannot reach the next document.
+- Added offline worker protocol and failure-path tests to maintain the 95% coverage
+  requirement, and corrected model-call usage typing and column-band test checks.
 - PDF contract tests now cover text-layer conversion without relying on missing
   optional dependencies. OCR modes keep local model and offline conversion controls.
 - Inferred heading paths preserve sibling sections even when heading levels are skipped.
@@ -137,6 +141,8 @@ project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Security
 
+- Python 3.11 now requires patch version 3.11.5 or later so the PDF dependency stack
+  can use the fixed Soup Sieve release. Python 3.12 and 3.13 remain supported.
 - Updated vulnerable locked dependencies and the compatible Docling stack. The
   existing time-limited `diskcache` and `accelerate` exceptions are unchanged.
 

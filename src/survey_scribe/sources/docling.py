@@ -12,7 +12,7 @@ import time
 import traceback
 import zipfile
 from collections.abc import Iterable, Iterator, Mapping
-from contextlib import AbstractContextManager, ExitStack, contextmanager, nullcontext
+from contextlib import AbstractContextManager, ExitStack, contextmanager, nullcontext, suppress
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from importlib import import_module
@@ -792,11 +792,7 @@ class _WorkerRunner:
         self._converter: PdfConverter | None = None
 
     def _ensure_started(self, converter: PdfConverter) -> None:
-        if (
-            self._process is not None
-            and self._process.is_alive()
-            and self._converter is converter
-        ):
+        if self._process is not None and self._process.is_alive() and self._converter is converter:
             return
         self._shutdown()
         self._converter = converter
@@ -829,10 +825,8 @@ class _WorkerRunner:
         if self._process is None:
             return
         if self._process.is_alive() and self._requests is not None:
-            try:
+            with suppress(ValueError, OSError):
                 self._requests.put(None)
-            except (ValueError, OSError):
-                pass
         _bounded_process_cleanup(self._process)
         self._discard()
 
@@ -917,13 +911,18 @@ class _WorkerRunner:
                     and isinstance(payload, PdfConversion)
                     and len(chunks) < len(ranges)
                 ):
-                    if max_cells is not None:
-                        for block in payload.blocks:
-                            if block.table_rows:
-                                cells = _add_table_cells(cells, block.table_rows, max_cells)
-                    chunks.append((ranges[len(chunks)], payload))
-                    if progress is not None:
-                        progress(sum(last - first + 1 for (first, last), _ in chunks), total)
+                    try:
+                        if max_cells is not None:
+                            for block in payload.blocks:
+                                if block.table_rows:
+                                    cells = _add_table_cells(cells, block.table_rows, max_cells)
+                        chunks.append((ranges[len(chunks)], payload))
+                        if progress is not None:
+                            progress(sum(last - first + 1 for (first, last), _ in chunks), total)
+                    except BaseException:
+                        # Pending responses must not reach the next document after an abort.
+                        self._kill()
+                        raise
                     continue
                 if status == "done" and len(chunks) == len(ranges):
                     return chunks, False
@@ -947,7 +946,7 @@ def _make_pdf_runner(isolation: IsolationMode, *, block_network: bool) -> _PdfRu
 def _persistent_pdf_worker(
     converter: PdfConverter,
     block_network: bool,
-    requests: Any,
+    jobs: Any,
     responses: Any,
 ) -> None:
     """One long-lived worker: load the models once, then convert each requested document."""
@@ -959,7 +958,7 @@ def _persistent_pdf_worker(
         opened = False
         while True:
             try:
-                job = requests.get()
+                job = jobs.get()
             except (EOFError, OSError):
                 return
             if job is None:
@@ -1159,8 +1158,7 @@ class DoclingPdfAdapter:
             if chunk.coverage is None:
                 converted.update(range(first, last + 1))
             elif (
-                chunk.coverage.unit != "page"
-                or chunk.coverage.total_units != effective_page_count
+                chunk.coverage.unit != "page" or chunk.coverage.total_units != effective_page_count
             ):
                 raise SourceConversionError("PDF conversion coverage does not match its page count")
             else:
@@ -1377,9 +1375,7 @@ def _source_blocks(
             )
             kind = "table"
         text = (
-            render_table(converted.table_rows)
-            if converted.table_rows
-            else converted.text.strip()
+            render_table(converted.table_rows) if converted.table_rows else converted.text.strip()
         )
         if not text:
             continue
@@ -1598,8 +1594,7 @@ def _run_pdf_worker(
         except ChildProcessError:
             _bounded_process_cleanup(process)
             raise SourceConversionError(
-                f"{kind} conversion worker exited before returning a result"
-                f"{_exit_note(process)}"
+                f"{kind} conversion worker exited before returning a result{_exit_note(process)}"
             ) from None
         _bounded_process_cleanup(process)
         if status == "ok" and isinstance(payload, PdfConversion):
@@ -1677,8 +1672,7 @@ def _run_pdf_range_worker(
             except ChildProcessError:
                 _bounded_process_cleanup(process)
                 raise SourceConversionError(
-                    "PDF conversion worker exited before returning a result"
-                    f"{_exit_note(process)}"
+                    f"PDF conversion worker exited before returning a result{_exit_note(process)}"
                 ) from None
             if (
                 status == "chunk"

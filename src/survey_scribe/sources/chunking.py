@@ -346,14 +346,28 @@ def _split_table(
     band, rows in source order within each.
     """
     try:
-        return _row_groups(block, table, None, max_tokens=max_tokens, group_budget=group_budget,
-                           estimator=estimator)
+        return _row_groups(
+            block,
+            table,
+            None,
+            max_tokens=max_tokens,
+            group_budget=group_budget,
+            estimator=estimator,
+        )
     except SourceTableLimitError:
         pass
     pieces: list[tuple[str, SourceProvenance, SourceTable, tuple[int, int] | None]] = []
     for columns in _column_bands(block, table, max_tokens=max_tokens, estimator=estimator):
-        pieces.extend(_row_groups(block, table, columns, max_tokens=max_tokens,
-                                  group_budget=group_budget, estimator=estimator))
+        pieces.extend(
+            _row_groups(
+                block,
+                table,
+                columns,
+                max_tokens=max_tokens,
+                group_budget=group_budget,
+                estimator=estimator,
+            )
+        )
     return tuple(pieces)
 
 

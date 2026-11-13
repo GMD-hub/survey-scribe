@@ -133,7 +133,7 @@ def test_distribution_metadata_is_publishable(repository_root: Path, artifact_ki
     ]
     assert metadata["Maintainer"] is None
     assert metadata["License-Expression"] == "MIT"
-    assert metadata["Requires-Python"] == "<3.14,>=3.11"
+    assert metadata["Requires-Python"] == "<3.14,>=3.11.5"
     assert "defusedxml<1,>=0.7.1" in metadata.get_all("Requires-Dist", [])
     assert "pydantic<3,>=2.11.7" in metadata.get_all("Requires-Dist", [])
     assert "Typing :: Typed" in metadata.get_all("Classifier", [])
