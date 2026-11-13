@@ -30,7 +30,7 @@ if TYPE_CHECKING:
     from survey_scribe.models.routing import RoutingSourceBinding
     from survey_scribe.models.svis import SurveySVIS
     from survey_scribe.routing.native import NativeRoutingSemantics
-    from survey_scribe.sources.docling import PdfConversionOptions
+    from survey_scribe.sources.docling import IsolationMode, PdfConversionOptions
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,6 +129,15 @@ class NativeSvisSourceAdapter(DeadlineSourceAdapter, Protocol):
         ...
 
 
+@runtime_checkable
+class CloseableSourceAdapter(SourceAdapter, Protocol):
+    """Adapter extension that owns a long-lived resource to release on registry close."""
+
+    def close(self) -> None:
+        """Release any long-lived worker or handle this adapter holds."""
+        ...
+
+
 class SourceRegistry:
     """Map verified file suffixes to minimal source adapters."""
 
@@ -145,14 +154,33 @@ class SourceRegistry:
         """Return the lower-case file suffixes this registry converts."""
         return frozenset(self._adapters)
 
+    def close(self) -> None:
+        """Release every adapter that owns a long-lived worker or handle."""
+        for adapter in dict.fromkeys(self._adapters.values()):
+            if isinstance(adapter, CloseableSourceAdapter):
+                adapter.close()
+
     @classmethod
-    def default(cls, *, pdf_options: PdfConversionOptions | None = None) -> SourceRegistry:
+    def default(
+        cls,
+        *,
+        pdf_options: PdfConversionOptions | None = None,
+        isolation: IsolationMode | None = None,
+        block_network: bool | None = None,
+    ) -> SourceRegistry:
         """Create the verified Tier 1 registry without importing optional SDKs.
 
         Args:
             pdf_options: How the PDF adapter reads a document. ``None`` reads the
                 ``SURVEY_SCRIBE_PDF_*`` environment variables, which leave the
                 established defaults in place when unset.
+            isolation: How the Docling PDF and Office adapters isolate a conversion:
+                ``"process"`` (fresh worker per document, the default), ``"worker"``
+                (one reused worker that loads the models once), or ``"inprocess"``
+                (no child). ``None`` reads ``SURVEY_SCRIBE_PDF_ISOLATION``.
+            block_network: Deny the worker's sockets in ``"process"`` and ``"worker"``
+                isolation. ``None`` reads ``SURVEY_SCRIBE_PDF_BLOCK_NETWORK`` (the
+                default blocks the network). Ignored by ``"inprocess"``.
 
         Returns:
             A registry for PDF, DOCX, XLSX, CSV, HTML, Markdown, and text files, and the
@@ -166,18 +194,26 @@ class SourceRegistry:
             MarkdownAdapter,
             PdfConversionOptions,
             TextAdapter,
+            block_network_from_environment,
+            isolation_from_environment,
         )
         from survey_scribe.sources.tabular import CsvAdapter
         from survey_scribe.sources.xlsform import XlsFormAdapter
 
         options = pdf_options or PdfConversionOptions.from_environment()
+        mode = isolation_from_environment() if isolation is None else isolation
+        block = block_network_from_environment() if block_network is None else block_network
         return cls(
             {
-                ".pdf": DoclingPdfAdapter(options=options),
+                ".pdf": DoclingPdfAdapter(options=options, isolation=mode, block_network=block),
                 ".docx": DocxAdapter(),
                 ".xlsx": XlsFormAdapter(),
-                ".doc": DoclingOfficeAdapter("doc", options=options),
-                ".xls": DoclingOfficeAdapter("xls", options=options),
+                ".doc": DoclingOfficeAdapter(
+                    "doc", options=options, isolation=mode, block_network=block
+                ),
+                ".xls": DoclingOfficeAdapter(
+                    "xls", options=options, isolation=mode, block_network=block
+                ),
                 ".csv": CsvAdapter(),
                 ".html": HtmlAdapter(),
                 ".htm": HtmlAdapter(),

@@ -8,6 +8,15 @@ project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- PDF and Office adapter isolation modes (`SourceRegistry.default(isolation=...)` or
+  `SURVEY_SCRIBE_PDF_ISOLATION`): `"process"` (the default — a fresh killable worker
+  per document, as before), `"worker"` (one long-lived spawned worker per adapter
+  instance that loads the Docling models once and streams documents through it, killed
+  on a deadline or on `close()`), and `"inprocess"` (no child, for a container that is
+  itself the disposable sandbox). `block_network` (or `SURVEY_SCRIBE_PDF_BLOCK_NETWORK`)
+  denies the worker's sockets in `"process"` and `"worker"`; `"inprocess"` never patches
+  the host process's sockets. `SourceRegistry.close()` and the adapters' `close()`
+  release a long-lived worker; the client facade closes the registry on `aclose()`.
 - `ExtractionResult.calls` (`ModelCall` values, empty by default): one record per
   model call across the metadata and extraction passes, reporting `pass_kind`,
   `block_id`, `outcome` (`ok`, `truncated`, `invalid`, `failed`), the failure

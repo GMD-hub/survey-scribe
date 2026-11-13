@@ -232,6 +232,9 @@ class SurveyScribe:
                 outcome = close_sync()
                 if inspect.isawaitable(outcome):
                     await outcome
+        registry_close = getattr(self._registry, "close", None)
+        if callable(registry_close):
+            registry_close()
         self._closed = True
 
     def __enter__(self) -> Self:

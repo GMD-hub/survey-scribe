@@ -38,6 +38,7 @@ from survey_scribe.sources.docling import (
     PdfConversion,
     PdfConversionBlock,
 )
+from survey_scribe.sources.registry import SourceRegistry
 
 
 def fake_pdf_conversion(path: str, artifacts_path: str | None) -> PdfConversion:
@@ -71,6 +72,28 @@ def network_pdf_conversion(path: str, artifacts_path: str | None) -> PdfConversi
     del path, artifacts_path
     socket.create_connection(("example.invalid", 443), timeout=1)
     return PdfConversion(page_count=1, blocks=())
+
+
+def pid_pdf_conversion(path: str, artifacts_path: str | None) -> PdfConversion:
+    """Report the process the conversion ran in, to prove isolation-mode placement."""
+    del path, artifacts_path
+    return PdfConversion(
+        page_count=1,
+        blocks=(PdfConversionBlock(text=str(os.getpid()), page=1),),
+    )
+
+
+def network_probe_conversion(path: str, artifacts_path: str | None) -> PdfConversion:
+    """Report whether the worker's sockets are denied, without a real connection."""
+    del path, artifacts_path
+    try:
+        connection = socket.create_connection(("203.0.113.1", 9), timeout=0.05)
+    except OSError as error:
+        state = "blocked" if "Network access is disabled" in str(error) else "open"
+    else:
+        connection.close()
+        state = "open"
+    return PdfConversion(page_count=1, blocks=(PdfConversionBlock(text=state, page=1),))
 
 
 def dependency_pdf_conversion(path: str, artifacts_path: str | None) -> PdfConversion:
@@ -321,6 +344,129 @@ def test_pdf_worker_blocks_network_even_for_an_injected_converter(tmp_path: Path
         )
     assert raised.value.detail is not None
     assert "Network access is disabled" in raised.value.detail
+
+
+def test_inprocess_isolation_runs_the_conversion_without_a_child(tmp_path: Path) -> None:
+    path = tmp_path / "questionnaire.pdf"
+    _write_pdf(path)
+
+    document = DoclingPdfAdapter(
+        converter=pid_pdf_conversion, isolation="inprocess"
+    ).convert(
+        resolve_local_source(path),
+        limits=replace(DEFAULT_SOURCE_LIMITS, deadline_seconds=10),
+    )
+
+    assert document.blocks[0].text == str(os.getpid())
+
+
+def test_worker_isolation_reuses_one_long_lived_process(tmp_path: Path) -> None:
+    path = tmp_path / "questionnaire.pdf"
+    _write_pdf(path)
+    adapter = DoclingPdfAdapter(converter=pid_pdf_conversion, isolation="worker")
+    limits = replace(DEFAULT_SOURCE_LIMITS, deadline_seconds=10)
+
+    try:
+        first = adapter.convert(resolve_local_source(path), limits=limits)
+        second = adapter.convert(resolve_local_source(path), limits=limits)
+    finally:
+        adapter.close()
+
+    worker_pid = first.blocks[0].text
+    assert second.blocks[0].text == worker_pid
+    assert worker_pid != str(os.getpid())
+
+
+def test_worker_isolation_restarts_after_close(tmp_path: Path) -> None:
+    path = tmp_path / "questionnaire.pdf"
+    _write_pdf(path)
+    adapter = DoclingPdfAdapter(converter=pid_pdf_conversion, isolation="worker")
+    limits = replace(DEFAULT_SOURCE_LIMITS, deadline_seconds=10)
+
+    try:
+        adapter.convert(resolve_local_source(path), limits=limits)
+        adapter.close()
+        reopened = adapter.convert(resolve_local_source(path), limits=limits)
+    finally:
+        adapter.close()
+
+    assert reopened.blocks[0].text != str(os.getpid())
+
+
+def test_worker_isolation_deadline_is_typed_and_recreates_the_worker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "questionnaire.pdf"
+    _write_pdf(path)
+    monkeypatch.setattr(docling_source, "_run_pdf_preflight", lambda *_a, **_k: 1)
+    adapter = DoclingPdfAdapter(converter=slow_pdf_conversion, isolation="worker")
+    limits = replace(DEFAULT_SOURCE_LIMITS, deadline_seconds=0.05)
+
+    try:
+        with pytest.raises(SourceTimeoutError):
+            adapter.convert(resolve_local_source(path), limits=limits)
+        with pytest.raises(SourceTimeoutError):
+            adapter.convert(resolve_local_source(path), limits=limits)
+    finally:
+        adapter.close()
+
+
+@pytest.mark.parametrize("isolation", ["process", "worker"])
+def test_block_network_toggles_the_worker_socket_denial(
+    tmp_path: Path, isolation: str
+) -> None:
+    path = tmp_path / "questionnaire.pdf"
+    _write_pdf(path)
+    limits = replace(DEFAULT_SOURCE_LIMITS, deadline_seconds=10)
+
+    blocked = DoclingPdfAdapter(
+        converter=network_probe_conversion,
+        isolation=cast(Any, isolation),
+        block_network=True,
+    )
+    try:
+        document = blocked.convert(resolve_local_source(path), limits=limits)
+    finally:
+        blocked.close()
+    assert document.blocks[0].text == "blocked"
+
+    allowed = DoclingPdfAdapter(
+        converter=network_probe_conversion,
+        isolation=cast(Any, isolation),
+        block_network=False,
+    )
+    try:
+        document = allowed.convert(resolve_local_source(path), limits=limits)
+    finally:
+        allowed.close()
+    assert document.blocks[0].text == "open"
+
+
+def test_invalid_isolation_mode_is_rejected() -> None:
+    with pytest.raises(ValueError, match="isolation"):
+        DoclingPdfAdapter(converter=fake_pdf_conversion, isolation=cast(Any, "sandbox"))
+
+
+def test_isolation_and_block_network_come_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SURVEY_SCRIBE_PDF_ISOLATION", "inprocess")
+    monkeypatch.setenv("SURVEY_SCRIBE_PDF_BLOCK_NETWORK", "false")
+    assert docling_source.isolation_from_environment() == "inprocess"
+    assert docling_source.block_network_from_environment() is False
+
+    registry = SourceRegistry.default()
+    registry.close()
+
+
+def test_isolation_from_environment_rejects_an_unknown_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SURVEY_SCRIBE_PDF_ISOLATION", "vm")
+    with pytest.raises(ValueError, match="ISOLATION"):
+        docling_source.isolation_from_environment()
+
 
 
 def test_pdf_worker_surfaces_the_underlying_error(tmp_path: Path) -> None:
