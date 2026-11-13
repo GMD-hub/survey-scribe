@@ -21,6 +21,7 @@ from survey_scribe.pipeline import (
 )
 from survey_scribe.providers.base import (
     ProviderCapabilityError,
+    ProviderContentFilterError,
     ProviderRateLimitError,
 )
 from survey_scribe.providers.capabilities import CapabilityEvidence, ModelCapabilities
@@ -672,6 +673,72 @@ async def test_pipeline_failed_block_diagnostics_carry_reason() -> None:
         _block_diagnostic(capability_result).details["reason"]
         == "PROVIDER_CAPABILITY_UNSUPPORTED"
     )
+
+
+@pytest.mark.asyncio
+async def test_pipeline_content_filter_block_reports_filter_details() -> None:
+    long_document = SourceDocument(
+        source_name="survey.txt",
+        media_type="text/plain",
+        blocks=(
+            SourceBlock(
+                id="one",
+                order=0,
+                kind="text",
+                text="a" * 300,
+                provenance=SourceProvenance(source_name="survey.txt", page=1),
+            ),
+            SourceBlock(
+                id="two",
+                order=1,
+                kind="text",
+                text="b" * 300,
+                provenance=SourceProvenance(source_name="survey.txt", page=2),
+            ),
+        ),
+        snapshot_sha256="a" * 64,
+    )
+    filtered_chunk_calls: dict[str, int] = {}
+
+    async def respond(request: FakeRequest) -> object:
+        if request.response_model is ExtractedMetadata:
+            return _metadata()
+        block_ids = _source_block_ids(request)
+        if "one" in block_ids:
+            chunk_id = _chunk_id(request)
+            filtered_chunk_calls[chunk_id] = filtered_chunk_calls.get(chunk_id, 0) + 1
+            raise ProviderContentFilterError(
+                stage="request", categories=("jailbreak", "Not A Label")
+            )
+        return BlockExtraction(
+            block_id=_chunk_id(request),
+            variables=tuple(
+                ExtractedVariable(
+                    variable=SurveyVariable(
+                        raw_name=block_id,
+                        data_type=DataType.text,
+                        extraction_confidence=1.0,
+                    ),
+                    source_block_ids=(block_id,),
+                )
+                for block_id in block_ids
+            ),
+        )
+
+    result = await ExtractionPipeline(
+        DeterministicFakeProvider(capabilities=_capabilities(), responder=respond),
+        config=PipelineConfig(max_request_tokens=1_630, overlap_tokens=0),
+        extraction_date=date(2026, 9, 3),
+    ).extract(long_document)
+
+    assert result.status is ResultStatus.partial
+    diagnostic = _block_diagnostic(result)
+    assert diagnostic.code is DiagnosticCode.provider_failed
+    assert diagnostic.details["reason"] == "PROVIDER_CONTENT_FILTERED"
+    assert diagnostic.details["filter_stage"] == "request"
+    assert list(diagnostic.details["filter_categories"]) == ["jailbreak"]
+    assert filtered_chunk_calls
+    assert all(count == 1 for count in filtered_chunk_calls.values())
 
 
 @pytest.mark.asyncio

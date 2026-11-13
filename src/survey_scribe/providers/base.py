@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -25,6 +26,8 @@ _TRUNCATION_REASONS = frozenset(
         "truncated",
     }
 )
+
+_FILTER_CATEGORY = re.compile(r"[a-z][a-z0-9_]{0,39}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -246,6 +249,25 @@ class ProviderTruncationError(ProviderError):
     safe_message = "The structured response was truncated."
 
 
+class ProviderContentFilterError(ProviderError):
+    """The provider's content filter refused the request or stopped the response."""
+
+    code = "PROVIDER_CONTENT_FILTERED"
+    safe_message = "The provider content filter blocked the request or the response."
+
+    def __init__(
+        self,
+        *,
+        stage: Literal["request", "response"] = "request",
+        categories: Sequence[str] = (),
+    ) -> None:
+        self.stage = stage
+        self.categories = tuple(
+            sorted({c for c in categories if _FILTER_CATEGORY.fullmatch(c)})
+        )[:8]
+        super().__init__()
+
+
 @runtime_checkable
 class StructuredProvider(Protocol):
     """Generic async port consumed directly by application and routing code."""
@@ -296,6 +318,7 @@ __all__ = [
     "NormalizedUsage",
     "ProviderAuthenticationError",
     "ProviderCapabilityError",
+    "ProviderContentFilterError",
     "ProviderDependencyError",
     "ProviderError",
     "ProviderMessage",

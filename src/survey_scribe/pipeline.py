@@ -29,6 +29,7 @@ from survey_scribe.models.svis import (
 )
 from survey_scribe.providers.base import (
     ConcurrencyLimiter,
+    ProviderContentFilterError,
     ProviderError,
     ProviderMessage,
     ProviderResponse,
@@ -611,6 +612,9 @@ class ExtractionPipeline:
             details: dict[str, Any] = {"block_id": chunk.id, "reason": reason}
             if isinstance(error, ProviderTransportError):
                 details["retryable"] = error.retryable
+            if isinstance(error, ProviderContentFilterError):
+                details["filter_stage"] = error.stage
+                details["filter_categories"] = list(error.categories)
             return _BlockOutcome(
                 failure=FailedBlock(
                     block_id=chunk.id,
